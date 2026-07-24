@@ -55,7 +55,11 @@ function valueAsText(value: unknown): string {
   return Array.isArray(value) ? value.join(', ') : String(value);
 }
 
-function inputType(field: TrackerFilterField | undefined): 'date' | 'number' | 'text' {
+function inputType(
+  field: TrackerFilterField | undefined,
+  op?: TrackerFilterOp,
+): 'date' | 'number' | 'text' {
+  if (op === 'in-last' || op === 'not-in-last') return 'number';
   if (field?.type === 'date' || field?.type === 'datetime') return 'date';
   if (field?.type === 'number') return 'number';
   return 'text';
@@ -77,10 +81,10 @@ function iconForField(field: TrackerFilterField): string {
   return 'text_fields';
 }
 
-function filterValueLabel(value: unknown): string {
+function filterValueLabel(value: unknown, op?: TrackerFilterOp): string {
   if (value === undefined) return '';
-  if (Array.isArray(value)) return value.join(', ');
-  return String(value);
+  const text = Array.isArray(value) ? value.join(', ') : String(value);
+  return op === 'in-last' || op === 'not-in-last' ? `${text} days` : text;
 }
 
 type FilterMenuMode = 'fields' | 'field' | 'advanced';
@@ -181,24 +185,28 @@ export function TrackerViewHeaderControls({
     setMenuMode('field');
   };
 
-  const applyQuickFilter = (value = quickValue): void => {
+  const applyQuickFilter = (
+    value: unknown = quickValue,
+    opOverride?: TrackerFilterOp,
+  ): void => {
     if (!selectedField) return;
+    const effectiveOp = opOverride ?? quickOp;
     let clause: TrackerFieldFilter;
-    if (UNARY_OPS.has(quickOp)) {
-      clause = { field: selectedField.id, op: quickOp };
-    } else if (quickOp === 'in' || quickOp === 'not-in') {
+    if (UNARY_OPS.has(effectiveOp)) {
+      clause = { field: selectedField.id, op: effectiveOp };
+    } else if (effectiveOp === 'in' || effectiveOp === 'not-in') {
       const values = Array.isArray(value)
         ? value
         : String(value).split(',').map(item => item.trim()).filter(Boolean);
-      clause = { field: selectedField.id, op: quickOp, value: values };
-    } else if (quickOp === 'between') {
+      clause = { field: selectedField.id, op: effectiveOp, value: values };
+    } else if (effectiveOp === 'between') {
       clause = {
         field: selectedField.id,
-        op: quickOp,
+        op: effectiveOp,
         value: Array.isArray(value) ? value : ['', ''],
       };
     } else {
-      clause = { field: selectedField.id, op: quickOp, value };
+      clause = { field: selectedField.id, op: effectiveOp, value };
     }
     if (!isClauseComplete(clause)) return;
     onFiltersChange({
@@ -209,6 +217,7 @@ export function TrackerViewHeaderControls({
     setSelectedFieldId(null);
     setSelectedFieldRect(null);
     setQuickValue('');
+    setShowFilters(false);
   };
 
   const removeActiveFilter = (index: number): void => {
@@ -329,7 +338,7 @@ export function TrackerViewHeaderControls({
                           <span className="min-w-0 flex-1 truncate">
                             {field?.label ?? clause.field}{' '}
                             <span className="text-nim-muted">{OP_LABELS[clause.op]}</span>{' '}
-                            {filterValueLabel(clause.value)}
+                            {filterValueLabel(clause.value, clause.op)}
                           </span>
                           <button
                             type="button"
@@ -489,7 +498,7 @@ export function TrackerViewHeaderControls({
                           ) : isRange ? (
                             <div className="flex items-center gap-1">
                               <input
-                                type={inputType(field)}
+                                type={inputType(field, clause.op)}
                                 className="min-w-0 flex-1 rounded border border-nim bg-nim-secondary px-2 py-1.5 text-xs text-nim outline-none focus:border-nim-focus"
                                 value={valueAsText(range[0])}
                                 placeholder="From"
@@ -499,7 +508,7 @@ export function TrackerViewHeaderControls({
                               />
                               <span className="text-[10px] text-nim-faint">to</span>
                               <input
-                                type={inputType(field)}
+                                type={inputType(field, clause.op)}
                                 className="min-w-0 flex-1 rounded border border-nim bg-nim-secondary px-2 py-1.5 text-xs text-nim outline-none focus:border-nim-focus"
                                 value={valueAsText(range[1])}
                                 placeholder="To"
@@ -522,7 +531,7 @@ export function TrackerViewHeaderControls({
                             </select>
                           ) : (
                             <input
-                              type={inputType(field)}
+                              type={inputType(field, clause.op)}
                               className="w-full rounded border border-nim bg-nim-secondary px-2 py-1.5 text-xs text-nim outline-none focus:border-nim-focus"
                               value={valueAsText(clause.value)}
                               placeholder={isList ? 'Comma-separated values' : 'Value'}

@@ -69,6 +69,8 @@ const filterFields = [
       { value: 'low', label: 'Low' },
     ],
   },
+  { id: 'owner', label: 'Owner', type: 'user' as const },
+  { id: 'updated', label: 'Updated', type: 'date' as const },
 ];
 
 function renderControls(overrides: Partial<Parameters<typeof TrackerViewHeaderControls>[0]> = {}) {
@@ -171,6 +173,30 @@ describe('TrackerViewHeaderControls', () => {
 
     fireEvent.click(screen.getByLabelText('Remove Status filter'));
     expect(onFiltersChange).toHaveBeenCalledWith({ combinator: 'and', clauses: [] });
+  });
+
+  it('applies current-user and arbitrary relative-day filters from the field menu', () => {
+    const { onFiltersChange } = renderControls();
+    fireEvent.click(screen.getByTestId('tracker-view-filter-button'));
+    fireEvent.click(screen.getByTestId('tracker-filter-field-owner'));
+    fireEvent.click(screen.getByTestId('tracker-filter-relative-current-user'));
+
+    expect(onFiltersChange).toHaveBeenLastCalledWith({
+      combinator: 'and',
+      clauses: [{ field: 'owner', op: 'is-current-user' }],
+    });
+
+    fireEvent.click(screen.getByTestId('tracker-view-filter-button'));
+    fireEvent.click(screen.getByTestId('tracker-filter-field-updated'));
+    fireEvent.change(screen.getByTestId('tracker-filter-relative-days'), {
+      target: { value: '14' },
+    });
+    fireEvent.click(screen.getByTestId('tracker-filter-relative-in-last'));
+
+    expect(onFiltersChange).toHaveBeenLastCalledWith({
+      combinator: 'and',
+      clauses: [{ field: 'updated', op: 'in-last', value: 14 }],
+    });
   });
 
   it('keeps the field menu open beside a searchable value submenu with counts', () => {

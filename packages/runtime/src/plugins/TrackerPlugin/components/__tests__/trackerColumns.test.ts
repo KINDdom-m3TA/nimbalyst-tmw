@@ -44,6 +44,39 @@ describe('trackerColumns', () => {
     expect(getCellValue(record, 'createdBy')).toEqual(authorIdentity);
   });
 
+  it('exposes viewed and updater identity as read-only structural columns', () => {
+    const columns = resolveColumnsForType('');
+    const viewedColumn = columns.find(column => column.id === 'viewed');
+    const updatedByColumn = columns.find(column => column.id === 'updatedBy');
+    const lastModifiedBy = {
+      email: 'bob@example.com',
+      displayName: 'Bob Example',
+      gitName: null,
+      gitEmail: null,
+    };
+    const record: TrackerRecord = {
+      id: 'bug-viewed',
+      primaryType: 'bug',
+      typeTags: ['bug'],
+      source: 'native',
+      archived: false,
+      syncStatus: 'synced',
+      fields: { viewed: new Date('2026-07-24T10:00:00.000Z') },
+      system: {
+        workspace: '/repo',
+        createdAt: '2026-07-23T00:00:00.000Z',
+        updatedAt: '2026-07-24T00:00:00.000Z',
+        lastModifiedBy,
+      },
+    };
+
+    expect(viewedColumn).toMatchObject({ label: 'Viewed', render: 'date', editable: false });
+    expect(updatedByColumn).toMatchObject({ label: 'Updated by', render: 'avatar', editable: false });
+    expect(getCellValue(record, 'viewed')).toEqual(record.fields.viewed);
+    expect(getCellValue(record, 'updatedBy')).toEqual(lastModifiedBy);
+    expect(getCellValue(record, 'created')).toBe('2026-07-23T00:00:00.000Z');
+  });
+
   it('uses file mtime for frontmatter rows with day-precision updated timestamps', () => {
     const record: TrackerRecord = {
       id: 'plan-branching',

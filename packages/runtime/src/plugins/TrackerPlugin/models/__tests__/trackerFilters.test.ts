@@ -66,6 +66,62 @@ describe('matchesClause', () => {
     expect(matchesClause('2026-06-01', { field: 'due', op: '>', value: '2026-07-01' })).toBe(false);
   });
 
+  it('evaluates relative day windows against an injected clock', () => {
+    const nowMs = Date.UTC(2026, 6, 24, 12);
+    const day = 24 * 60 * 60 * 1000;
+    const context = { nowMs };
+
+    expect(matchesClause(
+      new Date(nowMs - 7 * day),
+      { field: 'updated', op: 'in-last', value: 7 },
+      context,
+    )).toBe(true);
+    expect(matchesClause(
+      new Date(nowMs - 7 * day - 1),
+      { field: 'updated', op: 'in-last', value: 7 },
+      context,
+    )).toBe(false);
+    expect(matchesClause(
+      new Date(nowMs - 7 * day - 1),
+      { field: 'updated', op: 'not-in-last', value: 7 },
+      context,
+    )).toBe(true);
+    expect(matchesClause(
+      undefined,
+      { field: 'viewed', op: 'not-in-last', value: 7 },
+      context,
+    )).toBe(true);
+  });
+
+  it('matches relative users across identity aliases', () => {
+    const currentUser = {
+      email: 'me@example.com',
+      displayName: 'Me',
+      gitName: 'greg',
+      gitEmail: 'me@dev.local',
+    };
+
+    expect(matchesClause(
+      { email: null, displayName: 'Greg', gitName: null, gitEmail: 'me@dev.local' },
+      { field: 'owner', op: 'is-current-user' },
+      { currentUser },
+    )).toBe(true);
+    expect(matchesClause(
+      { email: 'other@example.com', displayName: 'Other' },
+      { field: 'owner', op: 'is-not-current-user' },
+      { currentUser },
+    )).toBe(true);
+    expect(matchesClause(
+      { email: 'other@example.com', displayName: 'Other' },
+      { field: 'owner', op: 'is-current-user' },
+    )).toBe(false);
+    expect(matchesClause(
+      undefined,
+      { field: 'owner', op: 'is-not-current-user' },
+      { currentUser },
+    )).toBe(false);
+  });
+
   it('refuses to match an ordered comparison it cannot evaluate', () => {
     // A range against non-numeric text must exclude, never silently include.
     expect(matchesClause('not a number', { field: 'points', op: '>', value: 5 })).toBe(false);
@@ -93,6 +149,8 @@ describe('matchesClause', () => {
 describe('isClauseComplete', () => {
   it('accepts unary operators with no value', () => {
     expect(isClauseComplete({ field: 'x', op: 'is-empty' })).toBe(true);
+    expect(isClauseComplete({ field: 'owner', op: 'is-current-user' })).toBe(true);
+    expect(isClauseComplete({ field: 'owner', op: 'is-not-current-user' })).toBe(true);
   });
 
   it('rejects clauses still missing their operand', () => {
@@ -189,6 +247,10 @@ describe('opsForFieldType', () => {
     expect(opsForFieldType('select')).toContain('in');
     expect(opsForFieldType('number')).toContain('between');
     expect(opsForFieldType('date')).toContain('>');
+    expect(opsForFieldType('date')).toContain('in-last');
+    expect(opsForFieldType('date')).toContain('not-in-last');
+    expect(opsForFieldType('user')).toContain('is-current-user');
+    expect(opsForFieldType('user')).toContain('is-not-current-user');
     expect(opsForFieldType('boolean')).toEqual(['=', 'is-empty', 'is-not-empty']);
     expect(opsForFieldType('string')).toContain('contains');
   });

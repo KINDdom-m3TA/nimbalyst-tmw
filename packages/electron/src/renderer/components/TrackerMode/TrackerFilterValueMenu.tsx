@@ -2,6 +2,7 @@ import type { JSX, RefObject } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FloatingPortal } from '@floating-ui/react';
 import { MaterialSymbol } from '@nimbalyst/runtime';
+import type { TrackerFilterOp } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
 import type { TrackerFilterField } from './TrackerViewHeaderControls';
 
 interface TrackerFilterValueMenuProps {
@@ -9,7 +10,7 @@ interface TrackerFilterValueMenuProps {
   anchorRect: DOMRect | null;
   placement?: 'left' | 'below';
   selectedValues?: ReadonlySet<string>;
-  onSelect: (value: string) => void;
+  onSelect: (value: string | number, op?: TrackerFilterOp) => void;
   onClear?: () => void;
   onClose: () => void;
   dismissOnOutsideClick?: boolean;
@@ -46,6 +47,7 @@ export function TrackerFilterValueMenu({
   testIdPrefix = 'tracker-filter',
 }: TrackerFilterValueMenuProps): JSX.Element {
   const [query, setQuery] = useState('');
+  const [relativeDays, setRelativeDays] = useState('7');
   const localRef = useRef<HTMLDivElement>(null);
   const options = useMemo(() => {
     if (field.type === 'boolean') {
@@ -74,6 +76,7 @@ export function TrackerFilterValueMenu({
 
   useEffect(() => {
     setQuery('');
+    setRelativeDays('7');
   }, [field.id]);
 
   useEffect(() => {
@@ -106,27 +109,101 @@ export function TrackerFilterValueMenu({
         data-testid={`${testIdPrefix}-value-submenu`}
         data-tracker-filter-value-menu
       >
-        <div className="relative border-b border-nim p-3">
-          <input
-            autoFocus={placement === 'below'}
-            className="h-9 w-full rounded-md bg-transparent px-1 text-[15px] text-nim outline-none placeholder:text-nim-faint"
-            placeholder="Filter…"
-            value={query}
-            onChange={event => setQuery(event.target.value)}
-            onKeyDown={event => {
-              if (event.key === 'Escape') {
-                onClose();
-              } else if (event.key === 'Enter' && matchingOptionsWithIssues.length === 1) {
-                onSelect(matchingOptionsWithIssues[0].value);
-              }
-            }}
-            data-testid={`${testIdPrefix}-option-search`}
-          />
-        </div>
+        {field.type !== 'date' && field.type !== 'datetime' && (
+          <div className="relative border-b border-nim p-3">
+            <input
+              autoFocus={placement === 'below'}
+              className="h-9 w-full rounded-md bg-transparent px-1 text-[15px] text-nim outline-none placeholder:text-nim-faint"
+              placeholder="Filter…"
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              onKeyDown={event => {
+                if (event.key === 'Escape') {
+                  onClose();
+                } else if (event.key === 'Enter' && matchingOptionsWithIssues.length === 1) {
+                  onSelect(matchingOptionsWithIssues[0].value, '=');
+                }
+              }}
+              data-testid={`${testIdPrefix}-option-search`}
+            />
+          </div>
+        )}
 
-        {options.length > 0 ? (
+        {field.type === 'date' || field.type === 'datetime' ? (
+          <div className="p-3">
+            <div className="mb-2 flex items-center gap-2 text-[11px] text-nim-muted">
+              <MaterialSymbol icon="calendar_today" size={15} />
+              Relative days
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={0}
+                step={1}
+                className="min-w-0 flex-1 rounded border border-nim bg-nim px-2 py-2 text-[13px] text-nim outline-none focus:border-nim-focus"
+                value={relativeDays}
+                onChange={event => setRelativeDays(event.target.value)}
+                aria-label="Number of days"
+                data-testid={`${testIdPrefix}-relative-days`}
+              />
+              <span className="text-[12px] text-nim-muted">days</span>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                className="rounded-md bg-[var(--nim-primary)] px-3 py-2 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-40"
+                disabled={!relativeDays || Number(relativeDays) < 0}
+                onClick={() => onSelect(Number(relativeDays), 'in-last')}
+                data-testid={`${testIdPrefix}-relative-in-last`}
+              >
+                In last
+              </button>
+              <button
+                type="button"
+                className="rounded-md border border-nim px-3 py-2 text-[12px] font-medium text-nim hover:bg-nim-tertiary disabled:opacity-40"
+                disabled={!relativeDays || Number(relativeDays) < 0}
+                onClick={() => onSelect(Number(relativeDays), 'not-in-last')}
+                data-testid={`${testIdPrefix}-relative-not-in-last`}
+              >
+                Not in last
+              </button>
+            </div>
+            {onClear && (
+              <button
+                type="button"
+                className="mt-2 w-full px-3 py-1 text-[11px] text-nim-muted hover:text-nim"
+                onClick={onClear}
+                data-testid={`${testIdPrefix}-clear`}
+              >
+                Clear filter
+              </button>
+            )}
+          </div>
+        ) : options.length > 0 || field.type === 'user' ? (
           <>
             <div className="max-h-[360px] overflow-y-auto p-2">
+              {field.type === 'user' && (
+                <div className="mb-2 border-b border-nim pb-2">
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[14px] text-nim hover:bg-nim-tertiary"
+                    onClick={() => onSelect('', 'is-current-user')}
+                    data-testid={`${testIdPrefix}-relative-current-user`}
+                  >
+                    <MaterialSymbol icon="person" size={17} className="text-nim-muted" />
+                    Is current user
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[14px] text-nim hover:bg-nim-tertiary"
+                    onClick={() => onSelect('', 'is-not-current-user')}
+                    data-testid={`${testIdPrefix}-relative-not-current-user`}
+                  >
+                    <MaterialSymbol icon="person_off" size={17} className="text-nim-muted" />
+                    Is not current user
+                  </button>
+                </div>
+              )}
               {matchingOptionsWithIssues.map(option => {
                 const selected = selectedValues.has(option.value);
                 return (
@@ -134,7 +211,7 @@ export function TrackerFilterValueMenu({
                     key={option.value}
                     type="button"
                     className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[14px] text-nim hover:bg-nim-tertiary"
-                    onClick={() => onSelect(option.value)}
+                    onClick={() => onSelect(option.value, '=')}
                     data-testid={`${testIdPrefix}-option-${option.value}`}
                   >
                     <span
@@ -154,7 +231,7 @@ export function TrackerFilterValueMenu({
                   </button>
                 );
               })}
-              {matchingOptionsWithIssues.length === 0 && (
+              {matchingOptionsWithIssues.length === 0 && field.type !== 'user' && (
                 <div className="px-3 py-8 text-center text-[12px] text-nim-faint">
                   No matching values
                 </div>
@@ -194,7 +271,7 @@ export function TrackerFilterValueMenu({
               type="button"
               className="w-full rounded-md bg-[var(--nim-primary)] px-3 py-2 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-40"
               disabled={!query.trim()}
-              onClick={() => onSelect(query)}
+              onClick={() => onSelect(query, '=')}
               data-testid={`${testIdPrefix}-quick-apply`}
             >
               Filter for “{query || '…'}”
