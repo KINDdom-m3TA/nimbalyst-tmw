@@ -616,7 +616,7 @@ export function TrackerViewHeaderControls({
         <div className="relative">
           <button
             type="button"
-            className={`inline-flex h-7 w-7 items-center justify-center rounded border transition-colors ${
+            className={`inline-flex h-7 items-center gap-1 rounded border px-2 text-[11px] font-medium transition-colors ${
               showDisplayOptions
                 ? 'border-nim-focus bg-nim-tertiary text-nim'
                 : 'border-nim bg-nim-secondary text-nim-muted hover:bg-nim-tertiary hover:text-nim'
@@ -625,12 +625,13 @@ export function TrackerViewHeaderControls({
               setShowFilters(false);
               setShowDisplayOptions(open => !open);
             }}
-            title="Display options"
+            title="Display options — columns & grouping"
             aria-label="Display options"
             aria-expanded={showDisplayOptions}
             data-testid="tracker-view-display-options"
           >
-            <MaterialSymbol icon="tune" size={15} />
+            <MaterialSymbol icon="view_column" size={14} />
+            Columns
           </button>
           {showDisplayOptions && (
             <DisplayOptionsPanel

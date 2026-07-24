@@ -1178,21 +1178,32 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
           </div>
         )}
 
-        {/* Source provenance filter (appears once imported items exist) */}
+        {/* Source provenance filter (appears once imported items exist).
+            A segmented control -- visually distinct from the removable, pill-
+            shaped column-filter chips so it doesn't read as "a filter I forgot
+            to close". */}
         {showSourceFilter && (
-          <div className="flex items-center gap-1 shrink-0" data-testid="tracker-source-filter">
-            {sourceOptions.map((key) => {
+          <div
+            className="flex h-7 shrink-0 items-center overflow-hidden rounded border border-nim bg-nim-secondary"
+            role="group"
+            aria-label="Filter by source"
+            data-testid="tracker-source-filter"
+          >
+            {sourceOptions.map((key, index) => {
               const active = sourceFilter.includes(key);
               return (
                 <button
                   key={key}
                   type="button"
                   onClick={() => toggleSource(key)}
-                  className={
+                  className={`h-full px-2 text-[11px] font-medium transition-colors ${
+                    index > 0 ? 'border-l border-nim' : ''
+                  } ${
                     active
-                      ? 'px-2 py-0.5 rounded-full text-[11px] border bg-[var(--nim-primary)]/15 border-[var(--nim-primary)]/40 text-nim'
-                      : 'px-2 py-0.5 rounded-full text-[11px] border border-nim text-nim-muted hover:bg-nim-tertiary'
-                  }
+                      ? 'bg-[var(--nim-primary)]/15 text-nim'
+                      : 'text-nim-muted hover:bg-nim-tertiary hover:text-nim'
+                  }`}
+                  aria-pressed={active}
                   title={`Filter by ${sourceKeyLabel(key)}`}
                   data-testid={`tracker-source-filter-${key}`}
                 >
@@ -1204,6 +1215,19 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
         )}
 
         <div className="flex-1" />
+
+        {hasExternalTableFilters && (
+          <button
+            type="button"
+            className="inline-flex h-7 items-center gap-1 rounded border border-nim bg-nim-secondary px-2 text-[11px] font-medium text-nim-muted transition-colors hover:bg-nim-tertiary hover:text-nim"
+            onClick={clearTableFilters}
+            title="Clear all filters"
+            data-testid="tracker-clear-filters"
+          >
+            <MaterialSymbol icon="filter_alt_off" size={14} />
+            Clear
+          </button>
+        )}
 
         <TrackerViewHeaderControls
           itemCount={displayedItemCount}
@@ -1219,7 +1243,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
 
         <div className="relative" ref={importMenuRef}>
           <button
-            className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-nim-muted border border-nim rounded hover:bg-nim-tertiary hover:text-nim transition-colors"
+            className="inline-flex h-7 items-center gap-1 rounded border border-nim px-2 text-[11px] font-medium text-nim-muted transition-colors hover:bg-nim-tertiary hover:text-nim"
             onClick={() => setImportMenuOpen(!importMenuOpen)}
             title="Import from files"
           >
@@ -1288,7 +1312,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
           return model?.creatable !== false;
         })() && (
           <button
-            className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-white bg-[var(--nim-primary)] rounded hover:opacity-90 transition-opacity"
+            className="inline-flex h-7 items-center gap-1 rounded bg-[var(--nim-primary)] px-2.5 text-[11px] font-medium text-white transition-opacity hover:opacity-90"
             onClick={() => handleNewItem(filterType !== 'all' ? filterType : 'task')}
             data-testid="tracker-toolbar-new-button"
           >

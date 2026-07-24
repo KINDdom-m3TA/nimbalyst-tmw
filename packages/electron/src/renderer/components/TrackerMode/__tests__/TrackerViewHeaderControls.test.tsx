@@ -98,7 +98,10 @@ describe('TrackerViewHeaderControls', () => {
 
     expect(screen.getByTestId('tracker-view-item-count').textContent).toBe('42 items');
     expect(screen.getByTestId('tracker-view-filter-button')).toBeTruthy();
-    expect(screen.getByTestId('tracker-view-display-options')).toBeTruthy();
+    const displayOptions = screen.getByTestId('tracker-view-display-options');
+    expect(displayOptions).toBeTruthy();
+    // The button is text-labeled ("Columns"), not a bare icon.
+    expect(displayOptions.textContent).toContain('Columns');
   });
 
   it('builds multiple field-aware clauses with AND/OR semantics', () => {
