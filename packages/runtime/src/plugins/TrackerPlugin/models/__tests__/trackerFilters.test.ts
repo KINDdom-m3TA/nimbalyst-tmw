@@ -47,6 +47,17 @@ describe('matchesClause', () => {
     expect(matchesClause(value, { field: 'items', op: 'in', value: ['b1', 'b2'] })).toBe(true);
   });
 
+  it('compares tracker identities by their stable email fallback chain', () => {
+    expect(matchesClause(
+      { email: 'alice@example.com', displayName: 'Alice Example', gitName: null, gitEmail: 'alice@dev.local' },
+      { field: 'createdBy', op: '=', value: 'alice@example.com' },
+    )).toBe(true);
+    expect(matchesClause(
+      { email: null, displayName: 'Alice Example', gitName: 'Alice', gitEmail: 'alice@dev.local' },
+      { field: 'createdBy', op: '=', value: 'alice@dev.local' },
+    )).toBe(true);
+  });
+
   it('orders numbers and dates', () => {
     expect(matchesClause(8, { field: 'points', op: '>', value: 5 })).toBe(true);
     expect(matchesClause(5, { field: 'points', op: '>=', value: 5 })).toBe(true);

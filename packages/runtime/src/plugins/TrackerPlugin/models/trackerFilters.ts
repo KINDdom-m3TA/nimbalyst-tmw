@@ -112,8 +112,11 @@ function toComparableStrings(value: unknown): string[] {
   if (Array.isArray(value)) return value.flatMap(toComparableStrings);
   if (typeof value === 'object') {
     const obj = value as Record<string, unknown>;
-    // Relationship values and url values carry their identity on a known key.
-    const identity = obj.itemId ?? obj.issueKey ?? obj.url ?? obj.title;
+    // Relationship, URL, and tracker-identity values carry their stable
+    // identity on a known key. Email precedes display fallbacks so creator
+    // filters continue to match when a teammate changes their display name.
+    const identity = obj.itemId ?? obj.issueKey ?? obj.url
+      ?? obj.email ?? obj.gitEmail ?? obj.gitName ?? obj.displayName ?? obj.title;
     return identity === undefined ? [] : [String(identity)];
   }
   return [String(value)];

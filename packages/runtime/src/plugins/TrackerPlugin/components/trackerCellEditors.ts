@@ -51,6 +51,7 @@ export const READONLY_STRUCTURAL_COLUMNS = new Set([
   'key',
   'updated',
   'created',
+  'createdBy',
   'module',
   'shared',
 ]);

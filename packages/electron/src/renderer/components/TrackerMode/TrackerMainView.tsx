@@ -245,8 +245,9 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
       ['key', 21],
       ['updated', 22],
       ['created', 23],
-      ['module', 24],
-      ['shared', 25],
+      ['createdBy', 24],
+      ['module', 25],
+      ['shared', 26],
     ]);
     const orderedColumns = [...availableColumns].sort((left, right) => {
       const leftOrder = left.role
@@ -308,6 +309,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
         type: representativeField?.type
           ?? (column.render === 'date' ? 'date'
             : column.render === 'tags' ? 'array'
+              : column.render === 'avatar' ? 'user'
               : optionMap.size > 0 ? 'select' : 'string'),
         options: optionMap.size > 0
           ? Array.from(optionMap, ([value, option]) => ({ value, ...option }))
@@ -518,8 +520,10 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
         }
         if (typeof value === 'object') {
           const record = value as Record<string, unknown>;
-          const optionValue = record.itemId ?? record.issueKey ?? record.url ?? record.email ?? record.title;
-          const label = record.title ?? record.name ?? record.email ?? record.issueKey ?? optionValue;
+          const optionValue = record.itemId ?? record.issueKey ?? record.url
+            ?? record.email ?? record.gitEmail ?? record.gitName ?? record.displayName ?? record.title;
+          const label = record.title ?? record.name ?? record.displayName
+            ?? record.email ?? record.gitEmail ?? record.gitName ?? record.issueKey ?? optionValue;
           if (optionValue !== undefined) {
             const key = String(optionValue);
             const existing = options.get(key);
