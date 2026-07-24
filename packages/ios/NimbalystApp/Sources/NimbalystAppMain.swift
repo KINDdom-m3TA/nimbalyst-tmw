@@ -100,6 +100,10 @@ struct NimbalystAppMain: App {
         case .authCallback:
             NSLog("[DeepLink] Routing to authManager.handleCallback")
             appState.authManager.handleCallback(url)
+        case .openPairingScanner:
+            // Surface the in-app scanner only; the link's payload is never applied.
+            NSLog("[DeepLink] Opening in-app pairing scanner (payload ignored)")
+            appState.pairingScannerRequested = true
         case .unsupported:
             NSLog("[DeepLink] Ignored: URL is not allowlisted")
         }

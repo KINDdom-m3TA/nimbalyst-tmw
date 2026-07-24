@@ -2,21 +2,31 @@ import SwiftUI
 
 public enum NimbalystExternalURLRoute: Equatable, Sendable {
     case authCallback
+    /// A `nimbalyst://pair` link was opened externally (e.g. the Camera app
+    /// scanned the pairing QR). We intentionally carry NO payload from the URL:
+    /// the link only surfaces the in-app scanner, which re-reads the QR through
+    /// the app's own camera so nothing attacker-controlled crosses the trust boundary.
+    case openPairingScanner
     case unsupported
 }
 
 /// Allowlist for URLs delivered to the app by iOS.
 ///
 /// Pairing payloads remain parseable by `QRPairingData` for the in-app scanner,
-/// but externally opened pairing links are intentionally not routed.
+/// but externally opened pairing links only open the scanner — their `data`
+/// payload is never trusted or applied.
 public enum NimbalystExternalURLRouter {
     public static func route(_ url: URL) -> NimbalystExternalURLRoute {
-        guard url.scheme?.lowercased() == "nimbalyst",
-              url.host?.lowercased() == "auth",
-              url.path == "/callback" else {
+        guard url.scheme?.lowercased() == "nimbalyst" else {
             return .unsupported
         }
-        return .authCallback
+        if url.host?.lowercased() == "auth", url.path == "/callback" {
+            return .authCallback
+        }
+        if url.host?.lowercased() == "pair" {
+            return .openPairingScanner
+        }
+        return .unsupported
     }
 }
 
@@ -122,13 +132,13 @@ public struct QRPairingData: Equatable {
 }
 
 #if canImport(UIKit)
-import AVFoundation
+@preconcurrency import AVFoundation
 import UIKit
 
 /// Camera-based QR code scanner using AVCaptureSession.
 /// Wraps AVCaptureVideoPreviewLayer in a UIViewRepresentable for SwiftUI.
 struct QRScannerView: UIViewRepresentable {
-    let onScanned: @Sendable (String) -> Void
+    let onScanned: @MainActor @Sendable (String) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onScanned: onScanned)
@@ -141,11 +151,11 @@ struct QRScannerView: UIViewRepresentable {
 
     func updateUIView(_ uiView: QRScannerUIView, context: Context) {}
 
-    class Coordinator: NSObject, @preconcurrency AVCaptureMetadataOutputObjectsDelegate {
-        let onScanned: @Sendable (String) -> Void
+    class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {
+        let onScanned: @MainActor @Sendable (String) -> Void
         private var hasScanned = false
 
-        init(onScanned: @escaping @Sendable (String) -> Void) {
+        init(onScanned: @escaping @MainActor @Sendable (String) -> Void) {
             self.onScanned = onScanned
         }
 
@@ -160,7 +170,10 @@ struct QRScannerView: UIViewRepresentable {
                   let value = object.stringValue else { return }
 
             hasScanned = true
-            onScanned(value)
+            let callback = onScanned
+            Task { @MainActor in
+                callback(value)
+            }
         }
 
         func reset() {

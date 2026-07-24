@@ -17,12 +17,22 @@ final class Phase4Tests: XCTestCase {
             .unsupported
         )
         XCTAssertEqual(
-            NimbalystExternalURLRouter.route(try XCTUnwrap(URL(string: "nimbalyst://pair?data=attacker-controlled"))),
-            .unsupported
-        )
-        XCTAssertEqual(
             NimbalystExternalURLRouter.route(try XCTUnwrap(URL(string: "https://auth/callback"))),
             .unsupported
+        )
+    }
+
+    /// An externally opened pairing link only surfaces the in-app scanner. The
+    /// route is a bare case carrying none of the URL's `data` payload, so nothing
+    /// attacker-controlled is applied — the credential-exfiltration fix holds.
+    func testExternalPairingLinkOnlyOpensInAppScanner() throws {
+        XCTAssertEqual(
+            NimbalystExternalURLRouter.route(try XCTUnwrap(URL(string: "nimbalyst://pair?data=attacker-controlled"))),
+            .openPairingScanner
+        )
+        XCTAssertEqual(
+            NimbalystExternalURLRouter.route(try XCTUnwrap(URL(string: "nimbalyst://pair"))),
+            .openPairingScanner
         )
     }
 
