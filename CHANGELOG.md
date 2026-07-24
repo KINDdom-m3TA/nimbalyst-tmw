@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - Remote MCP server OAuth now recognizes successful authorization instead of reporting it as rejected, and gives slower sign-ins more time to complete.
+- Resolved SQLite migration errors on startup and no longer offers the dry-run and migrate controls once you are already on SQLite.
 - Comment highlights in collaborative documents are now legible in dark mode.
 - Collaborative tracker items can now be filtered by who created them.
 - Agent-mode document embeds now recover when their target file is created after the document opens.
