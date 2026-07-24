@@ -15,6 +15,8 @@ The former left-sidebar presets are represented by ordinary field clauses instea
 
 Clauses appear as removable pills beside search and are persisted directly in saved views. They can be combined with the filter builder's AND/OR setting.
 
+Collection-valued fields such as Tags and multi-value relationships use checkboxes in the value picker. Select any number of values and apply them as one `is any of` clause; reopening the field restores the current selection for editing.
+
 Relative user clauses resolve against the signed-in user's current identity when the view is evaluated. Relative date clauses store a day count rather than a timestamp, so reopening a saved view recalculates its boundary from the current time.
 
 `Viewed` and `Favorite` are personal fields. Their values come from the current user's workspace-scoped tracker state rather than the shared tracker row. `Viewed` is available as a column and supports empty/non-empty and relative-date predicates.

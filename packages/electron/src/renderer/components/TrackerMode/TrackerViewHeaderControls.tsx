@@ -7,6 +7,7 @@ import {
   type TypeColumnConfig,
 } from '@nimbalyst/runtime/plugins/TrackerPlugin';
 import {
+  clausesForField,
   isClauseComplete,
   opsForFieldType,
   OP_LABELS,
@@ -22,6 +23,7 @@ export interface TrackerFilterField {
   id: string;
   label: string;
   type?: FieldType;
+  multiValue?: boolean;
   options?: Array<{
     value: string;
     label: string;
@@ -131,8 +133,8 @@ export function TrackerViewHeaderControls({
       field.label.toLowerCase().includes(normalizedQuery)
       || field.id.toLowerCase().includes(normalizedQuery));
   }, [filterFields, query]);
-  useEffect(() => {
-    if (!showFilters) return;
+
+  const resetFilterMenu = (): void => {
     setMenuMode('fields');
     setQuery('');
     setHighlightedIndex(0);
@@ -140,12 +142,16 @@ export function TrackerViewHeaderControls({
     setSelectedFieldRect(null);
     setCombinator(filters?.combinator ?? 'and');
     setDraftClauses(filters?.clauses.length ? filters.clauses : [firstClause(filterFields)]);
-  }, [filterFields, filters, showFilters]);
+  };
 
   useEffect(() => {
     if (openFiltersToken <= 0) return;
+    resetFilterMenu();
     setShowDisplayOptions(false);
     setShowFilters(true);
+    // The token is the explicit open signal. Filter option-count refreshes must
+    // not reset a submenu that is already being used.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openFiltersToken]);
 
   useEffect(() => {
@@ -209,9 +215,20 @@ export function TrackerViewHeaderControls({
       clause = { field: selectedField.id, op: effectiveOp, value };
     }
     if (!isClauseComplete(clause)) return;
+    const existingClauses = (filters?.clauses ?? []).filter(isClauseComplete);
+    const shouldReplaceField = Array.isArray(value)
+      && (
+        selectedField.type === 'array'
+        || selectedField.type === 'multiselect'
+        || selectedField.multiValue === true
+      );
     onFiltersChange({
       combinator: filters?.combinator ?? 'and',
-      clauses: [...(filters?.clauses ?? []).filter(isClauseComplete), clause],
+      clauses: [
+        ...existingClauses.filter(existing =>
+          !shouldReplaceField || existing.field !== selectedField.id),
+        clause,
+      ],
     });
     setMenuMode('fields');
     setSelectedFieldId(null);
@@ -249,7 +266,12 @@ export function TrackerViewHeaderControls({
           }`}
           onClick={() => {
             setShowDisplayOptions(false);
-            setShowFilters(open => !open);
+            if (showFilters) {
+              setShowFilters(false);
+            } else {
+              resetFilterMenu();
+              setShowFilters(true);
+            }
           }}
           aria-expanded={showFilters}
           data-testid="tracker-view-filter-button"
@@ -597,10 +619,32 @@ export function TrackerViewHeaderControls({
 
         {showFilters && menuMode === 'field' && selectedField && (
           <TrackerFilterValueMenu
+            key={`${selectedField.id}:${JSON.stringify(
+              clausesForField(filters, selectedField.id).map(clause => clause.value),
+            )}`}
             field={selectedField}
             anchorRect={selectedFieldRect}
             placement="left"
+            selectedValues={new Set(
+              clausesForField(filters, selectedField.id).flatMap(clause =>
+                Array.isArray(clause.value)
+                  ? clause.value.map(String)
+                  : clause.value === undefined ? [] : [String(clause.value)]),
+            )}
             onSelect={applyQuickFilter}
+            onClear={clausesForField(filters, selectedField.id).length > 0
+              ? () => {
+                onFiltersChange({
+                  combinator: filters?.combinator ?? 'and',
+                  clauses: (filters?.clauses ?? []).filter(
+                    clause => clause.field !== selectedField.id,
+                  ),
+                });
+                setMenuMode('fields');
+                setSelectedFieldId(null);
+                setSelectedFieldRect(null);
+              }
+              : undefined}
             onClose={() => {
               setMenuMode('fields');
               setSelectedFieldId(null);

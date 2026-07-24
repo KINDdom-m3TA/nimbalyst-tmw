@@ -565,11 +565,15 @@ export function TrackerGridView({
 
       {filterTarget && (
         <TrackerFilterValueMenu
+          key={`${filterTarget.columnId}:${JSON.stringify(
+            clausesForField(columnFilters, filterTarget.columnId).map(clause => clause.value),
+          )}`}
           field={filterFields.find(field => field.id === filterTarget.columnId) ?? {
             id: filterTarget.columnId,
             label: visibleColumnDefs.find(c => c.id === filterTarget.columnId)?.label
               ?? filterTarget.columnId,
             type: getFieldForColumn(schemaType, filterTarget.columnId)?.type,
+            multiValue: getFieldForColumn(schemaType, filterTarget.columnId)?.multiValue,
             options: getFieldForColumn(schemaType, filterTarget.columnId)?.options,
           }}
           anchorRect={filterTarget.rect}

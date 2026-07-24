@@ -69,6 +69,16 @@ const filterFields = [
       { value: 'low', label: 'Low' },
     ],
   },
+  {
+    id: 'tags',
+    label: 'Tags',
+    type: 'array' as const,
+    options: [
+      { value: 'ui', label: 'UI' },
+      { value: 'backend', label: 'Backend' },
+      { value: 'urgent', label: 'Urgent' },
+    ],
+  },
   { id: 'owner', label: 'Owner', type: 'user' as const },
   { id: 'updated', label: 'Updated', type: 'date' as const },
 ];
@@ -156,6 +166,88 @@ describe('TrackerViewHeaderControls', () => {
     expect(onFiltersChange).toHaveBeenCalledWith({
       combinator: 'and',
       clauses: [{ field: 'status', op: '=', value: 'done' }],
+    });
+  });
+
+  it('uses checkbox multi-select for collection fields such as tags', () => {
+    const { onFiltersChange } = renderControls();
+    fireEvent.click(screen.getByTestId('tracker-view-filter-button'));
+    fireEvent.click(screen.getByTestId('tracker-filter-field-tags'));
+
+    const ui = screen.getByTestId('tracker-filter-option-ui');
+    const backend = screen.getByTestId('tracker-filter-option-backend');
+    expect(ui.getAttribute('role')).toBe('checkbox');
+    expect(ui.getAttribute('aria-checked')).toBe('false');
+
+    fireEvent.click(ui);
+    fireEvent.click(backend);
+
+    expect(onFiltersChange).not.toHaveBeenCalled();
+    expect(ui.getAttribute('aria-checked')).toBe('true');
+    expect(backend.getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByTestId('tracker-filter-value-submenu')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('tracker-filter-apply-multiple'));
+
+    expect(onFiltersChange).toHaveBeenCalledWith({
+      combinator: 'and',
+      clauses: [{ field: 'tags', op: 'in', value: ['ui', 'backend'] }],
+    });
+  });
+
+  it('keeps a value submenu open when field option counts refresh', () => {
+    const onColumnConfigChange = vi.fn();
+    const onFiltersChange = vi.fn();
+    const sharedProps = {
+      itemCount: 42,
+      availableColumns: columns,
+      columnConfig,
+      onColumnConfigChange,
+      showColumnControls: true,
+      filters: null,
+      onFiltersChange,
+    };
+    const { rerender } = render(
+      <TrackerViewHeaderControls {...sharedProps} filterFields={filterFields} />,
+    );
+    fireEvent.click(screen.getByTestId('tracker-view-filter-button'));
+    fireEvent.click(screen.getByTestId('tracker-filter-field-tags'));
+    expect(screen.getByTestId('tracker-filter-value-submenu')).toBeTruthy();
+
+    rerender(
+      <TrackerViewHeaderControls
+        {...sharedProps}
+        filterFields={filterFields.map(field => ({
+          ...field,
+          options: field.options?.map(option => ({ ...option, count: 2 })),
+        }))}
+      />,
+    );
+
+    expect(screen.getByTestId('tracker-filter-value-submenu')).toBeTruthy();
+    expect(screen.getByTestId('tracker-filter-apply-multiple')).toBeTruthy();
+  });
+
+  it('reopens a collection filter with its values selected and replaces it', () => {
+    const { onFiltersChange } = renderControls({
+      filters: {
+        combinator: 'and',
+        clauses: [{ field: 'tags', op: 'in', value: ['ui', 'backend'] }],
+      },
+    });
+    fireEvent.click(screen.getByTestId('tracker-view-filter-button'));
+    fireEvent.click(screen.getByTestId('tracker-filter-field-tags'));
+
+    expect(screen.getByTestId('tracker-filter-option-ui').getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByTestId('tracker-filter-option-backend').getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.click(screen.getByTestId('tracker-filter-option-ui'));
+    fireEvent.click(screen.getByTestId('tracker-filter-option-urgent'));
+    fireEvent.click(screen.getByTestId('tracker-filter-apply-multiple'));
+
+    expect(onFiltersChange).toHaveBeenLastCalledWith({
+      combinator: 'and',
+      clauses: [{ field: 'tags', op: 'in', value: ['backend', 'urgent'] }],
     });
   });
 

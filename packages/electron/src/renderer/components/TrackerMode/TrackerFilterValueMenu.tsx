@@ -10,7 +10,7 @@ interface TrackerFilterValueMenuProps {
   anchorRect: DOMRect | null;
   placement?: 'left' | 'below';
   selectedValues?: ReadonlySet<string>;
-  onSelect: (value: string | number, op?: TrackerFilterOp) => void;
+  onSelect: (value: string | string[] | number, op?: TrackerFilterOp) => void;
   onClear?: () => void;
   onClose: () => void;
   dismissOnOutsideClick?: boolean;
@@ -48,7 +48,13 @@ export function TrackerFilterValueMenu({
 }: TrackerFilterValueMenuProps): JSX.Element {
   const [query, setQuery] = useState('');
   const [relativeDays, setRelativeDays] = useState('7');
+  const [pendingValues, setPendingValues] = useState<Set<string>>(
+    () => new Set(selectedValues),
+  );
   const localRef = useRef<HTMLDivElement>(null);
+  const allowsMultiple = field.type === 'array'
+    || field.type === 'multiselect'
+    || field.multiValue === true;
   const options = useMemo(() => {
     if (field.type === 'boolean') {
       return [
@@ -66,8 +72,11 @@ export function TrackerFilterValueMenu({
       || option.value.toLowerCase().includes(normalized));
   }, [options, query]);
   const matchingOptionsWithIssues = useMemo(
-    () => matchingOptions.filter(option => (option.count ?? 0) > 0 || option.count === undefined),
-    [matchingOptions],
+    () => matchingOptions.filter(option =>
+      selectedValues.has(option.value)
+      || (option.count ?? 0) > 0
+      || option.count === undefined),
+    [matchingOptions, selectedValues],
   );
   const unmatchedOptionCount = useMemo(
     () => options.filter(option => option.count === 0).length,
@@ -121,7 +130,17 @@ export function TrackerFilterValueMenu({
                 if (event.key === 'Escape') {
                   onClose();
                 } else if (event.key === 'Enter' && matchingOptionsWithIssues.length === 1) {
-                  onSelect(matchingOptionsWithIssues[0].value, '=');
+                  const value = matchingOptionsWithIssues[0].value;
+                  if (allowsMultiple) {
+                    setPendingValues(current => {
+                      const next = new Set(current);
+                      if (next.has(value)) next.delete(value);
+                      else next.add(value);
+                      return next;
+                    });
+                  } else {
+                    onSelect(value, '=');
+                  }
                 }
               }}
               data-testid={`${testIdPrefix}-option-search`}
@@ -205,17 +224,34 @@ export function TrackerFilterValueMenu({
                 </div>
               )}
               {matchingOptionsWithIssues.map(option => {
-                const selected = selectedValues.has(option.value);
+                const selected = allowsMultiple
+                  ? pendingValues.has(option.value)
+                  : selectedValues.has(option.value);
                 return (
                   <button
                     key={option.value}
                     type="button"
                     className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[14px] text-nim hover:bg-nim-tertiary"
-                    onClick={() => onSelect(option.value, '=')}
+                    onClick={() => {
+                      if (!allowsMultiple) {
+                        onSelect(option.value, '=');
+                        return;
+                      }
+                      setPendingValues(current => {
+                        const next = new Set(current);
+                        if (next.has(option.value)) next.delete(option.value);
+                        else next.add(option.value);
+                        return next;
+                      });
+                    }}
+                    role={allowsMultiple ? 'checkbox' : 'radio'}
+                    aria-checked={selected}
                     data-testid={`${testIdPrefix}-option-${option.value}`}
                   >
                     <span
-                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 ${
+                      className={`flex h-4 w-4 shrink-0 items-center justify-center border-2 ${
+                        allowsMultiple ? 'rounded' : 'rounded-full'
+                      } ${
                         selected ? 'bg-[var(--nim-primary)]' : ''
                       }`}
                       style={{ borderColor: selected ? 'var(--nim-primary)' : option.color ?? 'var(--nim-text-faint)' }}
@@ -237,7 +273,7 @@ export function TrackerFilterValueMenu({
                 </div>
               )}
             </div>
-            {(unmatchedOptionCount > 0 || onClear) && (
+            {(unmatchedOptionCount > 0 || onClear || allowsMultiple) && (
               <div className="flex items-center gap-3 border-t border-nim px-4 py-3 text-[13px] text-nim-muted">
                 {unmatchedOptionCount > 0 && (
                   <>
@@ -256,6 +292,17 @@ export function TrackerFilterValueMenu({
                     data-testid={`${testIdPrefix}-clear`}
                   >
                     Clear filter
+                  </button>
+                )}
+                {allowsMultiple && (
+                  <button
+                    type="button"
+                    className="ml-auto shrink-0 rounded bg-[var(--nim-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-40"
+                    disabled={pendingValues.size === 0}
+                    onClick={() => onSelect(Array.from(pendingValues), 'in')}
+                    data-testid={`${testIdPrefix}-apply-multiple`}
+                  >
+                    Apply{pendingValues.size > 0 ? ` (${pendingValues.size})` : ''}
                   </button>
                 )}
               </div>

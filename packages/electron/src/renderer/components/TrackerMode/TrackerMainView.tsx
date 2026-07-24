@@ -340,6 +340,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
             : column.render === 'tags' ? 'array'
               : column.render === 'avatar' ? 'user'
               : optionMap.size > 0 ? 'select' : 'string'),
+        multiValue: representativeField?.multiValue,
         options: optionMap.size > 0
           ? Array.from(optionMap, ([value, option]) => ({ value, ...option }))
           : representativeField?.options,
