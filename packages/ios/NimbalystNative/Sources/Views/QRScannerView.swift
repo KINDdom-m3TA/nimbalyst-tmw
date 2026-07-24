@@ -1,5 +1,25 @@
 import SwiftUI
 
+public enum NimbalystExternalURLRoute: Equatable, Sendable {
+    case authCallback
+    case unsupported
+}
+
+/// Allowlist for URLs delivered to the app by iOS.
+///
+/// Pairing payloads remain parseable by `QRPairingData` for the in-app scanner,
+/// but externally opened pairing links are intentionally not routed.
+public enum NimbalystExternalURLRouter {
+    public static func route(_ url: URL) -> NimbalystExternalURLRoute {
+        guard url.scheme?.lowercased() == "nimbalyst",
+              url.host?.lowercased() == "auth",
+              url.path == "/callback" else {
+            return .unsupported
+        }
+        return .authCallback
+    }
+}
+
 /// Data parsed from a Nimbalyst pairing QR code.
 ///
 /// The desktop generates a v4 payload:
@@ -26,7 +46,7 @@ public struct QRPairingData: Equatable {
 
     /// Parse QR code string into pairing data.
     /// Supports three formats:
-    /// 1. Deep link URL: `nimbalyst://pair?data=<base64-encoded-JSON>` (from Camera app scan)
+    /// 1. Pairing URL payload: `nimbalyst://pair?data=<base64-encoded-JSON>` (in-app scanner only)
     /// 2. Desktop v4 JSON payload (encryptionKeySeed, syncEmail)
     /// 3. Legacy JSON format (seed, userId)
     /// Returns nil if the string cannot be parsed.

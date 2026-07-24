@@ -5,6 +5,41 @@ import XCTest
 /// Covers QR data parsing, push token message encoding, and settings state.
 final class Phase4Tests: XCTestCase {
 
+    // MARK: - External URL Routing
+
+    func testExternalURLRoutingAllowsOnlyAuthCallback() throws {
+        XCTAssertEqual(
+            NimbalystExternalURLRouter.route(try XCTUnwrap(URL(string: "nimbalyst://auth/callback?session_jwt=jwt"))),
+            .authCallback
+        )
+        XCTAssertEqual(
+            NimbalystExternalURLRouter.route(try XCTUnwrap(URL(string: "nimbalyst://auth/unexpected"))),
+            .unsupported
+        )
+        XCTAssertEqual(
+            NimbalystExternalURLRouter.route(try XCTUnwrap(URL(string: "nimbalyst://pair?data=attacker-controlled"))),
+            .unsupported
+        )
+        XCTAssertEqual(
+            NimbalystExternalURLRouter.route(try XCTUnwrap(URL(string: "https://auth/callback"))),
+            .unsupported
+        )
+    }
+
+    func testInAppScannerStillParsesPairingDeepLinkPayload() throws {
+        let json = """
+        {"seed":"scanner-seed","serverUrl":"wss://sync.example.com","userId":"scanner@example.com"}
+        """
+        let encoded = try XCTUnwrap(json.data(using: .utf8)?.base64EncodedString())
+        let scannedValue = "nimbalyst://pair?data=\(encoded)"
+
+        let result = try XCTUnwrap(QRPairingData.parse(scannedValue))
+
+        XCTAssertEqual(result.seed, "scanner-seed")
+        XCTAssertEqual(result.serverUrl, "wss://sync.example.com")
+        XCTAssertEqual(result.userId, "scanner@example.com")
+    }
+
     // MARK: - QR Pairing Data Parsing (v4 desktop format)
 
     func testParseV4DesktopPayload() {
