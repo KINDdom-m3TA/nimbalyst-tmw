@@ -1856,6 +1856,14 @@ export class ElectronDocumentService implements DocumentService {
     const modifierIdentity = getCurrentIdentity(row.workspace);
     data.lastModifiedBy = modifierIdentity;
 
+    // "Who triaged this" is stamped here rather than sent by the caller: the
+    // authoritative identity lives in main, and stamping it as an ordinary
+    // update key would log an activity entry reading "[object Object]".
+    if (updates.triagedAt !== undefined) {
+      if (updates.triagedAt) data.triagedBy = modifierIdentity;
+      else delete data.triagedBy;
+    }
+
     const changes: Record<string, { from: any; to: any }> = {};
 
     // Merge remaining updates into data (skip typeTags since it's a column)

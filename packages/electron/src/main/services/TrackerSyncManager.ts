@@ -1191,6 +1191,10 @@ export function trackerItemToPayload(item: TrackerItem): TrackerItemPayload {
       // first upsert rewrites `data` from the payload and drops `data.origin`,
       // emptying the URN index.
       origin: record.system.origin,
+      // Triage is a team decision, so it travels: a colleague clearing an item
+      // from their inbox clears it from yours.
+      triagedAt: record.system.triagedAt,
+      triagedBy: record.system.triagedBy,
     },
   };
 }
