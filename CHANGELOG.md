@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Tracker saved views can be saved from any view state and exited with a Close control.
+- The grouping dropdown in tracker Display Options now groups rows.
+- Tracker filters can match items by the status they changed to or from.
+- Clicking a tracker grid column header toggles sorting.
 
 ### Removed
 <!-- Removed features go here -->
