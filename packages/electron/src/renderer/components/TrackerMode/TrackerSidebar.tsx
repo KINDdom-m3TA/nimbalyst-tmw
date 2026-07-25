@@ -349,19 +349,6 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
                   </button>
                   <button
                     className={`relative flex items-center justify-center w-7 h-6 border-l border-nim transition-colors ${
-                      viewMode === 'grid'
-                        ? 'bg-nim-active text-nim'
-                        : 'bg-nim-secondary text-nim-muted hover:text-nim'
-                    }`}
-                    onClick={() => onViewModeChange('grid')}
-                    title="Editable grid view (alpha)"
-                    data-testid="tracker-view-mode-grid"
-                  >
-                    <MaterialSymbol icon="grid_on" size={16} />
-                    <AlphaBadge size="dot" className="absolute -top-1 -right-1 pointer-events-none" />
-                  </button>
-                  <button
-                    className={`relative flex items-center justify-center w-7 h-6 border-l border-nim transition-colors ${
                       viewMode === 'kanban'
                         ? 'bg-nim-active text-nim'
                         : 'bg-nim-secondary text-nim-muted hover:text-nim'

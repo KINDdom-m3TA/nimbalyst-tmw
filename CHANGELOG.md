@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- The tracker Table view is now the virtualized editable grid, with favorites and right-click bulk actions; the separate grid view has been folded into it.
 
 ### Fixed
 <!-- Bug fixes go here -->

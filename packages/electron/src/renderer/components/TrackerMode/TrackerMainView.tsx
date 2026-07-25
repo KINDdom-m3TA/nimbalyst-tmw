@@ -11,7 +11,6 @@ import {
   getFieldForColumn,
   resolveColumnsForType,
   TrackerTable,
-  TrackerTableGrid,
   SortColumn as TrackerSortColumn,
   SortDirection as TrackerSortDirection,
   type TrackerItemType,
@@ -80,7 +79,7 @@ import {
   type TrackerLaunchContext,
 } from './trackerSessionLaunch';
 
-export type ViewMode = 'list' | 'table' | 'grid' | 'kanban' | 'tag-board' | 'inbox';
+export type ViewMode = 'list' | 'table' | 'kanban' | 'tag-board' | 'inbox';
 
 /** Human label for a source key without probing the importer (avoids backend start). */
 function sourceKeyLabel(key: string): string {
@@ -1054,8 +1053,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
     ? inboxFilteredItems.length
     : viewFilteredItems.length;
   const showColumnControls = viewMode === 'list'
-    || viewMode === 'table'
-    || viewMode === 'grid';
+    || viewMode === 'table';
 
   return (
     <div className="tracker-main-view flex-1 flex flex-col overflow-hidden min-h-0">
@@ -1409,45 +1407,22 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
               hideToolbar
             />
           ) : viewMode === 'table' ? (
-            <TrackerTableGrid
-              filterType={filterType}
-              sortBy={sortBy}
-              sortDirection={sortDirection}
-              hideTypeTabs={true}
-              onSortChange={(column, direction) => {
-                setModeLayout({ sortBy: column, sortDirection: direction });
-              }}
-              preserveItemOrder={recencyOrderActive}
-              favoriteItemIds={favoriteItemIds}
-              onToggleFavorite={handleToggleFavorite}
-              onSwitchToFilesMode={onSwitchToFilesMode}
-              onNewItem={handleNewItem}
-              onItemSelect={handleItemSelect}
-              selectedItemId={selectedItemId}
-              overrideItems={viewItemsWithPersonalFields}
-              onArchiveItems={handleArchiveItems}
-              onDeleteItems={handleDeleteItems}
-              onCopyDeepLink={teamOrgId ? handleCopyDeepLink : undefined}
-              searchQuery={searchQuery}
-              hasExternalFilters={hasExternalTableFilters}
-              onClearFilters={clearTableFilters}
-              columnConfig={columnConfig}
-              onColumnConfigChange={handleColumnConfigChange}
-              hideToolbar
-            />
-          ) : viewMode === 'grid' ? (
             <TrackerGridView
               filterType={filterType}
               sortBy={sortBy}
               sortDirection={sortDirection}
               preserveItemOrder={recencyOrderActive}
               onSwitchToFilesMode={onSwitchToFilesMode}
+              onNewItem={handleNewItem}
               onItemSelect={handleItemSelect}
               onDetailClose={handleCloseDetail}
               selectedItemId={selectedItemId}
               overrideItems={viewItemsWithPersonalFields}
               onArchiveItems={handleArchiveItems}
               onDeleteItems={handleDeleteItems}
+              onCopyDeepLink={teamOrgId ? handleCopyDeepLink : undefined}
+              favoriteItemIds={favoriteItemIds}
+              onToggleFavorite={handleToggleFavorite}
               searchQuery={searchQuery}
               hasExternalFilters={hasExternalTableFilters}
               onClearFilters={clearTableFilters}
