@@ -291,10 +291,15 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 
 ## Tracker System
 
-- Tracker mode (Cmd+T) with list, table, kanban, and tag-board views
+- Tracker mode (Cmd+T) with list, table, grid, kanban, tag-board, and inbox views
 - Kanban columns honor each type's status order from its schema (no hardcoded order)
 - Tag-board view with one column per tag (items appear in every matching column, plus an Untagged column)
-- Saved views: name, save, apply, and delete reusable filter/layout views per workspace
+- Saved views: name, save, apply, and delete reusable filter/layout views per workspace; a view captures the whole table state (columns, widths, per-column filters), and can be shared with the team so a colleague opens the same view
+- Editable spreadsheet grid — virtualized grid where any schema-backed cell edits in place with an editor chosen by the field's type, plus per-column filters, multi-cell paste, and fill-down
+- Collections — `milestone` and `release` items that group other tracker items through a relationship, with member rollups (counts by status, progress) and an "Add to collection" bulk action
+- Triage inbox — a keyboard-driven queue of everything nobody has decided about yet (unassigned, unprioritized, in no collection, still on its initial status), scoped globally or to one type. Assign, prioritize, accept, add to a milestone, snooze, or dismiss without leaving the keyboard; agent-filed items are flagged as proposals. Snoozes are personal
+- Releases as tracker items — create the next release early, associate work with it as it lands, and let the release scripts fill in version, git tag, and date at build time (`nim release finalize`); `nim release notes` renders the release's members as changelog markdown
+- Review lane — `in-review` -> `changes-requested` / `approved` on bugs, tasks, and plans. An AI agent can move work into review but cannot approve it; only a person can
 - Configurable tracker item types (bugs, tasks, architecture docs, decisions, etc.)
 - Tracker sidebar with type counts
 - Item detail panel
@@ -385,6 +390,7 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 - Claude Code CLI sessions: mid-session model switching from the model picker (drives the CLI's `/model` command; idle turns only)
 - Claude Fable 5 selectable across all Claude providers (chat, Claude Agent, Claude Code CLI)
 - Claude Sonnet 5 selectable across all Claude providers, with the previous Sonnet 4.6 still selectable as a pinned choice
+- Claude Opus 5 selectable across all Claude providers and the default Claude model, with the previous Opus 4.8 still selectable as a pinned choice
 
 ## Settings
 
@@ -415,7 +421,7 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 - Session quick open (Cmd+L) — Shift+Tab searches message contents, not just titles
 - Prompt quick open (Cmd+Shift+L)
 - Content search (Cmd+Shift+F)
-- Global semantic search (Cmd+Shift+O) — a Quick Open "Search" tab that finds any tracker or document by meaning (hybrid semantic + keyword), powered by the Nimbalyst Memory extension; appears only when that extension is enabled. Optionally indexes AI sessions too (off by default)
+- Memory search (Cmd+Shift+O) — a Quick Open "Memory" tab with Docs, Trackers, and Sessions scopes for hybrid semantic + keyword lookup, powered by the Nimbalyst Memory extension; appears only when that extension is enabled. Tracker results retain issue keys, status, type filters, and exact-match lookup; AI session indexing is optional and off by default
 - Shared team document quick open (Cmd+Shift+D) — a team-gated Quick Open tab with name filtering, unread/favorite cues, and direct navigation into Shared Documents
 - Mouse back/forward button support
 - Breadcrumb navigation

@@ -25,6 +25,7 @@ import {
   resolveRoleFieldName,
 } from '../trackerRecordAccessors';
 import { globalRegistry } from '../models';
+import { isCollectionType } from '../models/trackerCollections';
 import {
   resolveColumnsForType,
   getDefaultColumnConfig,
@@ -37,6 +38,12 @@ import {
   type TrackerColumnDef,
   type TypeColumnConfig,
 } from './trackerColumns';
+import {
+  withEffectiveUpdated,
+  filterTrackerRecords,
+  groupTrackerRecords,
+  sortTrackerRecords,
+} from './trackerRowData';
 import { DisplayOptionsPanel } from './DisplayOptionsPanel';
 import { useTrackerRows } from './useTrackerRows';
 import { renderCell, ContextSubmenu } from './TrackerTable';
@@ -65,6 +72,8 @@ interface TrackerTableGridProps {
   favoriteItemIds?: ReadonlySet<string>;
   onToggleFavorite?: (itemId: string) => void;
   preserveItemOrder?: boolean;
+  /** Parent renders the shared tracker-view controls. */
+  hideToolbar?: boolean;
 }
 
 /** Default minimum width for a column without an explicit minWidth. */
@@ -93,6 +102,7 @@ export function TrackerTableGrid({
   favoriteItemIds = new Set<string>(),
   onToggleFavorite,
   preserveItemOrder = false,
+  hideToolbar = false,
 }: TrackerTableGridProps): JSX.Element {
   const activeTypeFilter: TrackerItemType | 'all' = filterType;
   const [showDisplayOptions, setShowDisplayOptions] = useState(false);
@@ -120,75 +130,51 @@ export function TrackerTableGrid({
   const dataLoaded = useAtomValue(trackerDataLoadedAtom);
   const sourceItems = overrideItems ?? atomItems;
 
-  const items = useMemo(() => {
-    return sourceItems.map((item: TrackerRecord) => {
-      const actualDate = getEffectiveUpdatedDate(item);
-      const lastIndexed = actualDate ? actualDate.toISOString() : (item.system.lastIndexed || new Date(0).toISOString());
-      return { ...item, system: { ...item.system, lastIndexed } };
-    });
-  }, [sourceItems]);
+  // Collections live outside the active type filter (you add bugs to a
+  // milestone), so the "Add to Collection" menu reads from the all-types atom.
+  const allItems = useAtomValue(trackerItemsByTypeAtom('all'));
+  const collectionTargets = useMemo(
+    () => allItems
+      .filter((item: TrackerRecord) => !item.archived && isCollectionType(item.primaryType))
+      .slice(0, 50),
+    [allItems],
+  );
+
+  const items = useMemo(() => withEffectiveUpdated(sourceItems), [sourceItems]);
 
   const loading = !dataLoaded && items.length === 0;
   const searchTerm = externalSearchQuery ?? '';
   const hasAnyFilters = hasExternalFilters || Boolean(searchTerm.trim());
 
-  // Filter
-  const filteredItems = useMemo(() => {
-    return items.filter(item => {
-      if (searchTerm) {
-        const q = searchTerm.toLowerCase();
-        const matches =
-          item.issueKey?.toLowerCase().includes(q) ||
-          String(item.issueNumber ?? '').includes(q) ||
-          getRecordTitle(item).toLowerCase().includes(q) ||
-          (item.system.documentPath ?? '').toLowerCase().includes(q) ||
-          (String(getFieldByRole(item, 'assignee') ?? '')).toLowerCase().includes(q) ||
-          (Array.isArray(getFieldByRole(item, 'tags')) && (getFieldByRole(item, 'tags') as string[]).some((tag: string) => tag.toLowerCase().includes(q)));
-        if (!matches) return false;
-      }
-      if (activeTypeFilter !== 'all' && item.primaryType !== activeTypeFilter) return false;
-      return true;
-    });
-  }, [items, searchTerm, activeTypeFilter]);
+  const filteredItems = useMemo(
+    () => filterTrackerRecords(items, { searchTerm, typeFilter: activeTypeFilter }),
+    [items, searchTerm, activeTypeFilter],
+  );
 
-  // Sort
   const sortedItems = useMemo(() => {
     if (preserveItemOrder) return filteredItems;
-    const sorted = [...filteredItems].sort((a, b) => {
-      let compareValue = 0;
-      switch (currentSortBy) {
-        case 'type':
-          compareValue = a.primaryType.localeCompare(b.primaryType);
-          break;
-        case 'module':
-          compareValue = (a.system.documentPath ?? '').localeCompare(b.system.documentPath ?? '');
-          break;
-        case 'lastIndexed': {
-          const aTime = a.system.lastIndexed ? new Date(a.system.lastIndexed).getTime() : 0;
-          const bTime = b.system.lastIndexed ? new Date(b.system.lastIndexed).getTime() : 0;
-          compareValue = aTime - bTime;
-          break;
-        }
-        default: {
-          const aVal = getCellValue(a, currentSortBy);
-          const bVal = getCellValue(b, currentSortBy);
-          if (aVal == null && bVal == null) { compareValue = 0; break; }
-          if (aVal == null) { compareValue = 1; break; }
-          if (bVal == null) { compareValue = -1; break; }
-          if (aVal instanceof Date && bVal instanceof Date) { compareValue = aVal.getTime() - bVal.getTime(); break; }
-          if (typeof aVal === 'number' && typeof bVal === 'number') { compareValue = aVal - bVal; break; }
-          compareValue = String(aVal).localeCompare(String(bVal));
-          break;
-        }
-      }
-      return currentSortDirection === 'asc' ? compareValue : -compareValue;
-    });
-    return sorted;
+    return sortTrackerRecords(filteredItems, currentSortBy, currentSortDirection);
   }, [filteredItems, currentSortBy, currentSortDirection, preserveItemOrder]);
+  const groupedRecords = useMemo(
+    () => groupTrackerRecords(sortedItems, effectiveColumnConfig.groupBy),
+    [effectiveColumnConfig.groupBy, sortedItems],
+  );
+  const displayItems = useMemo(
+    () => groupedRecords.flatMap(group => group.items),
+    [groupedRecords],
+  );
+  const groupHeadersByItemId = useMemo(() => {
+    const headers = new Map<string, { label: string; count: number }>();
+    for (const group of groupedRecords) {
+      const first = group.items[0];
+      if (group.label && first) headers.set(first.id, { label: group.label, count: group.items.length });
+    }
+    return headers;
+  }, [groupedRecords]);
 
   // Row interaction (shared with TrackerTable)
   const rows = useTrackerRows({
-    items: sortedItems,
+    items: displayItems,
     activeTypeFilter,
     onItemSelect,
     onDeleteItems,
@@ -217,6 +203,7 @@ export function TrackerTableGrid({
     closeContextMenu,
     handleBulkStatusUpdate,
     handleBulkPriorityUpdate,
+    handleAddSelectionToCollection,
   } = rows;
 
   // Compute grid-template-columns from visible columns + persisted widths.
@@ -329,7 +316,7 @@ export function TrackerTableGrid({
       data-testid="tracker-table-grid"
     >
       {/* Display options panel */}
-      {showDisplayOptions && onColumnConfigChange && (
+      {!hideToolbar && showDisplayOptions && onColumnConfigChange && (
         <div className="relative">
           <DisplayOptionsPanel
             availableColumns={allColumns}
@@ -341,7 +328,7 @@ export function TrackerTableGrid({
       )}
 
       {/* Toolbar -- mirrors the list view's tune button + count */}
-      {items.length > 0 && (
+      {!hideToolbar && items.length > 0 && (
         <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-[var(--nim-border)] bg-[var(--nim-bg)]">
           <div className="flex-1" />
           {onColumnConfigChange && (
@@ -435,29 +422,43 @@ export function TrackerTableGrid({
             })}
 
             {/* Body rows -- each row uses display: contents so its cells join the parent grid */}
-            {sortedItems.map((item, rowIndex) => (
-              <GridRow
-                key={item.id || rowIndex}
-                item={item}
-                rowIndex={rowIndex}
-                columns={visibleColumnDefs}
-                selectedIds={selectedIds}
-                selectedItemId={selectedItemId}
-                focusedIndex={focusedIndex}
-                editingCell={editingCell}
-                setEditingCell={setEditingCell}
-                editingTitle={editingTitle}
-                setEditingTitle={setEditingTitle}
-                titleInputRef={titleInputRef}
-                handleFieldUpdate={handleFieldUpdate}
-                isItemEditable={isItemEditable}
-                handleRowClick={handleRowClick}
-                handleContextMenu={handleContextMenu}
-                openItemInEditor={openItemInEditor}
-                favoriteItemIds={favoriteItemIds}
-                onToggleFavorite={onToggleFavorite}
-              />
-            ))}
+            {displayItems.map((item, rowIndex) => {
+              const groupHeader = groupHeadersByItemId.get(item.id);
+              return (
+                <React.Fragment key={item.id || rowIndex}>
+                  {groupHeader && (
+                    <div
+                      className="tracker-table-grid-group-header sticky top-[28px] z-[9] flex items-center gap-2 border-b border-nim bg-nim-secondary px-3 py-1.5 text-[11px] font-semibold text-nim"
+                      style={{ gridColumn: '1 / -1' }}
+                      data-testid="tracker-table-grid-group-header"
+                    >
+                      <span>{groupHeader.label}</span>
+                      <span className="font-normal tabular-nums text-nim-faint">{groupHeader.count}</span>
+                    </div>
+                  )}
+                  <GridRow
+                    item={item}
+                    rowIndex={rowIndex}
+                    columns={visibleColumnDefs}
+                    selectedIds={selectedIds}
+                    selectedItemId={selectedItemId}
+                    focusedIndex={focusedIndex}
+                    editingCell={editingCell}
+                    setEditingCell={setEditingCell}
+                    editingTitle={editingTitle}
+                    setEditingTitle={setEditingTitle}
+                    titleInputRef={titleInputRef}
+                    handleFieldUpdate={handleFieldUpdate}
+                    isItemEditable={isItemEditable}
+                    handleRowClick={handleRowClick}
+                    handleContextMenu={handleContextMenu}
+                    openItemInEditor={openItemInEditor}
+                    favoriteItemIds={favoriteItemIds}
+                    onToggleFavorite={onToggleFavorite}
+                  />
+                </React.Fragment>
+              );
+            })}
           </div>
         )}
       </div>
@@ -525,6 +526,26 @@ export function TrackerTableGrid({
                 </button>
               ))}
             </ContextSubmenu>
+
+            {collectionTargets.length > 0 && (
+              <ContextSubmenu label="Add to Collection" icon="inventory_2">
+                {collectionTargets.map(collection => (
+                  <button
+                    key={collection.id}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[var(--nim-text)] hover:bg-[var(--nim-bg-hover)] cursor-pointer"
+                    onClick={() => handleAddSelectionToCollection(collection)}
+                  >
+                    <span
+                      className="material-symbols-outlined text-sm shrink-0"
+                      style={{ color: getTypeColor(collection.primaryType) }}
+                    >
+                      {getTypeIcon(collection.primaryType)}
+                    </span>
+                    <span className="truncate">{getRecordTitle(collection)}</span>
+                  </button>
+                ))}
+              </ContextSubmenu>
+            )}
 
             <div className="border-b border-[var(--nim-border)] my-1" />
 

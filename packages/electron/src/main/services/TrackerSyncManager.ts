@@ -65,11 +65,24 @@ import {
   getMaxTrackerNavigationSyncId,
   listUnsyncedTrackerNavigationEntries,
 } from './tracker/trackerNavigationStore';
+import {
+  getMaxSharedSavedViewSyncId,
+  listUnsyncedSharedSavedViews,
+} from './tracker/trackerSavedViewStore';
+import {
+  applyRemoteWorkspaceSharedSavedView,
+  registerTrackerSavedViewFlushHandler,
+} from './TrackerSavedViewService';
 import { windows, windowStates } from '../window/windowState';
 import { getEffectiveTrackerSyncPolicy, decideBackfillAction } from './TrackerPolicyService';
 import { rowToTrackerItem } from '../mcp/tools/trackerToolHandlers';
 import { getWorkspaceState } from '../utils/store';
-import { backupCollabOrganization, verifyOrMarkCollabBackups } from './CollabBackupCoordinator';
+import {
+  backupCollabOrganization,
+  finalizeCollabDocumentMigration,
+  finalizeCollabTitleMigration,
+  verifyOrMarkCollabBackups,
+} from './CollabBackupCoordinator';
 import { getCollabBackupService } from './CollabBackupService';
 
 // ============================================================================
@@ -99,6 +112,10 @@ const engines = new Map<string, EngineEntry>();
 
 registerTrackerNavigationFlushHandler((workspacePath) =>
   engines.get(workspacePath)?.engine.flushNavigation(),
+);
+
+registerTrackerSavedViewFlushHandler((workspacePath) =>
+  engines.get(workspacePath)?.engine.flushSavedViews(),
 );
 
 /**
@@ -333,6 +350,11 @@ async function doInitializeTrackerSync(workspacePath: string): Promise<void> {
       listUnsynced: () => listUnsyncedTrackerNavigationEntries(workspacePath),
       applyRemote: (def) => applyRemoteWorkspaceTrackerNavigationEntry(workspacePath, def),
     },
+    savedViewSync: {
+      getMaxSyncId: () => getMaxSharedSavedViewSyncId(workspacePath),
+      listUnsynced: () => listUnsyncedSharedSavedViews(workspacePath),
+      applyRemote: (def) => applyRemoteWorkspaceSharedSavedView(workspacePath, def),
+    },
     getJwt: () => getOrgScopedJwt(team.orgId),
     // Legacy-only: server-managed mode never hits staleKeyEpoch (server owns
     // the epoch), so a key-refresh callback would be dead weight.
@@ -456,13 +478,11 @@ export async function reinitializeTrackerSync(workspacePath: string): Promise<vo
  *      runs in plaintext pass-through, and the on-connect backfill re-uploads
  *      the marked items; `pushPendingSchemas` re-uploads the marked schemas.
  *
- * NOTE (documents): doc-index TITLES self-heal (NIM-906) — on the next
- * server-managed reconnect, a client holding the legacy org key decrypts the
- * pre-migration ciphertext titles and re-registers them as plaintext, so the
- * server re-keys them under the DEK and broadcasts clean titles to the team.
- * Document BODIES re-compact as plaintext when their Yjs client next elects.
- * The migrating caller must hold the legacy org key (enforced above) so this
- * healing can actually happen.
+ * NOTE (documents): the background encryption finalizer now enumerates every
+ * indexed room after cutover, explicitly re-registers recovered legacy titles,
+ * and compacts fully decoded bodies before the server records completion.
+ * The migrating caller must hold the legacy org key (enforced below) so that
+ * finalization can actually happen.
  *
  * Returns the orgId and how many items were marked for re-push. Requires the
  * caller to be a team admin (enforced by the server REST gate).
@@ -492,8 +512,8 @@ export async function migrateTeamToServerManaged(
   // NIM-906: doc-index TITLES and document BODIES written before the flip stay
   // AES-ciphertext on the server (it never held the zero-knowledge org key, so
   // it cannot re-key them). Only a client that still holds the legacy org key
-  // can recover the plaintext and re-register it (TeamSync self-heals titles;
-  // bodies re-compact as plaintext on next elect). So the precondition for a
+  // can recover the plaintext and re-register it (the background finalizer
+  // explicitly heals titles and compacts bodies). So the precondition for a
   // CLEAN cutover is that THIS migrating client holds the legacy org key —
   // not that no docs are linked (the old guard blocked on linked docs yet did
   // nothing to guarantee the data could actually be healed, and silently left
@@ -627,6 +647,17 @@ export async function migrateTeamToServerManaged(
       'from its local plaintext collaboration backup; no rollback was attempted. Cause: ' + reason,
     );
   }
+}
+
+export async function finalizeTeamEncryptionDocument(
+  orgId: string,
+  documentId: string,
+): Promise<void> {
+  await finalizeCollabDocumentMigration(orgId, documentId);
+}
+
+export async function finalizeTeamEncryptionTitles(orgId: string): Promise<void> {
+  await finalizeCollabTitleMigration(orgId);
 }
 
 /**

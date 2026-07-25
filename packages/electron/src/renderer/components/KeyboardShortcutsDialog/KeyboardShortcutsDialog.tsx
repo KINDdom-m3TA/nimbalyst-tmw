@@ -180,11 +180,21 @@ export function KeyboardShortcutsDialog({ isOpen, onClose }: KeyboardShortcutsDi
         { label: 'Session Quick Open', shortcut: KeyboardShortcuts.window.sessionQuickOpen }, // shared/KeyboardShortcuts.ts:77 - Cmd+L
         { label: 'Prompt Quick Open', shortcut: KeyboardShortcuts.window.promptQuickOpen }, // shared/KeyboardShortcuts.ts:78 - Cmd+Shift+L
         { label: 'Content Search', shortcut: KeyboardShortcuts.window.contentSearch }, // shared/KeyboardShortcuts.ts:79 - Cmd+Shift+F
-        { label: 'Global Search (semantic)', shortcut: KeyboardShortcuts.window.globalSearch }, // shared/KeyboardShortcuts.ts - Cmd+Shift+O
+        { label: 'Memory Search', shortcut: KeyboardShortcuts.window.globalSearch }, // shared/KeyboardShortcuts.ts - Cmd+Shift+O
         { label: 'Team Quick Open', shortcut: KeyboardShortcuts.window.teamQuickOpen }, // shared/KeyboardShortcuts.ts - Cmd+Shift+D
         { label: 'New Worktree', shortcut: KeyboardShortcuts.window.newWorktree }, // shared/KeyboardShortcuts.ts:81 - Cmd+Alt+W
         { label: 'Settings', shortcut: KeyboardShortcuts.window.aiModels }, // shared/KeyboardShortcuts.ts:82 - Cmd+,
         { label: 'Minimize', shortcut: KeyboardShortcuts.window.minimize }, // shared/KeyboardShortcuts.ts:83 - Cmd+M
+      ],
+    },
+    {
+      title: 'Tracker Grid',
+      shortcuts: [
+        { label: 'Move between cells', shortcut: 'Arrow keys / Tab' },
+        { label: 'Edit focused cell', shortcut: 'F2 or start typing' },
+        { label: 'Open focused item details', shortcut: 'Enter' },
+        { label: 'Commit edit / next row', shortcut: 'Enter (while editing)' },
+        { label: 'Cancel edit / close details', shortcut: 'Escape' },
       ],
     },
   ];
