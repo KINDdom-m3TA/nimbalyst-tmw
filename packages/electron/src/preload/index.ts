@@ -262,6 +262,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   setTheme: (theme: string) => ipcRenderer.invoke('set-theme', theme),
+  setTitleBarOverlayColors: (colors: { color: string; symbolColor: string }) =>
+    ipcRenderer.send('window-chrome:set-overlay-colors', colors),
 
   // File operations
   openFile: () => ipcRenderer.invoke('open-file'),
@@ -656,6 +658,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('mcp:readCollabDoc', handler);
   },
   sendMcpReadCollabDocResult: (resultChannel: string, result: { success: boolean; content?: string; error?: string }) => {
+    ipcRenderer.send(resultChannel, result);
+  },
+  onMcpReadCollabDocComments: (callback: (data: any) => void) => {
+    const handler = (_event: any, data: any) => callback(data);
+    ipcRenderer.on('mcp:readCollabDocComments', handler);
+    return () => ipcRenderer.removeListener('mcp:readCollabDocComments', handler);
+  },
+  onMcpReplyToCollabDocComment: (callback: (data: any) => void) => {
+    const handler = (_event: any, data: any) => callback(data);
+    ipcRenderer.on('mcp:replyToCollabDocComment', handler);
+    return () => ipcRenderer.removeListener('mcp:replyToCollabDocComment', handler);
+  },
+  onMcpCreateCollabDocComment: (callback: (data: any) => void) => {
+    const handler = (_event: any, data: any) => callback(data);
+    ipcRenderer.on('mcp:createCollabDocComment', handler);
+    return () => ipcRenderer.removeListener('mcp:createCollabDocComment', handler);
+  },
+  sendMcpCollabDocCommentResult: (
+    resultChannel: string,
+    result: { success: boolean; result?: unknown; code?: string; error?: string },
+  ) => {
     ipcRenderer.send(resultChannel, result);
   },
   // Shared-index (first-class shared folders + documents) MCP operations.
