@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- File links in a transcript now open the right file when the extension is longer than eight characters, such as `.excalidraw`.
 
 ### Removed
 <!-- Removed features go here -->
