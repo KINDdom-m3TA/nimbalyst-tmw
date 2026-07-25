@@ -20,6 +20,7 @@ import type { AgentMessage } from '../ai/server/types';
 import { shouldSyncMessageForSessionRoom, truncateContentForSync } from './syncContentTruncator';
 import { appendSyncClientParams } from './syncClientInfo';
 import { buildSyncedSessionIndexFields } from './sessionIndexEntryFields';
+import { resolveIndexSortTimestamp } from './sessionSortTimestamp';
 import { deriveTrackerPersonalStateKey } from './trackerPersonalStateKey';
 import type {
   SyncConfig,
@@ -2885,9 +2886,19 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
         // sessionIndexEntryFields.ts / __tests__/sessionIndexEntryFields.test.ts.
         ...buildSyncedSessionIndexFields(session),
         messageCount: session.messageCount,
+        // lastMessageAt keeps advancing per message so mobile unread state
+        // (Session.hasUnread: lastMessageAt > lastReadAt) stays live mid-turn.
         lastMessageAt: session.updatedAt,
         createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
+        // updatedAt is the mobile sort key and is held steady while a session
+        // executes, so per-message drift doesn't reshuffle the iOS list every
+        // sync pass. Turn boundaries still move it via
+        // pushExecutionStateToMobile. See sessionSortTimestamp.ts (NIM-2167).
+        updatedAt: resolveIndexSortTimestamp({
+          localUpdatedAt: session.updatedAt,
+          cachedUpdatedAt: existingCache?.updatedAt,
+          isExecuting: cachedIsExecuting,
+        }),
         isExecuting: cachedIsExecuting,
         queuedPromptCount: cachedQueuedPromptCount,
         lastReadAt: cachedLastReadAt,
@@ -2955,7 +2966,10 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
         messageCount: session.messageCount,
         lastMessageAt: session.updatedAt,
         createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
+        // Mirror the value actually sent, not the local one -- otherwise the
+        // next sync pass reads a drifted "cached" timestamp and the mid-turn
+        // hold in resolveIndexSortTimestamp leaks. (NIM-2167)
+        updatedAt: entry.updatedAt,
         currentContext: clientMeta?.currentContext,
         isExecuting: cachedIsExecuting,
         queuedPrompts: cachedQueuedPrompts,
