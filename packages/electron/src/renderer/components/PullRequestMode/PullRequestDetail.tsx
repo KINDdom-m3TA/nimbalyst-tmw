@@ -33,6 +33,8 @@ interface PullRequestDetailProps {
   onClose: () => void;
   /** Starts an AI session in the PR review pane with the review command prefilled. */
   onStartReviewSession: () => void;
+  /** Loads an existing linked session into the PR review pane's chat sidebar. */
+  onOpenSession?: (sessionId: string) => void;
   /** Wires the "Open in Worktree" action; omitted hides the button. */
   onOpenInWorktree?: () => void;
 }
@@ -57,6 +59,7 @@ export function PullRequestDetail({
   pr,
   onClose,
   onStartReviewSession,
+  onOpenSession,
   onOpenInWorktree,
 }: PullRequestDetailProps): JSX.Element {
   const layout = useAtomValue(prModeLayoutAtom);
@@ -138,6 +141,7 @@ export function PullRequestDetail({
             remote={remote}
             prNumber={pr.number}
             prState={pr.state}
+            onOpenSession={onOpenSession}
           />
         </div>
 

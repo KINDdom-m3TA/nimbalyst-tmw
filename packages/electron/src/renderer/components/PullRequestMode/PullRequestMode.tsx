@@ -192,6 +192,18 @@ export const PullRequestMode = forwardRef<PullRequestModeRef, PullRequestModePro
     }
   }, [trackerReferences]);
 
+  /**
+   * Load an already-linked session into this pane's chat sidebar. Reviewing a
+   * PR stays in PR mode — jumping to Agent mode would lose the diff the session
+   * is about.
+   */
+  const handleOpenSessionInChat = useCallback((sessionId: string) => {
+    if (layout.chatCollapsed) {
+      setLayout({ chatCollapsed: false });
+    }
+    chatSidebarRef.current?.loadSession(sessionId);
+  }, [layout.chatCollapsed, setLayout]);
+
   const handleStartReviewSession = useCallback(async () => {
     if (!selectedPr || !remoteForWorkspace) return;
     const sessionId = await dispatchCreateNewSession(
@@ -282,6 +294,7 @@ export const PullRequestMode = forwardRef<PullRequestModeRef, PullRequestModePro
             pr={selectedPr}
             onClose={() => setLayout({ selectedItemId: null })}
             onStartReviewSession={handleStartReviewSession}
+            onOpenSession={handleOpenSessionInChat}
             onOpenInWorktree={handleOpenInWorktree}
           />
         ) : (

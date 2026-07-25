@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Provider as JotaiProvider } from 'jotai';
 import { store } from '@nimbalyst/runtime/store';
@@ -87,10 +87,21 @@ vi.mock('../GhOnboardingBanner', () => ({ GhOnboardingBanner: () => null }));
 vi.mock('../PullRequestSidebar', () => ({ PullRequestSidebar: () => null }));
 vi.mock('../PullRequestListView', () => ({ PullRequestListView: () => null }));
 vi.mock('../PullRequestDetail', () => ({
-  PullRequestDetail: ({ onStartReviewSession }: { onStartReviewSession: () => void }) => (
-    <button data-testid="start-review" onClick={onStartReviewSession}>
-      Review
-    </button>
+  PullRequestDetail: ({
+    onStartReviewSession,
+    onOpenSession,
+  }: {
+    onStartReviewSession: () => void;
+    onOpenSession?: (sessionId: string) => void;
+  }) => (
+    <>
+      <button data-testid="start-review" onClick={onStartReviewSession}>
+        Review
+      </button>
+      <button data-testid="open-linked-session" onClick={() => onOpenSession?.('session-linked')}>
+        Open linked
+      </button>
+    </>
   ),
 }));
 
@@ -190,6 +201,32 @@ describe('PullRequestMode review session action', () => {
       });
       expect(mocks.loadSession).toHaveBeenCalledWith('session-review');
     });
+    expect(store.get(windowModeAtom)).toBe('pr-review');
+    expect(
+      screen.getByTestId('mock-chat-sidebar').getAttribute('data-collapsed'),
+    ).toBe('false');
+  });
+
+  it('opens an already-linked session in the chat pane without leaving PR mode', async () => {
+    render(
+      <JotaiProvider store={store}>
+        <PullRequestMode
+          workspacePath="/workspace"
+          workspaceName="workspace"
+          isActive
+        />
+      </JotaiProvider>,
+    );
+    // Let mount effects (layout hydration, poll start) settle first — they
+    // would otherwise land after the click and clobber the uncollapse.
+    await act(async () => {});
+
+    fireEvent.click(screen.getByTestId('open-linked-session'));
+
+    await waitFor(() => {
+      expect(mocks.loadSession).toHaveBeenCalledWith('session-linked');
+    });
+    expect(mocks.createSession).not.toHaveBeenCalled();
     expect(store.get(windowModeAtom)).toBe('pr-review');
     expect(
       screen.getByTestId('mock-chat-sidebar').getAttribute('data-collapsed'),
