@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The grouping dropdown in tracker Display Options now groups rows.
 - Tracker filters can match items by the status they changed to or from.
 - Clicking a tracker grid column header toggles sorting.
+- Claude Agent and Claude Code CLI pickers offer Opus 5 (1M) and Fable 5 (1M) rows again for plans that don't get the extended window automatically, and the CLI context meter now reports the window the session is really running at. (#989, diagnosed by @Derazien)
 
 ### Removed
 <!-- Removed features go here -->
