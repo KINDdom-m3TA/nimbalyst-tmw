@@ -31,7 +31,7 @@ interface PullRequestDetailProps {
   remote: string;
   pr: PullRequestRow;
   onClose: () => void;
-  /** Starts a standalone agent session with this PR's review command prefilled. */
+  /** Starts an AI session in the PR review pane with the review command prefilled. */
   onStartReviewSession: () => void;
   /** Wires the "Open in Worktree" action; omitted hides the button. */
   onOpenInWorktree?: () => void;
@@ -102,10 +102,10 @@ export function PullRequestDetail({
               className="flex items-center gap-1 px-2 py-1 text-xs text-nim-muted hover:text-nim border border-nim rounded transition-colors"
               onClick={onStartReviewSession}
               data-testid="pr-start-review-session"
-              title={`Start a new session to review #${pr.number}`}
+              title={`Review #${pr.number} with AI`}
             >
               <MaterialSymbol icon="chat" size={14} />
-              Review in Session
+              Review with AI
             </button>
             {htmlUrl && (
               <button
