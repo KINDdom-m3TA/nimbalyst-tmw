@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The grouping dropdown in tracker Display Options now groups rows.
 - Tracker filters can match items by the status they changed to or from.
 - Clicking a tracker grid column header toggles sorting.
+- The nim CLI now reports an error and exits non-zero when the app rejects a tracker create or update, instead of printing success.
 
 ### Removed
 <!-- Removed features go here -->
