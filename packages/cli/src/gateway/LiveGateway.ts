@@ -56,6 +56,7 @@ export class LiveGateway implements TrackerGateway {
     if (filters.priority) args.priority = filters.priority;
     if (filters.owner) args.owner = filters.owner;
     if (filters.search) args.search = filters.search;
+    if (filters.inbox) args.inbox = true;
     if (filters.includeArchived) args.archived = true;
     if (filters.limit !== undefined) args.limit = filters.limit;
     // The CLI maps custom fields (release version, members) into the record, so
