@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Bug fixes go here -->
 - Long or multi-line messages sent to a Claude Code CLI session are no longer truncated or split into several pasted-text placeholders.
 - Sessions no longer stay stuck showing "awaiting input" once the AI is no longer waiting, and cancelling a prompt whose session has since stopped now clears it instead of failing.
+- The transcript's scroll-to-bottom arrow no longer blocks clicks, text selection, and the scroll wheel across the full width of the pane at its height.
 
 ### Removed
 <!-- Removed features go here -->
