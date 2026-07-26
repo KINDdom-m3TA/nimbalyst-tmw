@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - File links in a transcript now open the right file when the extension is longer than eight characters, such as `.excalidraw`.
+- Screenshots taken by a desktop session appear in the mobile transcript again, sized so they stay sharp when zoomed.
 - The mobile session list no longer reshuffles while sessions are streaming.
 - Android session transcripts no longer stay stuck on "Waiting for session..." when the messages were already synced before the session was opened.
 - Android screens no longer show a white background behind their content on light-mode devices.
