@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- The composer's Extended thinking choice now sticks across new sessions instead of resetting each time.
 
 ### Fixed
 <!-- Bug fixes go here -->
