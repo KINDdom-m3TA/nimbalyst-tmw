@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New Claude Agent sessions now accept Sonnet 5 saved as an explicit default instead of failing before the first prompt runs.
 - Tracker saved views can be saved from any view state and exited with a Close control.
 - The grouping dropdown in tracker Display Options now groups rows.
+- Creating a plan or decision from an AI session now works instead of being rejected by schema validation, and new items start on their type's own default status instead of "to-do".
 - Tracker filters can match items by the status they changed to or from.
 - Clicking a tracker grid column header toggles sorting.
 - The nim CLI now reports an error and exits non-zero when the app rejects a tracker create or update, instead of printing success.
