@@ -78,6 +78,7 @@ import {
   buildTrackerLaunchContext,
   type TrackerLaunchContext,
 } from './trackerSessionLaunch';
+import { trackTeamAnalyticsEvent } from '../../utils/teamAnalytics';
 
 export type ViewMode = 'list' | 'table' | 'kanban' | 'tag-board' | 'inbox';
 
@@ -823,6 +824,18 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
     return out;
   }, [trackerTypes]);
 
+  const visibleCollaborationScope = useMemo<'personal' | 'shared' | 'mixed' | 'unknown'>(() => {
+    if (filteredItems.length === 0) return 'unknown';
+    let hasShared = false;
+    let hasPersonal = false;
+    for (const item of filteredItems) {
+      if (hasTeam && teamSyncedTypes.has(item.primaryType)) hasShared = true;
+      else hasPersonal = true;
+      if (hasShared && hasPersonal) return 'mixed';
+    }
+    return hasShared ? 'shared' : 'personal';
+  }, [filteredItems, hasTeam, teamSyncedTypes]);
+
   const prewarmItemIds = useMemo(() => {
     if (!hasTeam || teamSyncedTypes.size === 0) return [];
     return filteredItems
@@ -837,8 +850,22 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   });
 
   const handleItemSelect = useCallback((itemId: string) => {
+    const item = filteredItems.find(candidate => candidate.id === itemId);
+    trackTeamAnalyticsEvent('tracker_item_clicked', {
+      surface: 'desktop',
+      collaborationScope: item
+        ? (hasTeam && teamSyncedTypes.has(item.primaryType) ? 'shared' : 'personal')
+        : 'unknown',
+    });
     setModeLayout({ selectedItemId: itemId });
-  }, [setModeLayout]);
+  }, [filteredItems, hasTeam, setModeLayout, teamSyncedTypes]);
+
+  const trackTableSort = useCallback(() => {
+    trackTeamAnalyticsEvent('tracker_table_sort', {
+      surface: 'desktop',
+      collaborationScope: visibleCollaborationScope,
+    });
+  }, [visibleCollaborationScope]);
 
   const handleCloseDetail = useCallback(() => {
     setModeLayout({ selectedItemId: null });
@@ -1386,6 +1413,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
               sortDirection={sortDirection}
               hideTypeTabs={true}
               onSortChange={(column, direction) => {
+                trackTableSort();
                 setModeLayout({ sortBy: column, sortDirection: direction });
               }}
               preserveItemOrder={recencyOrderActive}
@@ -1433,6 +1461,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
               filterFields={headerFilterFields}
               filterEvaluationContext={filterEvaluationContext}
               onSortChange={(column, direction) => {
+                trackTableSort();
                 setModeLayout({
                   sortBy: column as TrackerSortColumn,
                   sortDirection: direction,
