@@ -34,6 +34,44 @@ body {
   overflow: hidden;
 }
 
+/* =============================================================================
+   Floating surfaces must opt out of the window drag region
+   =============================================================================
+   `.window-top-bar` is a full-width 38px `-webkit-app-region: drag` strip. On
+   Windows (`titleBarStyle: 'hidden'`) Electron reports that rectangle to the OS
+   as HTCAPTION, so the OS consumes the mouse event as a title-bar drag and the
+   renderer never sees a click. Anything *painted over* the strip inherits that
+   fate: Blink only subtracts rectangles that explicitly declare `no-drag`, and
+   `-webkit-app-region` is not an inherited property, so a portalled popup
+   overlapping the top 38px is simply dead.
+
+   That is issue #1052 (NIM-2243): the project rail's `+` menu is bottom-aligned
+   and grows upward, so once recent projects exist `shift()` clamps it to the top
+   of the viewport and its first item, "Open folder…", lands inside the strip.
+   The recents below y=38 stayed clickable, which is why it read as one broken
+   button rather than a positioning bug.
+
+   `[data-floating-ui-portal]` is the attribute @floating-ui/react stamps on every
+   portal root, so this covers every popover/tooltip/menu in the app at once. The
+   descendant selector is deliberate: the portal root and any intermediate wrapper
+   are usually zero-height boxes around an absolutely-positioned child, so scoping
+   to `> *` would subtract an empty rectangle and fix nothing. */
+[data-floating-ui-portal],
+[data-floating-ui-portal] * {
+  -webkit-app-region: no-drag;
+}
+
+/* The interactive surfaces that still portal to `document.body` by hand rather
+   than through @floating-ui, so they carry no portal attribute to hang the rule
+   off. Only interactive ones are listed: a non-interactive overlay (the help
+   tooltip is `pointer-events: none`) opting out would needlessly carve a hole in
+   the draggable title bar underneath it. */
+.generic-typeahead,
+.session-context-menu,
+.walkthrough-callout {
+  -webkit-app-region: no-drag;
+}
+
 /* Global scrollbar styles for macOS "Always show scrollbars" setting */
 /* These styles ensure scrollbars match the current theme */
 ::-webkit-scrollbar {
