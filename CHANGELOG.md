@@ -17,9 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - Windows and Linux get the File/Edit/View menus back, now drawn in the project window's title bar.
+- Tracker types defined in one project no longer overwrite another open project's identically-named types (#1035).
 
 ### Removed
 <!-- Removed features go here -->
+- Organizations still on the original client-managed encryption are no longer supported and must be set up again; all team collaboration — including attachments in shared documents — now uses Nimbalyst-managed encryption.
 
 ## [0.71.2] - 2026-07-26
 
