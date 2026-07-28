@@ -14,6 +14,7 @@ import { OrgWindowSwitcher } from './OrgWindowSwitcher';
 import { InboxSection } from './Inbox';
 import { isActiveMembership, persistLastSelectedOrgId, resolveDefaultOrgId } from './defaultOrg';
 import { normalizeTeamAnalyticsCallerRole } from '../../../shared/analytics/teamAnalytics';
+import { organizationCreationEnabled } from '../../store/atoms/settingsDomains';
 import { trackTeamAnalyticsEvent } from '../../utils/teamAnalytics';
 
 // Workstream F will replace this interim destination with the shipped console route.
@@ -150,7 +151,11 @@ export function TeamMode({ workspacePath, isActive = true }: { workspacePath?: s
             Organizations
             <AlphaBadge size="sm" tooltip={TEAM_ALPHA_TOOLTIP} />
           </h1>
-          <p className="m-0 mt-1 text-sm text-[var(--nim-text-muted)]">Create an organization to collaborate with a team, or accept a pending invitation.</p>
+          <p className="m-0 mt-1 text-sm text-[var(--nim-text-muted)]">
+            {organizationCreationEnabled
+              ? 'Create an organization to collaborate with a team, or accept a pending invitation.'
+              : 'Organizations are invite-only during the alpha. Accept a pending invitation to get started.'}
+          </p>
           <TeamAlphaNotice className="mt-2.5 max-w-[640px]" />
         </header>
         <main className="team-mode-content flex-1 overflow-y-auto p-6">

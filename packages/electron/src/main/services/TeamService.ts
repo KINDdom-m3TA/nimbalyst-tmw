@@ -28,6 +28,7 @@ import { resolveTeamForRemoteHash } from './teamProjectResolver';
 import { getCollabSyncHttpUrl } from '../utils/collabSyncUrl';
 import { assertJwtMatchesOrg, getJwtExp, AuthContextMismatchError } from './jwtOrg';
 import { createSingleFlight } from '../utils/asyncCache';
+import { setHasOrganizationsForMenu } from '../menu/organizationMenuState';
 import {
   getAccounts,
   getPersonalSessionJwt,
@@ -806,9 +807,16 @@ export async function listTeams(): Promise<TeamDetails[]> {
   // did resolve to this caller, but evict the result immediately so a timeout
   // cannot pin "no teams" (or an incomplete list) for the full five minutes.
   void promise.then(
-    () => {
+    (teams) => {
       if (!allAccountLookupsSucceeded && listTeamsCache?.promise === promise) {
         listTeamsCache = null;
+      }
+      // Drive the Organization Manager menu item's visibility. A partial lookup
+      // may under-report, so only an authoritative empty result hides the item.
+      if (teams.length > 0) {
+        setHasOrganizationsForMenu(true);
+      } else if (allAccountLookupsSucceeded) {
+        setHasOrganizationsForMenu(false);
       }
     },
     () => {
@@ -1573,6 +1581,12 @@ export function registerTeamHandlers(): void {
 
   safeHandle('team:create', async (_event, name: string, workspacePath?: string, accountOrgId?: string) => {
     try {
+      // Org creation is disabled while Teams is invite-only alpha. The renderer
+      // hides the affordances too; this is the backstop covering every caller.
+      // Dev builds stay open so the create flow remains testable.
+      if (process.env.NODE_ENV !== 'development') {
+        return { success: false, error: 'Creating organizations is not available yet — Teams is in an invite-only alpha.' };
+      }
       const team = await createTeam(name, workspacePath, accountOrgId);
       return { success: true, team };
     } catch (error) {

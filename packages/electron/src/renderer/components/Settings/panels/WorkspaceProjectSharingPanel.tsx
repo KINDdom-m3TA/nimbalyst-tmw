@@ -16,6 +16,7 @@ import {
   normalizeTeamAnalyticsCallerRole,
 } from '../../../../shared/analytics/teamAnalytics';
 import { trackTeamAnalyticsEvent } from '../../../utils/teamAnalytics';
+import { organizationCreationEnabled } from '../../../store/atoms/settingsDomains';
 
 // ============================================================================
 // Types
@@ -313,22 +314,33 @@ export function UnsharedProjectSharingState({
               </div>
             )}
 
-            <div className="project-sharing-choice rounded-lg border border-[var(--nim-border)] bg-[var(--nim-bg-secondary)] p-3">
-              <div className="text-[13px] font-medium text-[var(--nim-text)]">Create a new organization</div>
-              <p className="m-0 mt-0.5 mb-2 text-[12px] leading-relaxed text-[var(--nim-text-muted)]">
-                {canChooseExisting
-                  ? 'Start a separate organization with its own members and billing.'
-                  : 'You are not in an organization yet. Create one to start sharing this project.'}
-              </p>
-              <button
-                type="button"
-                onClick={() => setChoice('new')}
-                className="rounded-md border border-[var(--nim-border)] px-4 py-2 text-[12px] font-medium text-[var(--nim-text)] hover:bg-[var(--nim-bg-hover)]"
-                data-testid="project-sharing-choose-new"
+            {organizationCreationEnabled && (
+              <div className="project-sharing-choice rounded-lg border border-[var(--nim-border)] bg-[var(--nim-bg-secondary)] p-3">
+                <div className="text-[13px] font-medium text-[var(--nim-text)]">Create a new organization</div>
+                <p className="m-0 mt-0.5 mb-2 text-[12px] leading-relaxed text-[var(--nim-text-muted)]">
+                  {canChooseExisting
+                    ? 'Start a separate organization with its own members and billing.'
+                    : 'You are not in an organization yet. Create one to start sharing this project.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setChoice('new')}
+                  className="rounded-md border border-[var(--nim-border)] px-4 py-2 text-[12px] font-medium text-[var(--nim-text)] hover:bg-[var(--nim-bg-hover)]"
+                  data-testid="project-sharing-choose-new"
+                >
+                  Continue
+                </button>
+              </div>
+            )}
+            {!organizationCreationEnabled && !canChooseExisting && (
+              <p
+                className="project-sharing-invite-only m-0 text-[12px] leading-relaxed text-[var(--nim-text-muted)]"
+                data-testid="project-sharing-invite-only"
               >
-                Continue
-              </button>
-            </div>
+                Organizations are invite-only during the alpha. Once you are an admin of an
+                organization, you can add this project to it here.
+              </p>
+            )}
           </div>
         ) : (
           <div className="project-sharing-confirm rounded-lg border border-[var(--nim-border)] bg-[var(--nim-bg-secondary)] p-4" data-testid="project-sharing-confirm">

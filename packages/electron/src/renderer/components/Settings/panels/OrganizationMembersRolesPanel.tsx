@@ -9,6 +9,7 @@ import {
   normalizeTeamAnalyticsCallerRole,
 } from '../../../../shared/analytics/teamAnalytics';
 import { trackTeamAnalyticsEvent } from '../../../utils/teamAnalytics';
+import { organizationCreationEnabled } from '../../../store/atoms/settingsDomains';
 
 interface Member {
   memberId: string;
@@ -34,7 +35,8 @@ interface PersonalAccount {
 export function OrganizationMembersRolesPanel({
   orgId,
   readOnlyRoles = false,
-  allowOrganizationCreation = true,
+  // Invite-only alpha: the create-org card only renders in dev builds.
+  allowOrganizationCreation = organizationCreationEnabled,
 }: {
   orgId?: string;
   readOnlyRoles?: boolean;
