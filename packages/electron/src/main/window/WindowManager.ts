@@ -169,7 +169,7 @@ export function createWindow(
     isOpeningFile: boolean = false,
     isWorkspaceMode: boolean = false,
     workspacePath: string | null = null,
-    savedBounds?: { x: number; y: number; width: number; height: number },
+    savedBounds?: { x: number; y: number; width: number; height: number; isMaximized?: boolean },
     options?: CreateWindowOptions
 ): BrowserWindow {
     const startTime = Date.now();
@@ -588,6 +588,9 @@ export function createWindow(
         // Show window when ready
         window.once('ready-to-show', () => {
             // console.log('[MAIN] Window ready to show at', new Date().toISOString(), 'elapsed:', Date.now() - startTime, 'ms');
+            if (savedBounds?.isMaximized) {
+                window.maximize();
+            }
             const showWindow = options?.showInactive
                 ? () => window.showInactive()
                 : () => window.show();
