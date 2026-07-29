@@ -43,6 +43,14 @@ import { groupTrackerRecords } from './trackerRowData';
 export type SortColumn = 'title' | 'type' | 'status' | 'priority' | 'progress' | 'module' | 'lastIndexed' | (string & {});
 export type SortDirection = 'asc' | 'desc';
 
+/**
+ * Keep schema field names scoped so common names such as `progress` cannot
+ * collide with global utility or extension styles.
+ */
+export function getTrackerTableCellClassName(columnId: string): string {
+  return `tracker-table-cell tracker-table-cell-${columnId}`;
+}
+
 interface TrackerTableProps {
   filterType?: TrackerItemType | 'all';
   sortBy?: SortColumn;
@@ -1420,7 +1428,11 @@ export function TrackerTable({
                   {visibleColumnDefs.filter(col => col.id !== 'type' && col.id !== 'title').map(col => {
                     const value = getCellValue(item, col.id);
                     return (
-                      <div key={col.id} className={`tracker-table-cell ${col.id}`}>
+                      <div
+                        key={col.id}
+                        className={getTrackerTableCellClassName(col.id)}
+                        data-column-id={col.id}
+                      >
                         {renderCell(col, item, value, editingCell, isItemEditable, setEditingCell, editingTitle, setEditingTitle, titleInputRef, handleFieldUpdate)}
                       </div>
                     );
