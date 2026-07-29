@@ -39,6 +39,7 @@ import { reconcileExternalFieldChanges } from './trackerDetailFieldSync';
 import { sanitizeTitleInput, useAutoSizedTitle } from './trackerTitleAutoSize';
 import { TrackerCommentsSection } from './TrackerCommentsSection';
 import { resolveTrackerContentFocus } from './trackerContentFocus';
+import { TrackerCollabAvatars, TrackerCollabSyncDot } from './trackerCollabChrome';
 import { formatTrackerActivity } from './trackerActivityPresentation';
 import { TabEditor } from '../TabEditor/TabEditor';
 import {
@@ -83,6 +84,13 @@ interface TrackerItemDetailProps {
    * decide whether to show the collaborative chrome (presence, sync dot).
    */
   onContentModeChange?: (mode: TrackerContentMode) => void;
+  /**
+   * Publish the body's Lexical editor to the host, so a host-rendered document
+   * header bar can offer the same editor-backed actions a collaborative doc has
+   * (table of contents, copy as markdown, export). Null when no rich body is
+   * mounted -- file-backed bodies render their own `TabEditor` header instead.
+   */
+  onBodyEditorReady?: (editor: unknown | null) => void;
 }
 
 /** How this item's body is edited -- see the `contentMode` memo below. */
@@ -136,72 +144,6 @@ function formatTimestamp(value: string | Date | number | undefined): string {
     minute: '2-digit',
   });
 }
-
-export const TrackerCollabAvatars: React.FC<{ itemId: string }> = ({ itemId }) => {
-  const collabKey = trackerContentCollabKey(itemId);
-  const users = useAtomValue(collabAwarenessAtom(collabKey));
-  const status = useAtomValue(collabProductStatusAtom(collabKey));
-  if (!status.showPresence || users.size === 0) return null;
-
-  return (
-    <div
-      className="tracker-collab-presence-avatars flex items-center -space-x-1.5"
-      data-testid="tracker-collab-presence"
-    >
-      {[...users.entries()].map(([userId, user]) => {
-        const initials = user.name
-          .split(/\s+/)
-          .map((word) => word[0])
-          .join('')
-          .toUpperCase()
-          .slice(0, 2) || '?';
-        return (
-          <div
-            key={userId}
-            className="h-5 w-5 rounded-full flex items-center justify-center text-[9px] font-medium"
-            style={{
-              backgroundColor: user.color,
-              color: '#fff',
-              border: '1.5px solid var(--nim-bg)',
-            }}
-            title={user.name}
-          >
-            {initials}
-          </div>
-        );
-      })}
-    </div>
-  );
-};
-
-function trackerCollabStatusDotClass(
-  severity: 'neutral' | 'info' | 'success' | 'warning' | 'error',
-): string {
-  if (severity === 'success') return 'bg-[var(--nim-success)]';
-  if (severity === 'info') return 'bg-[var(--nim-info)]';
-  if (severity === 'warning') return 'bg-[var(--nim-warning)]';
-  if (severity === 'error') return 'bg-[var(--nim-error)]';
-  return 'bg-[var(--nim-text-faint)]';
-}
-
-export const TrackerCollabSyncDot: React.FC<{ itemId: string }> = ({ itemId }) => {
-  const status = useAtomValue(
-    collabProductStatusAtom(trackerContentCollabKey(itemId)),
-  );
-  const description = status.detail
-    ? `${status.label}: ${status.detail}`
-    : status.label;
-  return (
-    <span
-      className={`collab-sync-dot h-2 w-2 shrink-0 rounded-full ${trackerCollabStatusDotClass(status.severity)}`}
-      data-testid="tracker-collab-sync-dot"
-      data-status-kind={status.kind}
-      role="status"
-      aria-label={`Sync status: ${description}`}
-      title={description}
-    />
-  );
-};
 
 /** Whether this record is a native DB item (no file backing) */
 function isNativeItem(record: TrackerRecord): boolean {
@@ -304,6 +246,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
   onContentFocusChange,
   hideHeader = false,
   onContentModeChange,
+  onBodyEditorReady,
 }) => {
   // Content-focus layout: collapse metadata sections and let the collaborative
   // body fill the surface. Toggling this does NOT remount the editor (same
@@ -894,6 +837,16 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
   // on a large/slow-to-render doc, so this fires paint only after two
   // spaced-apart empty reads, and at most once per provider lifecycle.
   const collabEditorInstanceRef = useRef<any>(null);
+
+  // The host's document header bar needs the body editor for its TOC and
+  // editor-backed actions. Held in a ref so the editor configs (memos) don't
+  // re-create -- a new config identity remounts the editor and drops the
+  // Y.Doc binding -- and republished on unmount so a stale editor never
+  // outlives the item.
+  const bodyEditorReadyRef = useRef(onBodyEditorReady);
+  bodyEditorReadyRef.current = onBodyEditorReady;
+  useEffect(() => () => bodyEditorReadyRef.current?.(null), [itemId]);
+
   useColdPaintFallback({
     collabStatus,
     bodyCacheMarkdown,
@@ -1230,6 +1183,9 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
           saveContent(markdown);
         }
       },
+      onEditorReady: (editor: any) => {
+        bodyEditorReadyRef.current?.(editor);
+      },
     };
   }, [contentMode, contentLoaded, contentMarkdown, focusActive, saveContent]);
 
@@ -1291,6 +1247,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
         // editor reference we cannot recover when CollaborationPlugin's
         // bootstrap check declines to fire `initialEditorState`.
         collabEditorInstanceRef.current = editor;
+        bodyEditorReadyRef.current?.(editor);
       },
     };
   }, [contentMode, collabConfig, collabLoading, commentsConfig, contentLoaded, contentMarkdown, focusActive, saveContent]);

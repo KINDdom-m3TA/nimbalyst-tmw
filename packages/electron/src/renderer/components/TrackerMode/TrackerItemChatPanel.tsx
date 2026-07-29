@@ -1,12 +1,11 @@
 /**
- * "Chat" mode of the tracker document view's right panel: an AI chat scoped to
- * the tracker item you're reading.
+ * "Chat" mode of the tracker document view's right panel.
  *
- * The chat surface is the ordinary `ChatSidebar` -- no second chat stack. This
- * component only chooses the initial session: a remembered/linked session wins
- * when one exists; otherwise ChatSidebar follows its normal behavior and
- * selects the latest chat or creates one. Its standard session dropdown remains
- * available for creating or selecting any other conversation.
+ * This is the ordinary `ChatSidebar`, unmodified -- the same panel a
+ * collaborative document gets. Opening it next to a tracker item does not
+ * create a chat "about" the item; the item rides along as document context and
+ * reaches the model when a command is sent. Session selection and creation stay
+ * entirely with the standard sidebar.
  */
 
 import React, { useCallback, useMemo } from 'react';
@@ -18,8 +17,7 @@ import {
   setTrackerDocumentChatSessionAtom,
   trackerModeLayoutAtom,
 } from '../../store/atoms/trackers';
-import { resolveLinkedSessions } from '../../utils/resolveLinkedSessions';
-import { buildTrackerChatContext, resolveTrackerChatSessionId } from './trackerDocumentChat';
+import { buildTrackerDocumentContext, resolveTrackerChatSessionId } from './trackerDocumentChat';
 
 interface TrackerItemChatPanelProps {
   itemId: string;
@@ -42,18 +40,15 @@ export const TrackerItemChatPanel: React.FC<TrackerItemChatPanelProps> = ({
   const modeLayout = useAtomValue(trackerModeLayoutAtom);
   const setChatSession = useSetAtom(setTrackerDocumentChatSessionAtom);
 
-  const chatContext = useMemo(() => buildTrackerChatContext(itemId, item), [itemId, item]);
-
-  const linkedSessions = useMemo(
-    () => resolveLinkedSessions(item, sessionRegistry),
-    [item, sessionRegistry],
+  const documentContext = useMemo(
+    () => buildTrackerDocumentContext(itemId, item),
+    [itemId, item],
   );
 
   const sessionId = useMemo(() => resolveTrackerChatSessionId({
     pairedSessionId: modeLayout.documentChatSessions[itemId],
-    linkedSessions,
     sessionRegistry,
-  }), [itemId, linkedSessions, modeLayout.documentChatSessions, sessionRegistry]);
+  }), [itemId, modeLayout.documentChatSessions, sessionRegistry]);
 
   const handleSessionIdChange = useCallback((nextSessionId: string | null) => {
     setChatSession({ itemId, sessionId: nextSessionId });
@@ -66,9 +61,7 @@ export const TrackerItemChatPanel: React.FC<TrackerItemChatPanelProps> = ({
         isActive={isActive}
         sessionId={sessionId}
         onSessionIdChange={handleSessionIdChange}
-        autoInitializeSession={!sessionId}
-        newSessionTitle={chatContext.sessionTitle}
-        newSessionDraft={chatContext.draftInput}
+        documentContext={documentContext}
         onFileOpen={onFileOpen}
         onSwitchToAgentMode={onSwitchToAgentMode}
       />

@@ -2,9 +2,11 @@
  * TrackerDocumentViewHeader - the focused-view header for Tracker Mode's
  * document layout.
  *
- * The list pane owns collection/type navigation. This header therefore only
- * describes the selected item: issue key, title, editable field pills, the
- * backing-file path when one exists, and document-level actions.
+ * The list pane owns collection/type navigation, and the document header bar
+ * below owns everything the collaborative document tab already owns -- the
+ * breadcrumb, connection state, presence, table of contents, and the document
+ * menu. This header is therefore only the tracker's identity row: issue key,
+ * title, editable field pills, and the way back out.
  *
  * Purely presentational so it can be tested without the tracker store: the
  * container resolves the record, status option, and dirty state.
@@ -37,13 +39,8 @@ interface TrackerDocumentViewHeaderProps {
   /** Issue key chip content (falls back to the raw id upstream). */
   issueKey: string | null;
   title: string;
-  breadcrumb: TrackerDocumentBreadcrumb;
   /** Compact schema-driven field editors (status included). */
   fieldPills?: React.ReactNode;
-  /** Collab chrome for the body (presence, sync dot) when it is collaborative. */
-  collabChrome?: React.ReactNode;
-  /** Copy a link that reopens this item in document view (teams only). */
-  onCopyDocumentLink?: () => void;
   /** Return to the ordinary tracker list + detail-panel presentation. */
   onCollapseToTracker: () => void;
 }
@@ -51,10 +48,7 @@ interface TrackerDocumentViewHeaderProps {
 export const TrackerDocumentViewHeader: React.FC<TrackerDocumentViewHeaderProps> = ({
   issueKey,
   title,
-  breadcrumb,
   fieldPills,
-  collabChrome,
-  onCopyDocumentLink,
   onCollapseToTracker,
 }) => {
   return (
@@ -84,22 +78,6 @@ export const TrackerDocumentViewHeader: React.FC<TrackerDocumentViewHeaderProps>
           {title}
         </h2>
 
-        {collabChrome && (
-          <span className="flex shrink-0 items-center gap-1.5">{collabChrome}</span>
-        )}
-
-        {onCopyDocumentLink && (
-          <button
-            type="button"
-            className="shrink-0 rounded p-1.5 text-nim-muted transition-colors hover:bg-nim-tertiary hover:text-nim"
-            onClick={onCopyDocumentLink}
-            title="Copy a link that opens this item's document"
-            data-testid="tracker-document-copy-link"
-          >
-            <MaterialSymbol icon="link" size={16} />
-          </button>
-        )}
-
         <button
           type="button"
           className="shrink-0 inline-flex items-center gap-1 rounded border border-nim px-2 py-1 text-[11px] font-medium text-nim-muted transition-colors hover:bg-nim-tertiary hover:text-nim"
@@ -118,36 +96,6 @@ export const TrackerDocumentViewHeader: React.FC<TrackerDocumentViewHeaderProps>
       {fieldPills && (
         <div className="mt-1" data-testid="tracker-document-header-field-pills">
           {fieldPills}
-        </div>
-      )}
-
-      {breadcrumb.kind === 'file' && (
-        <div
-          className="mt-1 flex items-center gap-1 text-[11px] text-nim-faint select-text"
-          data-testid="tracker-document-breadcrumb"
-        >
-          <span
-            className="flex min-w-0 items-center gap-1"
-            title={breadcrumb.fullPath}
-            data-testid="tracker-document-breadcrumb-file"
-          >
-            {breadcrumb.segments.map((segment, index) => {
-              const isLast = index === breadcrumb.segments.length - 1;
-              return (
-                <React.Fragment key={`${segment}-${index}`}>
-                  {index > 0 && <span className="text-nim-faint">/</span>}
-                  <span className={isLast ? 'truncate text-nim-muted' : 'truncate'}>{segment}</span>
-                </React.Fragment>
-              );
-            })}
-            {breadcrumb.dirty && (
-              <span
-                className="ml-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--nim-warning)]"
-                title="Unsaved changes"
-                data-testid="tracker-document-breadcrumb-dirty"
-              />
-            )}
-          </span>
         </div>
       )}
     </header>

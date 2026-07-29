@@ -56,12 +56,13 @@ import {
 import { getTeamSyncProvider } from '../store/atoms/collabDocuments';
 import { buildCollabUri } from '../utils/collabUri';
 import { notifyDocumentCommentRecipients } from '../services/documentCommentNotifier';
+import { trackerContentCollabKey } from './trackerContentCollabKey';
 
 const TRACKER_CONTENT_TTL_MS = String(90 * 24 * 60 * 60 * 1000);
 
-export function trackerContentCollabKey(itemId: string): string {
-  return `tracker://${itemId}`;
-}
+// Re-exported so existing callers keep their import path; the definition lives
+// in its own module for consumers that must not pull this hook's dep graph.
+export { trackerContentCollabKey } from './trackerContentCollabKey';
 
 interface UseTrackerContentCollabOptions {
   itemId: string;

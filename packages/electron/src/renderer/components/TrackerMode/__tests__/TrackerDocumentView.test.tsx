@@ -31,6 +31,14 @@ vi.mock('../TrackerDocumentFieldPills', () => ({
   TrackerDocumentFieldPills: () => <div data-testid="stub-field-pills">fields</div>,
 }));
 
+// Same reason: the document header bar drags in the editor/AI/shared-doc stack.
+// Its own behavior is covered by TrackerDocumentHeaderMeta's tests.
+vi.mock('../../TabEditor/UnifiedEditorHeaderBar', () => ({
+  UnifiedEditorHeaderBar: ({ breadcrumbContent }: { breadcrumbContent?: React.ReactNode }) => (
+    <div data-testid="stub-document-header-bar">{breadcrumbContent}</div>
+  ),
+}));
+
 const ITEM = {
   id: 'item-a',
   primaryType: 'plan',

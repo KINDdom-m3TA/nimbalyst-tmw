@@ -31,8 +31,6 @@ import { TagBoard } from './TagBoard';
 import { TrackerGridView } from './TrackerGridView';
 import { TrackerInboxView } from './TrackerInboxView';
 import {
-  TrackerCollabAvatars,
-  TrackerCollabSyncDot,
   TrackerItemDetail,
   type TrackerContentMode,
 } from './TrackerItemDetail';
@@ -193,6 +191,10 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   // How the detail is editing the body, reported by TrackerItemDetail: the
   // focused header hosts the collab chrome only for collaborative bodies.
   const [detailContentMode, setDetailContentMode] = useState<TrackerContentMode>('file-backed');
+  // The body's Lexical editor, published by the detail once it mounts. State
+  // rather than a ref: the document header bar's table of contents and
+  // editor-backed actions only appear once there is an editor to read.
+  const [bodyEditor, setBodyEditor] = useState<unknown>(null);
   const setItemView = useSetAtom(setTrackerItemViewAtom);
   const openItemAsDocument = useSetAtom(openTrackerItemAsDocumentAtom);
   const selectedItemId = modeLayout.selectedItemId;
@@ -1175,17 +1177,14 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
       // The focused header already carries the item's identity.
       hideHeader={Boolean(documentItemId)}
       onContentModeChange={setDetailContentMode}
+      onBodyEditorReady={setBodyEditor}
     />
   ) : null;
 
   // Presence and the sync dot live in the detail's own header normally; in
-  // document view that header is suppressed, so the focused header hosts them.
-  const collabChrome = documentItemId && detailContentMode === 'collaborative' ? (
-    <>
-      <TrackerCollabSyncDot itemId={documentItemId} />
-      <TrackerCollabAvatars itemId={documentItemId} />
-    </>
-  ) : undefined;
+  // document view that header is suppressed, so the document header bar hosts
+  // them alongside the breadcrumb -- the same cluster a collaborative document
+  // tab shows.
 
   const documentListPane = documentItemId ? (
     <TrackerTable
@@ -1661,7 +1660,8 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
         itemChrome={itemChrome}
         listPane={documentItemId ? documentListPane : itemListPane}
         detail={detailNode}
-        collabChrome={collabChrome}
+        contentMode={detailContentMode}
+        bodyEditor={bodyEditor}
         detailPanelWidth={detailPanelWidth}
         onDetailPanelWidthChange={(w) => setModeLayout({ detailPanelWidth: w })}
         onCopyDocumentLink={teamOrgId && documentItemId ? handleCopyDocumentLink : undefined}

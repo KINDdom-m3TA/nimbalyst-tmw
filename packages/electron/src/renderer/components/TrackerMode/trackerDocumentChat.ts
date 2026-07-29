@@ -1,104 +1,82 @@
 /**
- * Item-scoped chat for the tracker document view.
+ * The tracker document view's chat is the ordinary chat panel, exactly as a
+ * collaborative document's is: opening it does NOT mint a chat "about" the
+ * item, and the item is not a conversation of its own.
  *
- * The chat surface itself is the ordinary `ChatSidebar` -- this module only
- * answers the two questions the panel has to resolve before mounting it:
- * *which* session is this item's conversation, and what does a brand-new one
- * start with.
- *
- * Pairing rules, in order:
- *   1. The session remembered for this item in the tracker layout, if it still
- *      exists.
- *   2. Otherwise the most recently updated session already linked to the item
- *      that could plausibly be a chat (no worktree, no child sessions) --
- *      reopening an item shouldn't strand a conversation the user already had
- *      about it just because the pairing wasn't written yet.
- *   3. Otherwise none: the panel creates one the first time it's opened, and
- *      links it back to the item.
+ * The connected item is *selection state* -- it rides along as document
+ * context and is handed to the model when a command is sent, the same way
+ * `CollabMode` passes the open document's path. A file-backed item contributes
+ * its real path so the agent can read it; a database-only item has no file, so
+ * it contributes a context chip telling the agent to read it with the tracker
+ * tools. Either way the user can dismiss it, and the session they were already
+ * in is the session they stay in.
  */
 
 import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
 import {
-  getRecordFieldStr,
   getRecordPriority,
   getRecordStatus,
   getRecordTitle,
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerRecordAccessors';
 import type { SessionMeta } from '../../store/atoms/sessions';
+import type { SerializableDocumentContext } from '../../hooks/useDocumentContext';
 
-/** Session shapes that can act as a chat, matching `sessionListChatAtom`. */
-export function isChatEligibleSession(session: SessionMeta | undefined | null): boolean {
-  if (!session) return false;
-  if (session.agentRole === 'meta-agent') return false;
-  if (session.worktreeId) return false;
-  if (session.childCount && session.childCount > 0) return false;
-  return true;
-}
-
+/**
+ * Which session the panel shows. Only an explicit choice counts -- the session
+ * the user opened from this item's session list, if it still exists. Anything
+ * else is left to the standard sidebar, so the panel behaves like every other
+ * chat surface rather than pairing a conversation to the item.
+ */
 export function resolveTrackerChatSessionId(params: {
-  /** Session remembered for this item in the persisted tracker layout. */
+  /** Session the user opened for this item, remembered in the tracker layout. */
   pairedSessionId: string | null | undefined;
-  /** Sessions already linked to the item (see `resolveLinkedSessions`). */
-  linkedSessions: SessionMeta[];
   sessionRegistry: Map<string, SessionMeta>;
 }): string | null {
-  const { pairedSessionId, linkedSessions, sessionRegistry } = params;
+  const { pairedSessionId, sessionRegistry } = params;
   if (pairedSessionId && sessionRegistry.has(pairedSessionId)) return pairedSessionId;
-
-  // `resolveLinkedSessions` already sorts most-recently-updated first.
-  const candidate = linkedSessions.find(isChatEligibleSession);
-  return candidate?.id ?? null;
+  return null;
 }
 
-export interface TrackerChatContext {
-  /** Title for a newly created chat session. */
-  sessionTitle: string;
-  /** Draft seeded into a newly created chat session. */
-  draftInput: string;
-  /** Id to pass to `tracker:link-session` (file ref wins for file-backed items). */
-  trackerLinkId: string;
-  /** Label shown in the panel header. */
-  itemLabel: string;
+/** Stable context-item id, so re-selecting the same item doesn't stack chips. */
+export function trackerContextItemId(itemId: string): string {
+  return `tracker:${itemId}`;
 }
 
-const MAX_SESSION_TITLE_LENGTH = 120;
-
-export function buildTrackerChatContext(
+export function buildTrackerDocumentContext(
   itemId: string,
   item?: TrackerRecord | null,
-): TrackerChatContext {
+): SerializableDocumentContext {
   const title = item ? getRecordTitle(item) : itemId;
   const key = item?.issueKey || itemId;
-  const itemLabel = `${key} ${title}`.trim();
+  const documentPath = item?.system.documentPath;
 
-  const lines: string[] = [`Regarding ${key}: ${title}`];
-  if (item) {
-    const meta: string[] = [];
-    if (item.primaryType) meta.push(`type: ${item.primaryType}`);
-    const status = getRecordStatus(item);
-    if (status) meta.push(`status: ${status}`);
-    const priority = getRecordPriority(item);
-    if (priority) meta.push(`priority: ${priority}`);
-    if (meta.length > 0) lines.push(meta.join(', '));
+  const details: string[] = [];
+  if (item?.primaryType) details.push(`type: ${item.primaryType}`);
+  const status = item ? getRecordStatus(item) : null;
+  if (status) details.push(`status: ${status}`);
+  const priority = item ? getRecordPriority(item) : null;
+  if (priority) details.push(`priority: ${priority}`);
 
-    const description = getRecordFieldStr(item, 'description');
-    if (description) lines.push(`\n${description}`);
+  // Before the record loads, key and title are both the raw id -- don't
+  // render "item-1 item-1" on the chip.
+  const label = key === title ? key : `${key} ${title}`.trim();
 
-    // File-backed items carry their document on disk, so an `@` mention gives
-    // the agent the whole thing. Database-only items have to be read with the
-    // tracker tools instead.
-    if (item.system.documentPath) {
-      lines.push(`\nDocument: @${item.system.documentPath}`);
-    } else {
-      lines.push(`\nRead this item's document with tracker_get id "${key}".`);
-    }
-  }
-  lines.push('');
+  const lines = [key === title ? `Tracker item ${key}` : `Tracker item ${key}: ${title}`];
+  if (details.length > 0) lines.push(details.join(', '));
+  lines.push(documentPath
+    // A real file: name it so the agent reads the document directly.
+    ? `Document: ${documentPath}`
+    // No file to read -- the record's body lives in the tracker store.
+    : `Read this item's document with tracker_get id "${key}".`);
 
   return {
-    sessionTitle: `Chat about ${key}`.slice(0, MAX_SESSION_TITLE_LENGTH),
-    draftInput: lines.join('\n'),
-    trackerLinkId: item?.system.documentPath ? `file:${item.system.documentPath}` : itemId,
-    itemLabel,
+    // Mirrors CollabMode: the open document's path is the context.
+    ...(documentPath ? { filePath: documentPath } : {}),
+    editorContextItems: [{
+      id: trackerContextItemId(itemId),
+      label,
+      icon: 'label',
+      description: lines.join('\n'),
+    }],
   };
 }

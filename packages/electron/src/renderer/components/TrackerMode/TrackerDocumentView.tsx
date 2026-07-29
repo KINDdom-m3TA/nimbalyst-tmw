@@ -35,7 +35,10 @@ import {
   DOCUMENT_RIGHT_PANEL_MIN_WIDTH,
 } from '../../store/atoms/trackers';
 import { useResizeDragShield } from '../../hooks/useResizeDragShield';
+import { UnifiedEditorHeaderBar } from '../TabEditor/UnifiedEditorHeaderBar';
 import { TrackerDetailPanelResizable } from './TrackerDetailPanelResizable';
+import { TrackerDocumentHeaderMeta } from './TrackerDocumentHeaderMeta';
+import type { TrackerContentMode } from './TrackerItemDetail';
 import { shouldExitDocumentViewOnEscape } from './trackerDocumentEscape';
 import { TrackerDocumentPanel } from './TrackerDocumentPanel';
 import {
@@ -61,8 +64,14 @@ interface TrackerDocumentViewProps {
   listPane: React.ReactNode;
   /** The item detail. Kept at one JSX position across both presentations. */
   detail: React.ReactNode;
-  /** Collab chrome (presence, sync dot) for a collaborative body. */
-  collabChrome?: React.ReactNode;
+  /**
+   * How the body is being edited. Drives the document header bar: a
+   * collaborative body gets the sync dot and presence, and a file-backed body
+   * gets no bar at all because its own `TabEditor` already renders one.
+   */
+  contentMode?: TrackerContentMode | null;
+  /** The body's Lexical editor, for the header bar's TOC and doc actions. */
+  bodyEditor?: unknown;
   detailPanelWidth: number;
   onDetailPanelWidthChange: (width: number) => void;
   /** Copy a link that reopens this item in document view (teams only). */
@@ -82,7 +91,8 @@ export const TrackerDocumentView: React.FC<TrackerDocumentViewProps> = ({
   itemChrome,
   listPane,
   detail,
-  collabChrome,
+  contentMode,
+  bodyEditor,
   detailPanelWidth,
   onDetailPanelWidthChange,
   onCopyDocumentLink,
@@ -217,6 +227,25 @@ export const TrackerDocumentView: React.FC<TrackerDocumentViewProps> = ({
 
   const showRightPanel = documentMode && rightPanelVisible && Boolean(documentItemId);
 
+  // File-backed bodies render through `TabEditor`, which brings its own
+  // `UnifiedEditorHeaderBar`; adding a second one would stack two breadcrumbs.
+  const showDocumentHeaderBar = documentMode
+    && Boolean(documentItemId)
+    && contentMode !== 'file-backed';
+
+  // "Copy document link" is the tracker deep link, not a shared-document link,
+  // so it rides in as an extra action rather than the bar's built-in Copy link.
+  const documentBarActions = useMemo(
+    () => (onCopyDocumentLink
+      ? [{
+          label: 'Copy document link',
+          icon: 'link',
+          onClick: onCopyDocumentLink,
+        }]
+      : []),
+    [onCopyDocumentLink],
+  );
+
   return (
     <div
       className="tracker-document-view tracker-main-view flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-nim"
@@ -277,7 +306,6 @@ export const TrackerDocumentView: React.FC<TrackerDocumentViewProps> = ({
               <TrackerDocumentViewHeader
                 issueKey={item ? (item.issueKey || item.id) : null}
                 title={item ? getRecordTitle(item) : 'Loading…'}
-                breadcrumb={breadcrumb}
                 fieldPills={documentItemId ? (
                   <TrackerDocumentFieldPills
                     itemId={documentItemId}
@@ -285,9 +313,33 @@ export const TrackerDocumentView: React.FC<TrackerDocumentViewProps> = ({
                     onOpenItem={onOpenItem}
                   />
                 ) : undefined}
-                collabChrome={collabChrome}
-                onCopyDocumentLink={onCopyDocumentLink}
                 onCollapseToTracker={onCollapseToTracker}
+              />
+            )}
+            {showDocumentHeaderBar && documentItemId && (
+              <UnifiedEditorHeaderBar
+                filePath={absoluteDocumentPath ?? ''}
+                fileName={item ? getRecordTitle(item) : 'Untitled'}
+                workspaceId={workspacePath}
+                isMarkdown
+                lexicalEditor={bodyEditor as never}
+                breadcrumbContent={(
+                  <TrackerDocumentHeaderMeta
+                    itemId={documentItemId}
+                    breadcrumb={breadcrumb}
+                    title={item ? getRecordTitle(item) : 'Untitled'}
+                    showCollabChrome={contentMode === 'collaborative'}
+                  />
+                )}
+                // The document view has its own chat panel, and the remaining
+                // file-scoped actions have no meaning for a DB-backed body.
+                showAIButton={false}
+                showShareLinkButton={false}
+                showSharedDocButton={false}
+                showHistoryAction={false}
+                showCommonFileActions={false}
+                showDocumentTypeAction={false}
+                extraActionItems={documentBarActions}
               />
             )}
             <div className="min-h-0 flex-1 overflow-hidden">

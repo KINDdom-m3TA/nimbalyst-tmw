@@ -25,12 +25,6 @@ function renderHeader(
     <TrackerDocumentViewHeader
       issueKey="NIM-1647"
       title="Linear-Style Tracker Views and Filtering Plan"
-      breadcrumb={{
-        kind: 'file',
-        segments: ['Features', 'linear-style-tracker-views-plan.md'],
-        dirty: false,
-        fullPath: '/ws/Features/linear-style-tracker-views-plan.md',
-      }}
       fieldPills={<span data-testid="stub-field-pills">In Progress</span>}
       onCollapseToTracker={onCollapseToTracker}
       {...overrides}
@@ -56,27 +50,6 @@ describe('TrackerDocumentViewHeader', () => {
     expect(screen.getByTestId('tracker-document-header-field-pills').textContent)
       .toContain('In Progress');
     expect(screen.queryByTestId('tracker-document-status')).toBeNull();
-  });
-
-  it('names the backing file, with no dirty dot while it is saved', () => {
-    renderHeader();
-
-    expect(screen.getByTestId('tracker-document-breadcrumb-file').textContent)
-      .toContain('linear-style-tracker-views-plan.md');
-    expect(screen.queryByTestId('tracker-document-breadcrumb-dirty')).toBeNull();
-  });
-
-  it('marks the breadcrumb dirty when the backing file has unsaved edits', () => {
-    renderHeader({
-      breadcrumb: {
-        kind: 'file',
-        segments: ['plans', 'x.md'],
-        dirty: true,
-        fullPath: '/ws/plans/x.md',
-      },
-    });
-
-    expect(screen.getByTestId('tracker-document-breadcrumb-dirty')).toBeTruthy();
   });
 
   it('puts clickable collection and type navigation in the list-pane header', () => {
@@ -110,20 +83,14 @@ describe('TrackerDocumentViewHeader', () => {
     expect(onCollapseToTracker).toHaveBeenCalledTimes(1);
   });
 
-  it('offers the copy-document-link action only when a link can be built', () => {
+  it('leaves breadcrumb, connection state and document actions to the header bar', () => {
     renderHeader();
+
+    // These all moved to the UnifiedEditorHeaderBar below this header, so a
+    // reader never sees the same path, sync dot, or link action twice.
+    expect(screen.queryByTestId('tracker-document-breadcrumb')).toBeNull();
+    expect(screen.queryByTestId('tracker-collab-sync-dot')).toBeNull();
     expect(screen.queryByTestId('tracker-document-copy-link')).toBeNull();
-
-    const onCopyDocumentLink = vi.fn();
-    renderHeader({ onCopyDocumentLink });
-    fireEvent.click(screen.getAllByTestId('tracker-document-copy-link')[0]);
-    expect(onCopyDocumentLink).toHaveBeenCalledTimes(1);
-  });
-
-  it('hosts the collab chrome the suppressed detail header would have shown', () => {
-    renderHeader({ collabChrome: <span data-testid="stub-collab-chrome" /> });
-
-    expect(screen.getByTestId('stub-collab-chrome')).toBeTruthy();
   });
 
   it('omits the key when the record has none', () => {
@@ -203,7 +170,6 @@ describe('TrackerDocumentViewHeader', () => {
         <TrackerDocumentViewHeader
           issueKey="DPS-1"
           title="Pill item"
-          breadcrumb={{ kind: 'degraded', collection: 'Trackers', typeLabel: 'Specs' }}
           fieldPills={
             <TrackerDocumentFieldPills itemId={item.id} />
           }

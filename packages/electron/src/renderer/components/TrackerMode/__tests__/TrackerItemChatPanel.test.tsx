@@ -39,7 +39,6 @@ function session(id: string): SessionMeta {
     id,
     title: 'Linked item session',
     provider: 'claude-code',
-    model: null,
     createdAt: 0,
     updatedAt: 1,
     messageCount: 0,
@@ -62,18 +61,26 @@ describe('TrackerItemChatPanel', () => {
     store.set(setTrackerModeLayoutAtom, { documentChatSessions: {} });
   });
 
-  it('uses the ordinary ChatSidebar initializer when the item has no linked session', () => {
+  it('is the ordinary chat panel -- it never seeds a chat about the item', () => {
     renderPanel();
 
     expect(screen.getByTestId('standard-chat-sidebar')).toBeTruthy();
-    expect(chatSidebarProps).toHaveBeenLastCalledWith(expect.objectContaining({
-      sessionId: null,
-      autoInitializeSession: true,
-      newSessionTitle: 'Chat about NIM-1',
-    }));
+    const props = chatSidebarProps.mock.lastCall?.[0];
+    expect(props.sessionId).toBeNull();
+    // No item-titled session, no pre-filled prompt: opening the panel must not
+    // create or stage a conversation "about" the tracker item.
+    expect(props.newSessionTitle).toBeUndefined();
+    expect(props.newSessionDraft).toBeUndefined();
   });
 
-  it('defaults to the remembered item session without replacing standard session controls', () => {
+  it('hands the item to the model as document context, like an open document', () => {
+    renderPanel();
+
+    const props = chatSidebarProps.mock.lastCall?.[0];
+    expect(props.documentContext.editorContextItems[0].label).toBe('NIM-1 Chat consistency');
+  });
+
+  it('shows a session the user explicitly opened from the item', () => {
     const linked = session('session-1');
     store.set(sessionRegistryAtom, new Map([[linked.id, linked]]));
     store.set(setTrackerModeLayoutAtom, {
@@ -82,9 +89,6 @@ describe('TrackerItemChatPanel', () => {
 
     renderPanel();
 
-    expect(chatSidebarProps).toHaveBeenLastCalledWith(expect.objectContaining({
-      sessionId: linked.id,
-      autoInitializeSession: false,
-    }));
+    expect(chatSidebarProps.mock.lastCall?.[0].sessionId).toBe(linked.id);
   });
 });
