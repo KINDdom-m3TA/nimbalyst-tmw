@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tracker list progress cells now use the selected theme's background instead of a light block.
 - Sorting a tracker view by Updated, or any other date column, now orders rows by date instead of alphabetically by month name.
 - Embedded mockups and diagrams written as a plain relative link inside a shared document now open the shared copy instead of failing to load.
+- Shared-document references no longer make recovery exports empty or turn into tracker links.
 
 ### Removed
 <!-- Removed features go here -->
