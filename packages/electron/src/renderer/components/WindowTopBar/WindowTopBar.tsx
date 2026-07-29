@@ -1,7 +1,14 @@
 import React from 'react';
+import { useAtomValue, useSetAtom } from 'jotai';
 import { MaterialSymbol } from '@nimbalyst/runtime';
 import { MAIN_WINDOW_TITLE_BAR_HEIGHT } from '../../../shared/windowChrome';
 import { FloatingPortal, useFloatingMenu } from '../../hooks/useFloatingMenu';
+import {
+  setTrackerModeLayoutAtom,
+  trackerModeDocumentItemIdAtom,
+  trackerModeLayoutAtom,
+} from '../../store/atoms/trackers';
+import { TRACKER_DOCUMENT_PANEL_MODES } from '../TrackerMode/trackerDocumentPanelModes';
 import { DRAG_REGION, NO_DRAG_REGION } from './dragRegion';
 import { WindowMenuBar } from './WindowMenuBar';
 
@@ -126,7 +133,7 @@ function PanelButton({
         >
           <button
             type="button"
-            className={`window-top-bar__panel-button window-top-bar__panel-split-toggle group w-7 p-0 rounded-r-none ${CONTROL_BASE} ${CONTROL_GHOST} ${PANEL_OPEN_TINT} ${NO_DRAG_REGION}`}
+            className={`window-top-bar__panel-button window-top-bar__panel-split-toggle group w-9 px-1.5 rounded-r-none ${CONTROL_BASE} ${CONTROL_GHOST} ${PANEL_OPEN_TINT} ${NO_DRAG_REGION}`}
             data-testid={`window-top-bar-${side}-pane`}
             data-collapsed={control.collapsed}
             aria-label={`${action} ${paneLabel}`}
@@ -157,7 +164,7 @@ function PanelButton({
             ref={menu.refs.setReference}
             {...menu.getReferenceProps()}
             type="button"
-            className={`window-top-bar__panel-button window-top-bar__panel-split-caret w-[22px] p-0 rounded-l-none ${CONTROL_BASE} ${CONTROL_GHOST} ${PANEL_OPEN_TINT} ${NO_DRAG_REGION}`}
+            className={`window-top-bar__panel-button window-top-bar__panel-split-caret w-7 px-1 rounded-l-none ${CONTROL_BASE} ${CONTROL_GHOST} ${PANEL_OPEN_TINT} ${NO_DRAG_REGION}`}
             data-testid={`window-top-bar-${side}-pane-menu-button`}
             data-collapsed={control.collapsed}
             aria-label={`Choose ${control.label}: ${selectedOption?.label ?? 'None'}`}
@@ -207,7 +214,7 @@ function PanelButton({
   return (
     <button
       type="button"
-      className={`window-top-bar__panel-button w-7 p-0 ${CONTROL_BASE} ${CONTROL_GHOST} ${PANEL_OPEN_TINT} ${NO_DRAG_REGION}`}
+      className={`window-top-bar__panel-button w-9 px-1.5 ${CONTROL_BASE} ${CONTROL_GHOST} ${PANEL_OPEN_TINT} ${NO_DRAG_REGION}`}
       data-testid={`window-top-bar-${side}-pane`}
       data-collapsed={control.collapsed}
       aria-label={`${action} ${control.label}`}
@@ -377,6 +384,43 @@ export function WindowTopBar({
   panelControls,
   newSessionControl,
 }: WindowTopBarProps) {
+  const trackerDocumentItemId = useAtomValue(trackerModeDocumentItemIdAtom);
+  const trackerLayout = useAtomValue(trackerModeLayoutAtom);
+  const setTrackerLayout = useSetAtom(setTrackerModeLayoutAtom);
+  const trackerDocumentActive = activeModeLabel === 'Tracker' && trackerDocumentItemId !== null;
+  const visiblePanelControls: WindowTopBarPanelControls | undefined = trackerDocumentActive
+    ? {
+        left: {
+          label: 'Tracker list',
+          collapsed: !trackerLayout.documentListPaneVisible,
+          onToggle: () => {
+            setTrackerLayout({
+              documentListPaneVisible: !trackerLayout.documentListPaneVisible,
+            });
+          },
+        },
+        right: {
+          label: 'Tracker document panel',
+          collapsed: !trackerLayout.documentRightPanelVisible,
+          onToggle: () => {
+            setTrackerLayout({
+              documentRightPanelVisible: !trackerLayout.documentRightPanelVisible,
+            });
+          },
+          options: TRACKER_DOCUMENT_PANEL_MODES.map((option) => ({
+            ...option,
+            selected: trackerLayout.documentRightPanelMode === option.id,
+            onSelect: () => {
+              setTrackerLayout({
+                documentRightPanelMode: option.id,
+                documentRightPanelVisible: true,
+              });
+            },
+          })),
+        },
+      }
+    : panelControls;
+
   return (
     <header
       className={`window-top-bar relative flex-none overflow-hidden text-nim bg-nim-secondary border-b border-nim ${DRAG_REGION}`}
@@ -440,11 +484,11 @@ export function WindowTopBar({
                 <span>New</span>
               </button>
             )}
-            {panelControls?.left && (
-              <PanelButton side="left" control={panelControls.left} />
+            {visiblePanelControls?.left && (
+              <PanelButton side="left" control={visiblePanelControls.left} />
             )}
-            {panelControls?.right && (
-              <PanelButton side="right" control={panelControls.right} />
+            {visiblePanelControls?.right && (
+              <PanelButton side="right" control={visiblePanelControls.right} />
             )}
           </div>
         </div>

@@ -74,6 +74,12 @@ interface TrackerTableProps {
    *  exactly one item is selected. Callers omit this when the workspace
    *  has no team configured. */
   onCopyDeepLink?: (itemId: string) => void;
+  /**
+   * Open a row's tracker item as a document (the focused document view). When
+   * the host offers it, double-clicking a row goes there instead of opening the
+   * backing file in the editor, and the row context menu gains the action.
+   */
+  onOpenDocument?: (itemId: string) => void;
   /** External search query from parent toolbar (replaces internal search input) */
   searchQuery?: string;
   /** Whether filters owned by the parent are active (for the filtered empty state). */
@@ -766,6 +772,7 @@ export function TrackerTable({
   onArchiveItems,
   onDeleteItems,
   onCopyDeepLink,
+  onOpenDocument,
   searchQuery: externalSearchQuery,
   hasExternalFilters = false,
   onClearFilters,
@@ -1378,7 +1385,16 @@ export function TrackerTable({
                   data-item-id={item.id}
                   data-item-title={item.fields.title as string}
                   onClick={(e) => handleRowClick(item, index, e)}
-                  onDoubleClick={() => { if (item.system.documentPath) openItemInEditor(item); }}
+                  onDoubleClick={() => {
+                    // Double-click is the primary "open the document" gesture
+                    // where the host offers one; elsewhere it keeps opening the
+                    // backing file in the editor.
+                    if (onOpenDocument) {
+                      onOpenDocument(item.id);
+                      return;
+                    }
+                    if (item.system.documentPath) openItemInEditor(item);
+                  }}
                   onContextMenu={(e) => handleContextMenu(e, item, index)}
                 >
                 {/* Unread dot (nothing when read) */}
@@ -1456,6 +1472,7 @@ export function TrackerTable({
         onSetStatus={handleBulkStatusUpdate}
         onSetPriority={handleBulkPriorityUpdate}
         onCopyDeepLink={onCopyDeepLink}
+        onOpenDocument={onOpenDocument}
         onArchiveItems={onArchiveItems}
         onDeleteItems={onDeleteItems}
         closeContextMenu={closeContextMenu}
