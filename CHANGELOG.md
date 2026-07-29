@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- File reveal menus now name Finder on macOS, Explorer on Windows, and the containing folder on Linux.
 - AI sessions that preview a web page no longer strand a blank, unclosable window on a second monitor.
 - Tracker list progress cells now use the selected theme's background instead of a light block.
 - Sorting a tracker view by Updated, or any other date column, now orders rows by date instead of alphabetically by month name.
