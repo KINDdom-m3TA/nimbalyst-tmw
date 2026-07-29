@@ -18,6 +18,8 @@ import { activeWorkspacePathAtom } from './openProjects';
 import { pendingDocRegistrations } from './pendingDocRegistrations';
 import { CollaborationHealthAttemptTracker } from '../../../shared/analytics/collaborationHealth';
 import { trackTeamAnalyticsEvent } from '../../utils/teamAnalytics';
+import { applyOrgSettingsBroadcast } from '../../services/orgSettingsClient';
+import { applyConversationDescriptorBroadcast } from '../../services/conversationDirectoryClient';
 import type { CollabDocumentOpenSource } from '../../utils/collabDocumentOpener';
 import {
   normalizeCollabPath,
@@ -1163,6 +1165,27 @@ export async function initSharedDocuments(workspacePath: string, retryCount = 0)
         store.set(sharedDocumentsAtomFamily(workspacePath), (current) =>
           current.filter(d => !removedDocs.has(d.documentId))
         );
+      },
+
+      onOrgSettingsUpdated: (settings) => {
+        // The organization window is a separate renderer with no team-sync
+        // socket, so the change is forwarded to main and fanned back out to
+        // every window rather than applied to this window's atoms only.
+        void applyOrgSettingsBroadcast({ orgId, settings }).catch((err: unknown) => {
+          console.error('[collabDocuments] applyOrgSettingsBroadcast failed:', err);
+        });
+      },
+
+      onConversationDescriptorUpdated: (descriptor) => {
+        // Same forward as the settings broadcast above: the org window renders
+        // the directory but holds no socket, so main fans the row out.
+        void applyConversationDescriptorBroadcast({ orgId, descriptor })
+          .catch((err: unknown) => {
+            console.error(
+              '[collabDocuments] applyConversationDescriptorBroadcast failed:',
+              err,
+            );
+          });
       },
 
       onMemberAdded: (member) => {

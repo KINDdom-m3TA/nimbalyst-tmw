@@ -48,8 +48,15 @@ import { registerWorktreeHandlers } from './ipc/WorktreeHandlers';
 import { registerPullRequestHandlers, stopPullRequestPollScheduler } from './ipc/PullRequestHandlers';
 import { registerReadReceiptHandlers } from './ipc/ReadReceiptHandlers';
 import { registerTrackerPersonalStateHandlers } from './ipc/TrackerPersonalStateHandlers';
-import { registerTeamInboxHandlers } from './ipc/TeamInboxHandlers';
-import { registerConversationHandlers } from './ipc/ConversationHandlers';
+import {
+    registerTeamInboxHandlers,
+    shutdownTeamInboxHandlers,
+} from './ipc/TeamInboxHandlers';
+import {
+    registerConversationHandlers,
+    shutdownConversationHandlers,
+} from './ipc/ConversationHandlers';
+import { registerOrgSettingsHandlers } from './ipc/OrgSettingsHandlers';
 import { registerWakeupHandlers } from './ipc/WakeupHandlers';
 import { registerBlitzHandlers } from './ipc/BlitzHandlers';
 import { registerProjectMigrationHandlers } from './ipc/ProjectMigrationHandlers';
@@ -762,7 +769,7 @@ safeHandle('deep-link:consume-pending-shared-folder', (_event, workspacePath: st
     return { ...pending, workspacePath };
 });
 
-safeHandle('deep-link:open-inbox-source', async (_event, rawUrl: string) => {
+async function openInboxSourceFromDeepLink(rawUrl: string): Promise<boolean> {
     try {
         const parsed = new URL(rawUrl);
         const orgId = parsed.searchParams.get('orgId');
@@ -782,6 +789,10 @@ safeHandle('deep-link:open-inbox-source', async (_event, rawUrl: string) => {
     } catch {
         return false;
     }
+}
+
+safeHandle('deep-link:open-inbox-source', async (_event, rawUrl: string) => {
+    return openInboxSourceFromDeepLink(rawUrl);
 });
 
 // Sensitive query params that must not be logged verbatim. Anything not in
@@ -1659,8 +1670,11 @@ app.whenReady().then(async () => {
     gitRefWatcher.onCommitDetected((event) => commitTrackerLinker.handleCommitDetected(event));
 
     registerTeamHandlers();
-    registerTeamInboxHandlers();
+    registerTeamInboxHandlers({
+        openInboxSource: openInboxSourceFromDeepLink,
+    });
     registerConversationHandlers();
+    registerOrgSettingsHandlers();
     registerTeamCustodyHandlers();
     // Team custody is server-managed; drop the client key material the retired
     // lane left in userData (some of it plaintext where safeStorage was off).
@@ -2900,6 +2914,17 @@ app.on('before-quit', async (event) => {
         shutdownStytchAuth();
     } catch (error) {
         console.error('[QUIT] Error shutting down Stytch auth:', error);
+    }
+
+    try {
+        shutdownTeamInboxHandlers();
+    } catch (error) {
+        console.error('[QUIT] Error shutting down Teams inbox:', error);
+    }
+    try {
+        shutdownConversationHandlers();
+    } catch (error) {
+        console.error('[QUIT] Error shutting down Teams conversations:', error);
     }
 
     // Check if we can write to userData directory

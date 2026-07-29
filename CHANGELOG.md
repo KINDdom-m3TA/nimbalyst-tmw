@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- The organization window gains rooms and direct messages, a rich message composer with attachments and mentions, unread badges, and desktop notifications for new messages.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
@@ -17,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - AI sessions that preview a web page no longer strand a blank, unclosable window on a second monitor.
+- Tracker list progress cells now use the selected theme's background instead of a light block.
 - Sorting a tracker view by Updated, or any other date column, now orders rows by date instead of alphabetically by month name.
 - Embedded mockups and diagrams written as a plain relative link inside a shared document now open the shared copy instead of failing to load.
 
