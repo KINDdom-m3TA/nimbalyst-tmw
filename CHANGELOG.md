@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- The Agent mode right-panel control in the title bar is now a split button: one click hides or restores the panel, and the caret picks which panel to show.
 
 ### Fixed
 <!-- Bug fixes go here -->

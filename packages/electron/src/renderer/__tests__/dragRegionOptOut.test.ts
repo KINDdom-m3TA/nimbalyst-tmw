@@ -90,10 +90,32 @@ describe('title-bar drag-region opt-out', () => {
 
   it('still draws the title bar as a drag region', () => {
     // If this ever stops being true the rules above are dead weight, and the
-    // window has lost its only drag handle on Windows.
-    const topBarCss = readCss('components/WindowTopBar/WindowTopBar.css');
-    const declarations = declarationsForSelector(withoutComments(topBarCss), '.window-top-bar');
-    expect(declarations.some((block) => /-webkit-app-region:\s*drag/.test(block))).toBe(true);
+    // window has lost its only drag handle on Windows. The bar is styled with
+    // Tailwind, so the declaration is an arbitrary-property class in the markup
+    // rather than a rule in a stylesheet.
+    const dragRegionSource = withoutComments(readSource('components/WindowTopBar/dragRegion.ts'));
+    expect(dragRegionSource).toContain("DRAG_REGION = '[-webkit-app-region:drag]'");
+    expect(dragRegionSource).toContain("NO_DRAG_REGION = '[-webkit-app-region:no-drag]'");
+
+    const topBar = readSource('components/WindowTopBar/WindowTopBar.tsx');
+    expect(topBar).toMatch(/className=\{`window-top-bar [^`]*\$\{DRAG_REGION\}`\}/);
+  });
+
+  it('opts every interactive control in the title bar out of the drag region', () => {
+    // Buttons in the bar sit inside the drag strip, so each needs its own
+    // opt-out; the menu bar's top-level items live there too.
+    // Menu contents are exempt: they portal out and the global
+    // `[data-floating-ui-portal] *` rule already covers them.
+    const topBar = withoutComments(readSource('components/WindowTopBar/WindowTopBar.tsx'));
+    const barControls = topBar.match(/className=\{`window-top-bar__(?:git |panel-button|panel-split |new-session)[^`]*`\}/g) ?? [];
+    // Git status, the split shell and its two halves, the plain pane toggle,
+    // and the new-session button.
+    expect(barControls.length).toBe(6);
+    for (const className of barControls) {
+      expect(className).toContain('${NO_DRAG_REGION}');
+    }
+    expect(readSource('components/WindowTopBar/WindowMenuBar.tsx'))
+      .toContain('window-menu-bar__top-item ${NO_DRAG_REGION}');
   });
 
   it('makes org-window chrome draggable and explicitly opts its controls out', () => {
