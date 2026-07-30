@@ -127,6 +127,7 @@ export function TrackerViewHeaderControls({
   );
   const filterRootRef = useRef<HTMLDivElement>(null);
   const submenuRef = useRef<HTMLDivElement>(null);
+  const displayOptionsButtonRef = useRef<HTMLButtonElement>(null);
 
   const activeFilterCount = useMemo(
     () => (filters?.clauses ?? []).filter(isClauseComplete).length,
@@ -669,6 +670,7 @@ export function TrackerViewHeaderControls({
       {showColumnControls && (
         <div className="relative">
           <button
+            ref={displayOptionsButtonRef}
             type="button"
             className={`inline-flex h-7 items-center gap-1 rounded border px-2 text-[11px] font-medium transition-colors ${
               showDisplayOptions
@@ -693,6 +695,7 @@ export function TrackerViewHeaderControls({
               config={columnConfig}
               onConfigChange={onColumnConfigChange}
               onClose={() => setShowDisplayOptions(false)}
+              anchorElement={displayOptionsButtonRef.current}
             />
           )}
         </div>

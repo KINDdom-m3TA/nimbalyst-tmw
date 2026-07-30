@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type {
   TrackerColumnDef,
@@ -349,7 +349,7 @@ describe('TrackerViewHeaderControls', () => {
     });
   });
 
-  it('keeps a long display-options panel within the viewport and scrollable', () => {
+  it('keeps a long display-options panel within the viewport and scrollable', async () => {
     const manyColumns = [
       ...columns,
       ...Array.from({ length: 20 }, (_, index) => ({
@@ -365,7 +365,10 @@ describe('TrackerViewHeaderControls', () => {
     fireEvent.click(screen.getByTestId('tracker-view-display-options'));
 
     const panel = screen.getByTestId('tracker-display-options-panel');
-    expect(panel.className).toContain('max-h-[calc(100vh-4rem)]');
+    await waitFor(() => {
+      expect(panel.style.position).toBe('fixed');
+      expect(panel.style.maxHeight).toMatch(/^\d+(?:\.\d+)?px$/);
+    });
     expect(screen.getByTestId('tracker-display-options-scroll-region').className)
       .toContain('overflow-y-auto');
   });
