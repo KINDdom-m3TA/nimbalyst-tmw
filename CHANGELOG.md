@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- The new-worktree dialog can now search branches, narrowing the local and remote lists as you type.
 - The organization window gains rooms and direct messages, a rich message composer with attachments and mentions, unread badges, and desktop notifications for new messages.
 - Tracker items can now be opened as a full document, with collaborative body editing, inline comments, field pills, a side-by-side AI chat panel, and shareable links that reopen the item. The document gets the same header as a shared document: breadcrumb, connection status, who else is viewing, table of contents, and export.
 
