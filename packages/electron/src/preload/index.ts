@@ -15,6 +15,7 @@ import type {
 } from '@nimbalyst/runtime/sync';
 import type { ConversationSubscription } from '@nimbalyst/collab-protocol';
 import type { ConversationSetSubscriptionRequest } from '../shared/conversationDirectory.ts';
+import type { TutorialStartResult, TutorialStatusResult } from '../shared/tutorial.ts';
 
 // Nimbalyst is an IDE-like application with many concurrent IPC listeners:
 // - File watching, git status, AI sessions, terminals, extensions, etc.
@@ -810,6 +811,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openWorkspace: (workspacePath: string) => ipcRenderer.invoke('workspace-manager:open-workspace', workspacePath),
     removeRecent: (workspacePath: string) => ipcRenderer.invoke('workspace-manager:remove-recent', workspacePath),
     getOpenWorkspaces: () => ipcRenderer.invoke('workspace-manager:get-open-workspaces') as Promise<string[]>,
+  },
+
+  tutorial: {
+    getStatus: () =>
+      ipcRenderer.invoke('tutorial:get-status') as Promise<TutorialStatusResult>,
+    start: () =>
+      ipcRenderer.invoke('tutorial:start') as Promise<TutorialStartResult>,
   },
 
   // Project Migration (move/rename)

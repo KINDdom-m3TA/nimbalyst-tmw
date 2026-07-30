@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The new-worktree dialog can now search branches, narrowing the local and remote lists as you type.
 - The organization window gains rooms and direct messages, a rich message composer with attachments and mentions, live chips for pasted plan and tracker links, unread badges, and desktop notifications for new messages.
 - Tracker items can now open as full documents with collaborative editing, inline comments, consistent editable field chips (including collection creation), keyboard-driven search and filters, shared-document navigation, a side-by-side AI chat panel, and shareable reopen links.
+- A new install now starts on the onboarding screen and can open a ready-made tutorial project — documents, data, designs, plans, and finished AI sessions to explore — reachable any time from the project manager or Help > Launch Tutorial.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
@@ -26,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tracker list progress cells now use the selected theme's background instead of a light block.
 - Sorting a tracker view by Updated, or any other date column, now orders rows by date instead of alphabetically by month name.
 - Embedded mockups and diagrams written as a plain relative link inside a shared document now open the shared copy instead of failing to load.
+- A link to a file written as a plain relative path, such as `design/dashboard.mockup.html`, now opens the file instead of a broken page in your web browser.
 - Shared-document references no longer make recovery exports empty or turn into tracker links.
 - Tracker sidebar type counts no longer read 0 for types that have items, and listing archived items no longer comes back empty.
 - Committing with the AI commit widget no longer leaves the just-committed files showing as deleted or reverted, and no longer discards changes you staged elsewhere at the same time.
