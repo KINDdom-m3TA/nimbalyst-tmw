@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Desktop AI notifications now lead with the originating session name and open that exact session and project, including child sessions, instead of following whichever project is currently visible.
 - File reveal menus now name Finder on macOS, Explorer on Windows, and the containing folder on Linux.
 - AI sessions that preview a web page no longer strand a blank, unclosable window on a second monitor.
 - Tracker list progress cells now use the selected theme's background instead of a light block.
