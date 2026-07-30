@@ -19,6 +19,11 @@
  * case-folded: Windows drive letters vary by who wrote the string, but the rest
  * of the path is left alone so this stays correct on case-sensitive filesystems.
  */
+/** Shape of one entry in the `projects` map that this module cares about. */
+export interface ProjectEntry {
+  mcpServers?: Record<string, unknown>;
+}
+
 export function normalizeProjectPathKey(projectPath: string): string {
   const unified = projectPath.replace(/\\/g, '/').replace(/\/+$/, '');
   return unified.replace(/^([a-zA-Z]):/, (_m, drive: string) => `${drive.toLowerCase()}:`);
@@ -31,7 +36,7 @@ export function normalizeProjectPathKey(projectPath: string): string {
  * the other tool already owns instead of forking a second one.
  */
 export function resolveProjectConfigKey(
-  projects: Record<string, unknown> | undefined,
+  projects: Record<string, ProjectEntry | undefined> | undefined,
   workspacePath: string,
 ): string | undefined {
   if (!projects || !workspacePath) return undefined;
@@ -42,11 +47,20 @@ export function resolveProjectConfigKey(
   }
 
   const target = normalizeProjectPathKey(workspacePath);
-  const matches = Object.keys(projects).filter(
-    (key) => normalizeProjectPathKey(key) === target,
-  );
+  const matches = Object.keys(projects)
+    .filter((key) => normalizeProjectPathKey(key) === target)
+    .sort(); // deterministic, so the same config always resolves the same way
 
-  // Exactly one normalized match is unambiguous. If several keys normalize to
-  // the same path and none matched exactly, prefer none over guessing.
-  return matches.length === 1 ? matches[0] : undefined;
+  if (matches.length <= 1) return matches[0];
+
+  // Several keys refer to the same folder. This happens for real: Claude Code
+  // writes the drive letter inconsistently, leaving e.g. `C:/industrylens`
+  // holding the servers and `c:/industrylens` empty. Prefer whichever entry
+  // actually has servers, so a duplicate empty key cannot hide a populated one.
+  const populated = matches.filter((key) => hasServers(projects[key]));
+  return populated[0] ?? matches[0];
+}
+
+function hasServers(entry: ProjectEntry | undefined): boolean {
+  return Object.keys(entry?.mcpServers ?? {}).length > 0;
 }

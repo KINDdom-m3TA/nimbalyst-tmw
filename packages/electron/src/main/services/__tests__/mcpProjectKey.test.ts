@@ -62,6 +62,28 @@ describe('resolveProjectConfigKey', () => {
     expect(resolveProjectConfigKey(projects, 'C:\\work\\locallead')).toBe('c:/work/locallead');
   });
 
+  it('picks the populated entry when a duplicate empty key shadows it', () => {
+    // Real config seen in the wild: Claude Code wrote the drive letter both ways
+    // for the same folder, leaving the servers on one and an empty entry on the
+    // other. Picking the empty one would hide every server.
+    const projects = {
+      'C:/industrylens': {
+        mcpServers: { notion: {}, 'n8n-mcp': {}, vercel: {}, industrylens: {} },
+      },
+      'c:/industrylens': { mcpServers: {} },
+    };
+    expect(resolveProjectConfigKey(projects, 'C:\\industrylens')).toBe('C:/industrylens');
+    // and the same answer whichever spelling the caller happens to pass
+    expect(resolveProjectConfigKey(projects, 'c:/industrylens/')).toBe('C:/industrylens');
+  });
+
+  it('is deterministic when duplicates are all empty', () => {
+    const projects = { 'C:/x': { mcpServers: {} }, 'c:/x': {} };
+    const first = resolveProjectConfigKey(projects, 'C:\\x');
+    expect(first).toBeDefined();
+    expect(resolveProjectConfigKey(projects, 'C:\\x')).toBe(first);
+  });
+
   it('does not match a different project that shares a prefix', () => {
     const projects = { 'C:/work/inforoot': { mcpServers: {} } };
     expect(resolveProjectConfigKey(projects, 'C:/work/inforoot-whatsapp')).toBeUndefined();
