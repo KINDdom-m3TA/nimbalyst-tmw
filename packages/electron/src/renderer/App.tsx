@@ -117,6 +117,10 @@ import { initFileChangeListeners } from './store/listeners/fileChangeListeners';
 import { initMcpListeners } from './store/listeners/mcpListeners';
 import { initMenuCommandListeners } from './store/listeners/menuCommandListeners';
 import { initNetworkAvailabilityListeners } from './store/listeners/networkAvailabilityListeners';
+import { initTeamInboxListeners } from './store/listeners/teamInboxListeners';
+import { initConversationListeners } from './store/listeners/conversationListeners';
+import { initConversationDirectoryListeners } from './store/listeners/conversationDirectoryListeners';
+import { initOrgSettingsListeners } from './store/listeners/orgSettingsListeners';
 import { initCollabReplicaListeners } from './store/listeners/collabReplicaListeners';
 import { initCollabConversionListeners } from './store/listeners/collabConversionListeners';
 import { initNotificationListeners } from './store/listeners/notificationListeners';
@@ -128,6 +132,7 @@ import { initSyncListeners } from './store/listeners/syncListeners';
 import { initDbMigrationListeners } from './store/listeners/dbMigrationListeners';
 import { initOpenAICodexAuthListeners } from './store/listeners/openAICodexAuthListeners';
 import { initThemeListener } from './store/listeners/themeListeners';
+import { initWindowMenuListener } from './store/listeners/windowMenuListeners';
 import { initThemeFallbackListener } from './store/listeners/themeFallbackListeners';
 import { initTrackerSyncListeners } from './store/listeners/trackerSyncListeners';
 import { initPullRequestListeners } from './store/listeners/pullRequestListeners';
@@ -144,6 +149,7 @@ import { TeamManagementApp } from './components/TeamMode';
 import { TerminalBottomPanel } from './components/TerminalBottomPanel';
 import { SessionLaunchPopup } from './components/UnifiedAI/SessionLaunchPopup';
 import { ProjectRail } from './components/ProjectRail';
+import { ProjectWindowStatusBar } from './components/ProjectWindowStatusBar';
 import {
   WindowTopBar,
   type WindowTopBarPanelControls,
@@ -368,9 +374,15 @@ export default function App() {
     const cleanupWalkthrough = initWalkthroughListeners();
     const cleanupWakeup = initWakeupListeners();
     const cleanupNetworkAvailability = initNetworkAvailabilityListeners();
+    const cleanupTeamInbox = initTeamInboxListeners();
+    const cleanupConversations = initConversationListeners();
+    const cleanupConversationDirectory = initConversationDirectoryListeners();
+    const cleanupOrgSettings = initOrgSettingsListeners();
     const cleanupCollabReplicas = initCollabReplicaListeners();
     const cleanupCollabConversion = initCollabConversionListeners();
+    const cleanupWindowMenu = initWindowMenuListener();
     return () => {
+      cleanupWindowMenu?.();
       cleanupActionPrompts?.();
       cleanupAiCommands?.();
       cleanupAppCommands?.();
@@ -401,6 +413,10 @@ export default function App() {
       cleanupWalkthrough?.();
       cleanupWakeup?.();
       cleanupNetworkAvailability?.();
+      cleanupTeamInbox?.();
+      cleanupConversations?.();
+      cleanupConversationDirectory?.();
+      cleanupOrgSettings?.();
       cleanupCollabReplicas?.();
       cleanupCollabConversion?.();
     };
@@ -1021,23 +1037,15 @@ export default function App() {
           label: 'Agent right panel',
           collapsed: !agentPanelState.visible,
           onToggle: toggleActiveRightPane,
+          // No 'Hidden' entry: the split button's toggle half hides the panel,
+          // and the selection stays marked while hidden so re-showing restores
+          // the last-used mode.
           options: [
-            {
-              id: 'hidden',
-              label: 'Hidden',
-              icon: 'dock_to_left',
-              selected: !agentPanelState.visible,
-              onSelect: () => {
-                if (agentPanelState.visible) {
-                  agentModeRef.current?.toggleRightPanel();
-                }
-              },
-            },
             {
               id: 'edited-files',
               label: 'Edited Files',
               icon: 'description',
-              selected: agentPanelState.visible && agentPanelState.mode === 'edited-files',
+              selected: agentPanelState.mode === 'edited-files',
               onSelect: () => {
                 agentModeRef.current?.showRightPanel('edited-files');
               },
@@ -1046,7 +1054,7 @@ export default function App() {
               id: 'review',
               label: 'Review',
               icon: 'rate_review',
-              selected: agentPanelState.visible && agentPanelState.mode === 'review',
+              selected: agentPanelState.mode === 'review',
               onSelect: () => {
                 agentModeRef.current?.showRightPanel('review');
               },
@@ -1055,7 +1063,7 @@ export default function App() {
               id: 'session-chat',
               label: 'Chat with Session',
               icon: 'forum',
-              selected: agentPanelState.visible && agentPanelState.mode === 'session-chat',
+              selected: agentPanelState.mode === 'session-chat',
               onSelect: () => {
                 agentModeRef.current?.showRightPanel('session-chat');
               },
@@ -2801,6 +2809,7 @@ export default function App() {
         })()}
       </div>
       </div>
+      {workspaceMode && <ProjectWindowStatusBar workspacePath={workspacePath} />}
 
       {/* Navigation dialogs (QuickOpen, SessionQuickOpen, PromptQuickOpen, ProjectQuickOpen) */}
       {/* are now managed by DialogProvider and rendered automatically */}

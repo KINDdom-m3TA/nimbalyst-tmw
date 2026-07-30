@@ -11,15 +11,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 <!-- New features go here -->
 - The new-worktree dialog can now search branches, narrowing the local and remote lists as you type.
+- The organization window gains rooms and direct messages, a rich message composer with attachments and mentions, unread badges, and desktop notifications for new messages.
+- Tracker items can now be opened as a full document, with collaborative body editing, inline comments, field pills, a side-by-side AI chat panel, and shareable links that reopen the item. The document gets the same header as a shared document: breadcrumb, connection status, who else is viewing, table of contents, and export.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- The Agent mode right-panel control in the title bar is now a split button: one click hides or restores the panel, and the caret picks which panel to show.
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Desktop AI notifications now lead with the originating session name and open that exact session and project, including child sessions, instead of following whichever project is currently visible.
+- File reveal menus now name Finder on macOS, Explorer on Windows, and the containing folder on Linux.
+- AI sessions that preview a web page no longer strand a blank, unclosable window on a second monitor.
+- Tracker list progress cells now use the selected theme's background instead of a light block.
+- Sorting a tracker view by Updated, or any other date column, now orders rows by date instead of alphabetically by month name.
+- Embedded mockups and diagrams written as a plain relative link inside a shared document now open the shared copy instead of failing to load.
+- Shared-document references no longer make recovery exports empty or turn into tracker links.
+- Tracker sidebar type counts no longer read 0 for types that have items, and listing archived items no longer comes back empty.
+- Committing with the AI commit widget no longer leaves the just-committed files showing as deleted or reverted, and no longer discards changes you staged elsewhere at the same time.
+- Projects with many new, uncommitted folders no longer stall while the file tree and changed-files list refresh, and ignored files inside those folders no longer show up as changed.
 
 ### Removed
 <!-- Removed features go here -->
+
+## [0.71.3] - 2026-07-28
+
+
+### Added
+<!-- New features go here -->
+- The organization window gains an Inbox with conversations plus mentions and replies from shared-document comments.
+
+### Changed
+<!-- Changes to existing functionality go here -->
+- Teams is still in alpha and new signups limited.
+
+### Fixed
+<!-- Bug fixes go here -->
+- Windows and Linux get the File/Edit/View menus back, now drawn in the project window's title bar.
+- Menus and popups that open over the title bar respond to clicks again on Windows and Linux, including "Open folder…" in the project switcher (#1052).
+- Tracker types defined in one project no longer overwrite another open project's identically-named types (#1035).
+- Codex sessions now reach for Nimbalyst's browser tools instead of dead-ending on the ChatGPT desktop app's in-app browser plugin.
+
+### Removed
+<!-- Removed features go here -->
+- Organizations still on the original client-managed encryption are no longer supported and must be set up again; all team collaboration — including attachments in shared documents — now uses Nimbalyst-managed encryption.
 
 ## [0.71.2] - 2026-07-26
 
@@ -99,6 +134,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resolved SQLite migration errors on startup and no longer offers the dry-run and migrate controls once you are already on SQLite.
 - Comment highlights in collaborative documents are now legible in dark mode.
 - Collaborative tracker items can now be filtered by who created them.
+- Expanded workstream rows now show external session renames immediately without reloading the session view.
 - Agent-mode document embeds now recover when their target file is created after the document opens.
 - Claude Code and Codex now honor relocated config directories, so usage, session history, settings, plugins, commands, and skills all resolve correctly.
 - Automations no longer rerun the same scheduled occurrence after restarting while a run is waiting or fails.

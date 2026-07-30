@@ -13,6 +13,8 @@ import type {
   LocalReplicaStorageUsage,
   ReplaceLocalReplicaSnapshotInput,
 } from '@nimbalyst/runtime/sync';
+import type { ConversationSubscription } from '@nimbalyst/collab-protocol';
+import type { ConversationSetSubscriptionRequest } from '../shared/conversationDirectory.ts';
 
 // Nimbalyst is an IDE-like application with many concurrent IPC listeners:
 // - File watching, git status, AI sessions, terminals, extensions, etc.
@@ -265,6 +267,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setTitleBarOverlayColors: (colors: { color: string; symbolColor: string }) =>
     ipcRenderer.send('window-chrome:set-overlay-colors', colors),
 
+  // In-window menu bar (Windows/Linux; macOS keeps its system menu bar)
+  getWindowMenuBar: () => ipcRenderer.invoke('window-menu:get'),
+  invokeWindowMenuItem: (id: string, revision: number) =>
+    ipcRenderer.invoke('window-menu:invoke', id, revision),
+
   // File operations
   openFile: () => ipcRenderer.invoke('open-file'),
   openFileDialog: (options?: {
@@ -320,6 +327,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Window operations
   setDocumentEdited: (edited: boolean) => ipcRenderer.send('set-document-edited', edited),
   setTitle: (title: string) => ipcRenderer.send('set-title', title),
+  openAccountSettings: () => ipcRenderer.invoke('app:open-account-settings'),
   /** Report user activity for sync presence awareness */
   reportUserActivity: () => ipcRenderer.send('user-activity'),
   /** Set the idle threshold for sync presence (in milliseconds). For testing, use 10000 (10 seconds). */
@@ -891,9 +899,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     disconnect: () => ipcRenderer.invoke('tracker-sync:disconnect') as Promise<{ success: boolean }>,
     upsertItem: (item: any) => ipcRenderer.invoke('tracker-sync:upsert-item', { item }) as Promise<{ success: boolean; error?: string }>,
     deleteItem: (itemId: string) => ipcRenderer.invoke('tracker-sync:delete-item', { itemId }) as Promise<{ success: boolean; error?: string }>,
-    // Epic H2 admin action: migrate this workspace's team to server-managed key
-    // custody and re-upload local tracker data as plaintext.
-    migrateToServerManaged: (orgId: string, workspacePath?: string) => ipcRenderer.invoke('tracker-sync:migrate-to-server-managed', { orgId, workspacePath }) as Promise<{ success: boolean; orgId?: string; itemsMarked?: number; schemasMarked?: number; workspacesMarked?: string[]; error?: string }>,
     onStatusChanged: (callback: (status: string) => void) => {
       const handler = (_event: any, status: string) => callback(status);
       ipcRenderer.on('tracker-sync:status-changed', handler);
@@ -974,8 +979,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
           documentId: string;
           title: string;
           documentType?: string;
-          orgKeyBase64: string;
-          orgKeyFingerprint?: string;
           serverUrl: string;
           accountId: string;
           userId: string;
@@ -1255,8 +1258,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
         success: boolean;
         config?: {
           orgId: string;
-          orgKeyBase64: string;
-          orgKeyFingerprint: string | null;
           serverUrl: string;
           userId: string;
         };
@@ -1339,6 +1340,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         uri?: string;
         queued?: boolean;
         error?: string;
+        /** Structured failure code, e.g. `http_413` for an oversize attachment. */
+        errorCode?: string;
       }>,
     migrateLocalAssets: (payload: {
       workspacePath: string;
@@ -1570,7 +1573,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   team: {
     list: (options?: { forceRefresh?: boolean }) => ipcRenderer.invoke('team:list', options),
     /** Open (or focus + retarget) the dedicated org-management window. */
-    openManagementWindow: (target?: { orgId?: string; workspacePath?: string }) =>
+    openManagementWindow: (target?: {
+      orgId?: string;
+      workspacePath?: string;
+      conversationId?: string;
+    }) =>
       ipcRenderer.invoke('team-window:open', target),
     findForWorkspace: (workspacePath: string) => ipcRenderer.invoke('team:find-for-workspace', workspacePath),
     get: (orgId: string) => ipcRenderer.invoke('team:get', orgId),
@@ -1580,6 +1587,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     addProject: (orgId: string, workspacePath?: string, name?: string) => ipcRenderer.invoke('team:add-project', orgId, workspacePath, name),
     // Epic H3 P0/A: enumerate every project in an org (member-gated).
     listProjects: (orgId: string) => ipcRenderer.invoke('team:list-projects', orgId),
+    resolveOrgProjectsLocalState: (orgId: string) =>
+      ipcRenderer.invoke('team:resolve-org-projects-local-state', orgId),
+    openProjectWorkspace: (workspacePath: string) =>
+      ipcRenderer.invoke('team:open-project-workspace', workspacePath),
     // Epic H3 P3: move-project wizard. Preview is read-only; move is destructive (admin on both orgs).
     moveProjectPreview: (srcOrgId: string, projectId: string, destOrgId: string) =>
       ipcRenderer.invoke('team:move-project-preview', srcOrgId, projectId, destOrgId),
@@ -1595,32 +1606,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     deleteTeam: (orgId: string) => ipcRenderer.invoke('team:delete', orgId),
     updateRole: (orgId: string, memberId: string, role: string) => ipcRenderer.invoke('team:update-role', orgId, memberId, role),
     getGitRemote: (workspacePath: string) => ipcRenderer.invoke('team:get-git-remote', workspacePath),
-    ensureOrgKey: (orgId: string) => ipcRenderer.invoke('team:ensure-org-key', orgId),
-    getOrgKeyStatus: (orgId: string) => ipcRenderer.invoke('team:get-org-key-status', orgId),
-    // Epic H2: current key-custody mode for the team (legacy-e2e | server-managed).
-    getKeyCustodyStatus: (orgId: string) => ipcRenderer.invoke('team:get-key-custody-status', orgId) as Promise<{ success: boolean; mode?: 'legacy-e2e' | 'server-managed'; dekFingerprint?: string | null; error?: string }>,
-    getEncryptionMigrationStatus: (orgId: string) => ipcRenderer.invoke('team:get-encryption-migration-status', orgId) as Promise<{
-      success: boolean;
-      migration?:
-        | { status: 'migrating'; startedAt: string; documentsCompleted?: number; documentsTotal?: number; phase?: 'custody' | 'titles' | 'documents' | 'verifying' }
-        | { status: 'complete'; finishedAt: string }
-        | { status: 'stuck'; failedAt: string; message: string; retryAt?: string }
-        | null;
-    }>,
-    retryEncryptionMigration: (orgId: string) => ipcRenderer.invoke('team:retry-encryption-migration', orgId),
-    listKeyEnvelopes: (orgId: string) => ipcRenderer.invoke('team:list-key-envelopes', orgId),
+    // Server-managed custody status. `unmigrated` means the organization was
+    // never converted and the server refuses its team content.
+    getKeyCustodyStatus: (orgId: string) => ipcRenderer.invoke('team:get-key-custody-status', orgId) as Promise<{ success: boolean; mode?: 'server-managed' | 'unmigrated'; dekFingerprint?: string | null; error?: string }>,
     setProjectIdentity: (orgId: string, workspacePath: string) => ipcRenderer.invoke('team:set-project-identity', orgId, workspacePath),
     clearProjectIdentity: (orgId: string) => ipcRenderer.invoke('team:clear-project-identity', orgId),
-    ensureWorkspaceKey: (workspacePath: string) => ipcRenderer.invoke('team:ensure-workspace-key', workspacePath),
-    getMemberFingerprint: (orgId: string, memberId: string) => ipcRenderer.invoke('team:get-member-fingerprint', orgId, memberId),
-    getMyFingerprint: (orgId: string) => ipcRenderer.invoke('team:get-my-fingerprint', orgId),
-    verifyMember: (orgId: string, memberId: string, fingerprint: string) => ipcRenderer.invoke('team:verify-member', orgId, memberId, fingerprint),
-    revokeMemberTrust: (orgId: string, memberId: string) => ipcRenderer.invoke('team:revoke-member-trust', orgId, memberId),
-    reshareKey: (orgId: string, memberId: string) => ipcRenderer.invoke('team:reshare-key', orgId, memberId),
-    refreshMyKey: (orgId: string) => ipcRenderer.invoke('team:refresh-my-key', orgId),
-    autoWrapNewMembers: (orgId: string) => ipcRenderer.invoke('team:auto-wrap-new-members', orgId),
-    // NIM-913: admin repair — force re-wrap the current org key for all members.
-    rewrapAllMemberKeys: (orgId: string) => ipcRenderer.invoke('team:rewrap-all-member-keys', orgId),
   },
 
   // Typed organization facade. The legacy `team` bridge remains as a
@@ -1628,6 +1618,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   organization: {
     list: () => ipcRenderer.invoke('team:list'),
     get: (orgId: string) => ipcRenderer.invoke('team:get', orgId),
+    rename: (orgId: string, name: string) =>
+      ipcRenderer.invoke('team:rename', orgId, name),
     create: (input: { name: string; workspacePath?: string; sourcePersonalOrgId?: string }) =>
       ipcRenderer.invoke('team:create', input.name, input.workspacePath, input.sourcePersonalOrgId),
     acceptInvitation: (orgId: string) => ipcRenderer.invoke('team:accept-invite', orgId),
@@ -1642,8 +1634,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('team:move-project', input.sourceOrgId, input.projectId, input.destinationOrgId, input.dropMemberEmails),
     deleteOrganization: (orgId: string) => ipcRenderer.invoke('team:delete', orgId),
     getEncryptionStatus: (orgId: string) => ipcRenderer.invoke('team:get-key-custody-status', orgId),
-    getEncryptionMigrationStatus: (orgId: string) => ipcRenderer.invoke('team:get-encryption-migration-status', orgId),
-    retryEncryptionMigration: (orgId: string) => ipcRenderer.invoke('team:retry-encryption-migration', orgId),
+  },
+
+  conversation: {
+    setSubscription: (request: ConversationSetSubscriptionRequest) =>
+      ipcRenderer.invoke(
+        'conversation:set-subscription',
+        request,
+      ) as Promise<ConversationSubscription>,
+    /**
+     * Authorize this window to upload and read the conversation's encrypted
+     * attachments. Paired with `unregisterAssets` on unmount; refcounted in
+     * main, so two views of one conversation are safe.
+     */
+    registerAssets: (request: { orgId: string; conversationId: string }) =>
+      ipcRenderer.invoke('conversation:register-assets', request) as Promise<{
+        success: boolean;
+        error?: string;
+      }>,
+    unregisterAssets: (request: { conversationId: string }) =>
+      ipcRenderer.invoke('conversation:unregister-assets', request) as Promise<{
+        success: boolean;
+        error?: string;
+      }>,
   },
 
   // Epic H1: org / project access model. `canAccess` is the single client-side
