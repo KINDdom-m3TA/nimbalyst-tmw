@@ -325,6 +325,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Claude Code sessions now use your existing MCP setup instead of overriding it, so account connectors load again and sessions no longer fail to start on machines with an organization-managed MCP policy. (#1051)
 - HTTP MCP servers that authenticate with a static key now connect directly on Claude Code sessions instead of being routed through an extra helper process.
 - Unified Quick Open tabs now show compact platform keyboard glyphs without shortcut labels overflowing into neighboring tabs.
+- MCP servers configured for a specific project in Claude Code now load in Nimbalyst on Windows instead of being silently ignored.
 - Desktop AI notifications now lead with the originating session name and open that exact session and project, including child sessions, instead of following whichever project is currently visible.
 - Dropdown menus no longer open underneath the macOS window controls — the project rail's "+" menu now opens beside the button instead of jumping to the top corner. (#1096)
 - File reveal menus now name Finder on macOS, Explorer on Windows, and the containing folder on Linux.
