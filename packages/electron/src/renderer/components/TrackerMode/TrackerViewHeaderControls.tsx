@@ -69,6 +69,7 @@ function inputType(
 
 function iconForField(field: TrackerFilterField): string {
   const key = `${field.id} ${field.label}`.toLowerCase();
+  if (key.includes('favorite') || key.includes('starred')) return 'star';
   if (key.includes('status')) return 'progress_activity';
   if (key.includes('priority')) return 'signal_cellular_alt';
   if (key.includes('assignee') || key.includes('owner') || field.type === 'user') return 'person';
@@ -83,9 +84,18 @@ function iconForField(field: TrackerFilterField): string {
   return 'text_fields';
 }
 
-function filterValueLabel(value: unknown, op?: TrackerFilterOp): string {
+function filterValueLabel(
+  value: unknown,
+  op?: TrackerFilterOp,
+  field?: TrackerFilterField,
+): string {
   if (value === undefined) return '';
-  const text = Array.isArray(value) ? value.join(', ') : String(value);
+  // Show what the field calls the value ("Yes", "To do"), not its stored form.
+  const label = (item: unknown): string => {
+    const text = String(item);
+    return field?.options?.find(option => option.value === text)?.label ?? text;
+  };
+  const text = Array.isArray(value) ? value.map(label).join(', ') : label(value);
   return op === 'in-last' || op === 'not-in-last' ? `${text} days` : text;
 }
 
@@ -360,7 +370,7 @@ export function TrackerViewHeaderControls({
                           <span className="min-w-0 flex-1 truncate">
                             {field?.label ?? clause.field}{' '}
                             <span className="text-nim-muted">{OP_LABELS[clause.op]}</span>{' '}
-                            {filterValueLabel(clause.value, clause.op)}
+                            {filterValueLabel(clause.value, clause.op, field)}
                           </span>
                           <button
                             type="button"
