@@ -14,7 +14,13 @@ import * as path from 'path';
 import { join } from 'path';
 import * as fs from 'fs';
 import { appendFileSync, existsSync, renameSync, unlinkSync, writeFileSync } from 'fs';
-import { createWindow, findWindowByFilePath, findWindowByWorkspace, getMostRecentlyFocusedWorkspaceWindow } from './window/WindowManager';
+import {
+    createWindow,
+    documentServices,
+    findWindowByFilePath,
+    findWindowByWorkspace,
+    getMostRecentlyFocusedWorkspaceWindow,
+} from './window/WindowManager';
 import { loadFileIntoWindow } from './file/FileOperations';
 import { createApplicationMenu } from './menu/ApplicationMenu';
 import { updateNativeTheme, updateWindowTitleBars } from './theme/ThemeManager';
@@ -1680,7 +1686,13 @@ app.whenReady().then(async () => {
         }
         handleAppActionLink(url, BrowserWindow.fromWebContents(event.sender));
     });
-    setupTeamManagementHandlers();
+    setupTeamManagementHandlers({
+        listTrackerItemsForOrg: async (orgId) => {
+            const workspacePath = await findWorkspaceForOrgId(orgId);
+            if (!workspacePath) return [];
+            return documentServices.get(workspacePath)?.listTrackerItems() ?? [];
+        },
+    });
     setupSessionFileHandlers();
     registerSlashCommandHandlers();
     registerActionPromptHandlers();
