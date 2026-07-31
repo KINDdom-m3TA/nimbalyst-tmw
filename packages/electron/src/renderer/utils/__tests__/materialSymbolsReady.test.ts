@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   MATERIAL_SYMBOLS_FONT,
@@ -29,17 +30,17 @@ describe('waitForMaterialSymbols', () => {
   });
 
   it('uses the renderer-bundled font instead of a remote stylesheet', () => {
-    const rendererCssUrl = new URL('../../index.css', import.meta.url);
-    const bundledFontUrl = new URL(
+    const rendererCssPath = resolve(__dirname, '../../index.css');
+    const bundledFontPath = resolve(
+      __dirname,
       '../../assets/fonts/material-symbols-outlined.woff2',
-      import.meta.url,
     );
-    const rendererCss = readFileSync(rendererCssUrl, 'utf8');
+    const rendererCss = readFileSync(rendererCssPath, 'utf8');
 
     expect(rendererCss).toContain(
       "src: url('./assets/fonts/material-symbols-outlined.woff2')",
     );
     expect(rendererCss).not.toContain('fonts.googleapis.com');
-    expect(existsSync(bundledFontUrl)).toBe(true);
+    expect(existsSync(bundledFontPath)).toBe(true);
   });
 });
