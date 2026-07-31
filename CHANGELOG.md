@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 <!-- Changes to existing functionality go here -->
 - The Agent mode right-panel control in the title bar is now a split button: one click hides or restores the panel, and the caret picks which panel to show.
+- Organizations are now managed in a dialog in whichever window you are already in — members, projects, settings, billing and the danger zone — leaving the organization window for messages, with a bottom-left profile menu that matches the project window's.
+- Signing in now hands back to the copy of Nimbalyst that started it rather than through a system-wide link handler.
 
 ### Fixed
 <!-- Bug fixes go here -->
@@ -36,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tracker sidebar type counts no longer read 0 for types that have items, and listing archived items no longer comes back empty.
 - Committing with the AI commit widget no longer leaves the just-committed files showing as deleted or reverted, and no longer discards changes you staged elsewhere at the same time.
 - Projects with many new, uncommitted folders no longer stall while the file tree and changed-files list refresh, and ignored files inside those folders no longer show up as changed.
+- Adding a second account no longer changes which account personal sync runs as.
 
 ### Removed
 <!-- Removed features go here -->

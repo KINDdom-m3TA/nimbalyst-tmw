@@ -11,6 +11,11 @@ interface ClaudeForWindowsInstallation {
   claudeCodeVersion?: string;
 }
 
+interface StytchAuthFlowOptions {
+  intent: 'sign-in' | 'add-account' | 'reauth';
+  targetPersonalOrgId?: string;
+}
+
 interface HistoryTag {
   id: string;
   filePath: string;
@@ -180,6 +185,7 @@ interface ElectronAPI {
       error?: string;
     }>;
     create: (input: { name: string; workspacePath?: string; sourcePersonalOrgId?: string }) => Promise<any>;
+    findPendingInvitation: (email: string) => Promise<any>;
     acceptInvitation: (orgId: string) => Promise<any>;
     listMembers: (orgId: string) => Promise<any>;
     inviteMember: (orgId: string, email: string) => Promise<any>;
@@ -725,8 +731,8 @@ interface ElectronAPI {
       sessionJwt: string | null;
     }>;
     isAuthenticated: () => Promise<boolean>;
-    signInWithGoogle: () => Promise<{ success: boolean; error?: string }>;
-    sendMagicLink: (email: string) => Promise<{ success: boolean; error?: string }>;
+    signInWithGoogle: (options?: StytchAuthFlowOptions) => Promise<{ success: boolean; error?: string }>;
+    sendMagicLink: (email: string, options?: StytchAuthFlowOptions) => Promise<{ success: boolean; error?: string }>;
     signOut: (forceOfflinePurge?: boolean) => Promise<{
       success: boolean;
       requiresOfflinePurgeConfirmation?: boolean;
@@ -755,7 +761,6 @@ interface ElectronAPI {
       sessionStatus: 'active' | 'expired';
     } | null>;
     setSyncAccount: (personalOrgId: string) => Promise<{ success: boolean }>;
-    addAccount: () => Promise<{ success: boolean; error?: string }>;
     removeAccount: (personalOrgId: string, forceOfflinePurge?: boolean) => Promise<{
       success: boolean;
       error?: string;
