@@ -879,6 +879,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       itemId: string;
       shared: boolean;
     }) => ipcRenderer.invoke('document-service:set-tracker-item-shared', payload) as Promise<{ success: boolean; item?: any; error?: string }>,
+    migrateSharedFrontmatterIds: (payload?: { dryRun?: boolean }) =>
+      ipcRenderer.invoke('document-service:migrate-shared-frontmatter-ids', payload) as Promise<{
+        success: boolean;
+        dryRun?: boolean;
+        migrated?: Array<{ oldId: string; newId: string; issueKey?: string; bodySource: string }>;
+        skipped?: Array<{ id: string; reason: string }>;
+        error?: string;
+      }>,
     updateTrackerItemContent: (payload: {
       itemId: string;
       content: any;

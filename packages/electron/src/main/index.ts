@@ -201,6 +201,7 @@ import { gitRefWatcher } from './file/GitRefWatcher';
 import { autoUpdaterService, AutoUpdaterService } from './services/autoUpdater';
 import { initializeDatabase } from './database/initialize';
 import { database, HandledError } from './database/PGLiteDatabaseWorker';
+import { resolveTrackerDeepLinkId } from './services/tracker/resolveTrackerDeepLinkId';
 import { AnalyticsService } from "./services/analytics/AnalyticsService.ts";
 import { registerAnalyticsHandlers } from "./ipc/AnalyticsHandlers.ts";
 import { registerFeatureUsageHandlers } from "./ipc/FeatureUsageHandlers.ts";
@@ -1221,6 +1222,15 @@ async function openTrackerFromDeepLink(
             });
         }
         return false;
+    }
+
+    // A link may address the item by an id it no longer has: `fm:<type>:<path>`
+    // links were minted before a shared plan was promoted to a stable id, and
+    // issue keys were never row ids to begin with. Resolve here, in main, so the
+    // renderer only ever receives an id it can actually select.
+    trackerLink.trackerId = await resolveTrackerDeepLinkId(database, workspacePath, trackerId);
+    if (trackerLink.trackerId !== trackerId) {
+        logger.main.info('[DeepLink] Resolved tracker id:', { from: trackerId, to: trackerLink.trackerId });
     }
 
     pendingTrackerLinks.set(workspacePath, trackerLink);

@@ -627,6 +627,13 @@ interface ElectronAPI {
       itemId: string;
       shared: boolean;
     }) => Promise<{ success: boolean; item?: any; error?: string }>;
+    migrateSharedFrontmatterIds: (payload?: { dryRun?: boolean }) => Promise<{
+      success: boolean;
+      dryRun?: boolean;
+      migrated?: Array<{ oldId: string; newId: string; issueKey?: string; bodySource: string }>;
+      skipped?: Array<{ id: string; reason: string }>;
+      error?: string;
+    }>;
     updateTrackerItemContent: (payload: {
       itemId: string;
       content: any;
