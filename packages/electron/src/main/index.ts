@@ -109,6 +109,7 @@ import {
 import { shouldShowFirstLaunchOnboarding } from './utils/firstLaunchOnboarding';
 import { getAIProviderOverridesWithWorktreeFallback } from './utils/aiSettingsMerge';
 import { registerMCPConfigHandlers } from './ipc/MCPConfigHandlers';
+import { registerMcpSessionStatusHandlers } from './ipc/McpSessionStatusHandlers';
 import { getOpenCodeConfigService, registerOpenCodeConfigHandlers } from './ipc/OpenCodeConfigHandlers';
 import { registerClaudeCodePluginHandlers } from './ipc/ClaudeCodePluginHandlers';
 import { registerExportHandlers } from './ipc/ExportHandlers';
@@ -1724,6 +1725,7 @@ app.whenReady().then(async () => {
     registerProjectMigrationHandlers();
     registerSuperLoopHandlers();
     registerMCPConfigHandlers();
+    registerMcpSessionStatusHandlers();
     registerOpenCodeConfigHandlers();
     registerClaudeCodePluginHandlers();
     const activeSqlite = database.getActiveSQLiteDatabase();

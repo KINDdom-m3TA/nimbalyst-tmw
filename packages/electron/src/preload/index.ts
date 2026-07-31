@@ -566,6 +566,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   aiClearModelCache: () => ipcRenderer.invoke('ai:clearModelCache'),
   aiRefreshSessionProvider: (sessionId: string) => ipcRenderer.invoke('ai:refreshSessionProvider', sessionId),
 
+  // Per-session MCP status (NIM-2272). Pull for first render, push for live
+  // transitions — the push listener only exists once a message has been sent.
+  aiGetMcpSessionStatus: (sessionId: string, provider: string) =>
+    ipcRenderer.invoke('ai:mcp-status:get', { sessionId, provider }),
+  onMcpSessionStatusChanged: (callback: (data: any) => void) => {
+    const handler = (_event: any, data: any) => callback(data);
+    ipcRenderer.on('ai:mcp-status:changed', handler);
+    return () => ipcRenderer.removeListener('ai:mcp-status:changed', handler);
+  },
+
   // CLI management
   cliCheckInstallation: (tool: string) => ipcRenderer.invoke('cli:checkInstallation', tool),
   cliInstall: (tool: string, options: any) => ipcRenderer.invoke('cli:install', tool, options),

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The organization window gains rooms and direct messages, a rich message composer with attachments and mentions, live chips for pasted plan and tracker links, unread badges, and desktop notifications for new messages.
 - Tracker items can now open as full documents with collaborative editing, inline comments, consistent editable field chips (including collection creation), keyboard-driven search and filters, shared-document navigation, a side-by-side AI chat panel, and shareable reopen links.
 - A new install now starts on the onboarding screen and can open a ready-made tutorial project — documents, data, designs, plans, and finished AI sessions to explore — reachable any time from the project manager or Help > Launch Tutorial.
+- Agent sessions can show an MCP status chip in the header listing which servers the session has, which are connected, and which never reached it at all — off by default, enable it under Settings > Agent Features.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
