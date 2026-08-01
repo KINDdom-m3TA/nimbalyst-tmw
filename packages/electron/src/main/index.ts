@@ -1774,14 +1774,9 @@ app.whenReady().then(async () => {
     // included — they're unauthorized, not user-disabled.
     const syncClaudeDisabledServers = async (
         workspacePath: string | undefined,
-        allServers: Record<string, unknown>
+        allServers: Record<string, MCPServerConfig>
     ): Promise<void> => {
-        if (!workspacePath || !mcpConfigService) return;
-        const knownNames = Object.keys(allServers);
-        const disabledNames = knownNames.filter(
-            (name) => !isMCPServerEnabledForProvider(allServers[name] as MCPServerConfig, MCP_PROVIDER_IDS.CLAUDE_AGENT)
-        );
-        await mcpConfigService.syncClaudeCodeDisabledServers(workspacePath, { knownNames, disabledNames });
+        await mcpConfigService?.projectClaudeCodeDisabledServers(workspacePath, allServers);
     };
 
     ClaudeCodeProvider.setMCPConfigLoader(async (workspacePath?: string) => {

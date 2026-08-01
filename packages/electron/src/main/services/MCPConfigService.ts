@@ -8,6 +8,7 @@ import { getEnhancedPath } from './CLIManager';
 import {
   applyDisabledMcpjsonServersToSettings,
   applyDisabledServersToClaudeConfig,
+  claudeDisabledServersInput,
   type ClaudeConfigShape,
   type ClaudeDisabledServersInput,
   type ClaudeSettingsShape,
@@ -443,6 +444,24 @@ export class MCPConfigService {
    * sessions run from the worktree path, not `workspacePath`, so their toggles are
    * not projected — they fall back to whatever the ecosystem already says.
    */
+  /**
+   * Project the current on/off state for a workspace, computing the input from
+   * the merged config so callers don't each decide what "off" means.
+   *
+   * Session start passes the map it has already read. The Settings write path
+   * passes nothing and pays for a re-read, so flipping a toggle lands in
+   * `~/.claude.json` right away — otherwise a terminal `claude` in that project
+   * keeps loading the server until the next Nimbalyst session happens to start.
+   */
+  async projectClaudeCodeDisabledServers(
+    workspacePath: string | undefined,
+    allServers?: Record<string, MCPServerConfig>
+  ): Promise<void> {
+    if (!workspacePath) return;
+    const servers = allServers ?? (await this.getMergedConfig(workspacePath)).mcpServers ?? {};
+    await this.syncClaudeCodeDisabledServers(workspacePath, claudeDisabledServersInput(servers));
+  }
+
   async syncClaudeCodeDisabledServers(
     workspacePath: string,
     input: ClaudeDisabledServersInput
