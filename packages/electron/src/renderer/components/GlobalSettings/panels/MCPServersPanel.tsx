@@ -2425,6 +2425,18 @@ function MCPServersPanelInner({ scope = 'user', workspacePath }: MCPServersPanel
               </div>
             )}
 
+            {/*
+              NIM-2372: the Claude column is no longer a Nimbalyst-private switch.
+              Turning a server off writes Claude Code's own `disabledMcpServers`
+              for this project, which its CLI reads too. Say so rather than
+              letting the user discover it in a terminal.
+            */}
+            {servers.length > 0 && visibleMcpProviders.includes(MCP_PROVIDER_IDS.CLAUDE_AGENT) && (
+              <div className="mcp-claude-scope-note px-4 py-2 border-b border-[var(--nim-border)] text-[0.6875rem] leading-snug text-[var(--nim-text-faint)] select-text">
+                Turning a server off for Claude also turns it off for the <code>claude</code> CLI in this project — Nimbalyst writes Claude Code&apos;s own disabled-server list instead of overriding its configuration.
+              </div>
+            )}
+
             <div className="mcp-servers-list flex-1 overflow-y-auto" role="list">
               {servers.length === 0 ? (
                 <div className="mcp-empty-state px-4 py-8 text-center text-[var(--nim-text-faint)] text-sm flex flex-col items-center gap-4" role="status">
