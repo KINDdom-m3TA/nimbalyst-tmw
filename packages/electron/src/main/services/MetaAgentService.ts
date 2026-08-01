@@ -644,7 +644,7 @@ export class MetaAgentService {
     }
 
     if (initialPrompt && !shouldBypassExecution) {
-      await this.aiService.triggerQueuedPromptProcessingForSession(sessionId, worktreePath || workspaceId);
+      await this.aiService.triggerQueuedPromptProcessingForSession(sessionId, worktreePath || workspaceId, 'meta-agent');
     }
 
     return {
@@ -940,7 +940,8 @@ export class MetaAgentService {
     if (processingTriggered) {
       await this.aiService.triggerQueuedPromptProcessingForSession(
         sessionId,
-        session.worktreePath || session.workspacePath || workspaceId
+        session.worktreePath || session.workspacePath || workspaceId,
+        'meta-agent'
       );
     }
 
@@ -1166,7 +1167,7 @@ export class MetaAgentService {
       // child settles instantly into 'error' every cycle). Native children
       // settle 'session:completed', so this gate is a no-op for them.
       if (eventType !== 'session:error' && (metaStatus === 'idle' || metaStatus === 'interrupted' || metaStatus === 'error')) {
-        await this.aiService.triggerQueuedPromptProcessingForSession(metaSession.id, metaSession.workspacePath);
+        await this.aiService.triggerQueuedPromptProcessingForSession(metaSession.id, metaSession.workspacePath, 'meta-agent');
       }
     } catch (error) {
       console.error(`[MetaAgentService] handleChildSessionEvent failed for session ${sessionId} (${eventType}):`, error);

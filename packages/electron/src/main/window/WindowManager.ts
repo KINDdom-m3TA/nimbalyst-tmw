@@ -147,6 +147,12 @@ app.on('before-quit', () => {
   isQuitting = true;
 });
 
+/** True once `before-quit` has fired. Callers that create windows lazily
+ *  (e.g. auto-opening a project to deliver a queued prompt) must check this. */
+export function isAppQuitting(): boolean {
+  return isQuitting;
+}
+
 // Get focused window or create new one
 export function getFocusedOrNewWindow(): BrowserWindow {
     const focusedWindow = BrowserWindow.getFocusedWindow();

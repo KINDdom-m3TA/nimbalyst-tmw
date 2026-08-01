@@ -1490,7 +1490,7 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
       // may race or, in some edge cases, may not fire cleanly after abort.
       await window.electronAPI.invoke('ai:interruptCurrentTurn', sessionId);
       if (workspacePath) {
-        await window.electronAPI.invoke('ai:triggerQueueProcessing', sessionId, workspacePath);
+        await window.electronAPI.invoke('ai:triggerQueueProcessing', sessionId, workspacePath, 'send-now');
       }
     } catch (error) {
       console.error('[SessionTranscript] Failed to interrupt for send-now:', error);

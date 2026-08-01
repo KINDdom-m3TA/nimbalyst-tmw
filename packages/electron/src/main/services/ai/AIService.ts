@@ -57,7 +57,7 @@ import { TrayManager } from '../../tray/TrayManager';
 import { logger } from '../../utils/logger';
 import { getSettingsService } from '../SettingsService';
 import { subscribeProviderSettingsInvalidation } from './providerSettingsCacheInvalidation';
-import { windowStates, findWindowByWorkspace, getWindowId, createWindow } from '../../window/WindowManager';
+import { windowStates, findWindowByWorkspace, getWindowId, createWindow, isAppQuitting } from '../../window/WindowManager';
 import { resolveActiveWorkspacePathForWindowId } from '../../window/windowState';
 import { sessionFileTracker } from '../SessionFileTracker';
 import { enrichTranscriptMessagesWithToolCallDiffs } from '../TranscriptToolCallEnricher';
@@ -131,6 +131,14 @@ import {
 import { HooklessAgentFileWatcher } from './HooklessAgentFileWatcher';
 import { getAgentWorkflowService } from '../AgentWorkflowService';
 import { tryClaimAndDispatchNextQueuedPrompt } from './queuedPromptDispatcher';
+import {
+  QueueDriveService,
+  type DriveOutcome,
+  type DriveReason,
+} from './QueueDriveService';
+import { createWorkspaceWindowResolver } from './resolveWorkspaceWindow';
+import { runQueueDriveAttempt } from './queueDriveAttempt';
+import { onWorkspaceWindowAvailable } from '../../window/workspaceWindowAvailability';
 import { dispatchQueuedPromptToClaudeCli } from './claudeCliQueueDispatch';
 import { ensureClaudeCliSession, claudeCliSessionSupportsPlugins } from './claudeCliLauncherSingleton';
 import { supportsWorkspaceSlashWorkflowProvider } from '../../../shared/agentWorkflowProviders';
@@ -289,12 +297,127 @@ export class AIService {
     return { id: created.id, prompt: created.prompt, createdAt: created.createdAt };
   }
 
-  public async triggerQueuedPromptProcessingForSession(sessionId: string, workspacePath: string): Promise<boolean> {
-    const targetWindow = findWindowByWorkspace(workspacePath);
-    if (!targetWindow || targetWindow.isDestroyed()) {
-      return false;
+  /**
+   * Resolves (and, when allowed, opens) the window a queued prompt needs.
+   * Shared by the mobile sync path and the queue driver so a prompt from the
+   * phone behaves the same whichever trigger delivered it (#962).
+   */
+  private readonly queueWindowResolver = createWorkspaceWindowResolver<Electron.BrowserWindow>({
+    findWindow: (workspacePath) => findWindowByWorkspace(workspacePath),
+    isDestroyed: (window) => window.isDestroyed(),
+    workspaceExists: (workspacePath) => fs.existsSync(workspacePath),
+    createWindow: (workspacePath) => createWindow(false, true, workspacePath),
+    waitForLoad: (window) =>
+      new Promise<void>((resolve) => {
+        window.webContents.once('did-finish-load', () => resolve());
+      }),
+    isQuitting: () => isAppQuitting(),
+    now: () => Date.now(),
+    logInfo: (message) => logger.main.info(message),
+    logWarn: (message) => logger.main.warn(message),
+  });
+
+  private queueDriveService: QueueDriveService | null = null;
+
+  /**
+   * The single owner of queued-prompt drainage. Every trigger — renderer,
+   * mobile control message, mobile sync, FIFO continuation, boot recovery,
+   * wakeup — funnels through this so a blocked attempt re-drives itself
+   * instead of evaporating (#962).
+   */
+  private getQueueDrive(): QueueDriveService {
+    if (!this.queueDriveService) {
+      this.queueDriveService = new QueueDriveService({
+        attempt: (input) => this.attemptQueueDrive(input),
+        onWindowAvailable: (workspacePath, listener) =>
+          onWorkspaceWindowAvailable((availablePath) => {
+            if (availablePath === workspacePath) listener();
+          }),
+        onSessionIdle: (sessionId, listener) => {
+          const stateManager = getSessionStateManager();
+          const handler = (event: { sessionId: string }) => {
+            if (event.sessionId === sessionId) listener();
+          };
+          // Only the three terminal transitions; subscribing to all seven
+          // would register more listeners per deferred session for nothing.
+          stateManager.on('session:completed', handler);
+          stateManager.on('session:error', handler);
+          stateManager.on('session:interrupted', handler);
+          return () => {
+            stateManager.removeListener('session:completed', handler);
+            stateManager.removeListener('session:error', handler);
+            stateManager.removeListener('session:interrupted', handler);
+          };
+        },
+        logInfo: (message) => logger.main.info(message),
+        logWarn: (message) => logger.main.warn(message),
+        logError: (message, error) => logger.main.error(message, error),
+      });
     }
-    return this.processQueuedPrompt(sessionId, workspacePath, targetWindow);
+    return this.queueDriveService;
+  }
+
+  /** Ask the driver to drain a session's queue. Fire-and-forget. */
+  public requestQueueDrive(sessionId: string, workspacePath: string, reason: DriveReason): void {
+    this.getQueueDrive().requestDrive(sessionId, workspacePath, reason);
+  }
+
+  /** Drain a session's queue and report what happened. */
+  public driveQueuedPrompts(
+    sessionId: string,
+    workspacePath: string,
+    reason: DriveReason,
+  ): Promise<DriveOutcome> {
+    return this.getQueueDrive().drive(sessionId, workspacePath, reason);
+  }
+
+  /**
+   * One drive attempt. Returns a deferred outcome (never a discarded `false`)
+   * so the driver can arm the matching wake condition.
+   */
+  private async attemptQueueDrive({
+    sessionId,
+    workspacePath,
+    reason,
+  }: {
+    sessionId: string;
+    workspacePath: string;
+    reason: DriveReason;
+  }): Promise<DriveOutcome> {
+    const { getQueuedPromptsStore } = await import('../RepositoryManager');
+    let queueStore: ReturnType<typeof getQueuedPromptsStore>;
+    try {
+      queueStore = getQueuedPromptsStore();
+    } catch {
+      return { kind: 'deferred', reason: 'db-not-ready' };
+    }
+
+    return runQueueDriveAttempt<Electron.BrowserWindow>(
+      {
+        listPendingIds: async (id) => (await queueStore.listPending(id)).map((row) => row.id),
+        isChainActive: (id) => this.sessionsProcessingQueue.has(id),
+        isSessionBusy: (id) => {
+          const liveState = getSessionStateManager().getSessionState(id);
+          return !!liveState && (liveState.status === 'running' || liveState.isStreaming);
+        },
+        resolveWindow: (path, allowAutoOpen) =>
+          this.queueWindowResolver.resolve(path, { allowAutoOpen }),
+        failAllPending: (id, errorMessage) => queueStore.failAllPendingForSession(id, errorMessage),
+        dispatch: ({ sessionId: id, workspacePath: path, window, reason: driveReason }) =>
+          this.tryDispatchNextQueuedPrompt(id, path, window, `queue-drive:${driveReason}`),
+        logWarn: (message) => logger.main.warn(message),
+      },
+      { sessionId, workspacePath, reason },
+    );
+  }
+
+  public async triggerQueuedPromptProcessingForSession(
+    sessionId: string,
+    workspacePath: string,
+    reason: DriveReason = 'renderer-trigger',
+  ): Promise<boolean> {
+    const outcome = await this.driveQueuedPrompts(sessionId, workspacePath, reason);
+    return outcome.kind === 'dispatched';
   }
 
   public async respondToInteractivePrompt(params: {
@@ -666,6 +789,9 @@ export class AIService {
         : findWindowByWorkspace(workspacePath);
     if (!liveWindow || liveWindow.isDestroyed()) {
       logger.main.info(`[AIService] ${source}: no live window available to continue queued prompts for session ${sessionId}`);
+      // Hand off instead of dropping the chain — the driver opens or waits for
+      // a window and drives the remaining rows (#962).
+      this.requestQueueDrive(sessionId, workspacePath, 'fifo-continuation');
       return;
     }
 
@@ -680,7 +806,10 @@ export class AIService {
     logger.main.info(
       `[AIService] ${source}: ${pendingPrompts.length} pending prompts remain for session ${sessionId}, triggering next`
     );
-    await this.processQueuedPrompt(sessionId, workspacePath, liveWindow);
+    const dispatched = await this.processQueuedPrompt(sessionId, workspacePath, liveWindow);
+    if (!dispatched) {
+      this.requestQueueDrive(sessionId, workspacePath, 'fifo-continuation');
+    }
   }
 
   public async tryDispatchNextQueuedPrompt(
@@ -753,9 +882,7 @@ export class AIService {
           const metaStatus = metaState?.status || 'idle';
           if (metaStatus === 'idle' || metaStatus === 'error') {
             logger.main.info(`[AIService] ${source}: waking meta-agent ${metaSession.id} after child ${sessionId} completed`);
-            this.triggerQueuedPromptProcessingForSession(metaSession.id, metaSession.workspacePath).catch((err) => {
-              logger.main.error('[AIService] Failed to trigger meta-agent queue processing:', err);
-            });
+            this.requestQueueDrive(metaSession.id, metaSession.workspacePath, 'meta-agent');
           }
         } catch (metaErr) {
           logger.main.error(`[AIService] ${source}: error checking meta-agent wakeup:`, metaErr);
@@ -1012,37 +1139,20 @@ export class AIService {
                 // Only notify the window that owns this session's workspace
                 // This prevents duplicate execution when multiple windows are open
                 if (session.workspacePath) {
-                  let targetWindow = findWindowByWorkspace(session.workspacePath);
-
-                  // If no window is open for this workspace, open it automatically
-                  // so mobile prompts don't silently fail
-                  if ((!targetWindow || targetWindow.isDestroyed()) && fs.existsSync(session.workspacePath)) {
-                    logger.main.info('[AIService] Opening workspace for mobile queued prompt:', session.workspacePath);
-                    const newWindow = createWindow(false, true, session.workspacePath);
-
-                    // Wait for the window to finish loading before processing the prompt
-                    await new Promise<void>((resolve) => {
-                      newWindow.webContents.once('did-finish-load', () => resolve());
-                    });
-
-                    targetWindow = newWindow;
-                  }
-
-                  if (targetWindow && !targetWindow.isDestroyed()) {
-                    // logger.main.info('[AIService] Notifying window to process queue for workspace:', session.workspacePath);
-                    targetWindow.webContents.send('ai:queuedPromptsReceived', {
+                  // Tell an already-open window so its queue list updates now.
+                  // Opening a window (when there isn't one) and actually
+                  // dispatching are the driver's job — it owns the retry when
+                  // the workspace is closed or the session is mid-turn (#962).
+                  const openWindow = findWindowByWorkspace(session.workspacePath);
+                  if (openWindow && !openWindow.isDestroyed()) {
+                    openWindow.webContents.send('ai:queuedPromptsReceived', {
                       sessionId,
                       promptCount: newPromptsCount,
                       workspacePath: session.workspacePath  // Include for renderer-side filtering
                     });
-
-                    // Directly trigger queue processing from main process
-                    // This ensures mobile messages are processed even when the session isn't open in the UI
-                    // logger.main.info('[AIService] Triggering queue processing for mobile prompt');
-                    this.processQueuedPrompt(sessionId, session.workspacePath, targetWindow);
-                  } else {
-                    logger.main.warn('[AIService] No window found and workspace path does not exist:', session.workspacePath);
                   }
+
+                  this.requestQueueDrive(sessionId, session.workspacePath, 'mobile-index');
                 } else {
                   // Sessions MUST have a workspacePath - this indicates a data integrity issue
                   logger.main.error('[AIService] Session has no workspacePath - cannot route queued prompts. SessionId:', sessionId);
@@ -1462,7 +1572,7 @@ export class AIService {
       // This is in a separate module to keep AIService focused
       initMobileSessionControlHandler(syncProvider, findWindowByWorkspace, {
         triggerQueuedPromptProcessing: (sessionId, workspacePath) =>
-          this.triggerQueuedPromptProcessingForSession(sessionId, workspacePath),
+          this.triggerQueuedPromptProcessingForSession(sessionId, workspacePath, 'mobile-control'),
         rollbackExecutingPrompts: async (sessionId) => {
           // Use the delivery-aware sweep so that a mobile-initiated cancel
           // doesn't re-deliver a prompt that already landed in the
@@ -2337,16 +2447,14 @@ export class AIService {
     safeHandle('ai:triggerQueueProcessing', async (
       event,
       sessionId: string,
-      workspacePath: string
+      workspacePath: string,
+      reason?: DriveReason
     ) => {
-      const processed = await this.tryDispatchNextQueuedPrompt(
-        sessionId,
-        workspacePath,
-        BrowserWindow.fromWebContents(event.sender),
-        'triggerQueueProcessing',
-      );
+      // Route through the driver so a renderer trigger that can't dispatch
+      // right now (session mid-turn) re-drives itself instead of evaporating.
+      const outcome = await this.driveQueuedPrompts(sessionId, workspacePath, reason ?? 'renderer-trigger');
 
-      return { processed };
+      return { processed: outcome.kind === 'dispatched' };
     });
 
     // Save draft input

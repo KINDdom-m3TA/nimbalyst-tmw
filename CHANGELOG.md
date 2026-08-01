@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Queued prompts now run on their own: a prompt sent from your phone opens the project and runs it, prompts left over from a quit resume once the project is open again, and a prompt that arrives mid-turn runs when the turn ends — no more pressing Escape or restarting to release the queue. (#962)
 - Web search and web fetch no longer fail in Claude Code CLI sessions running at max effort.
 - Sharing a plan or decision now produces a link your teammates can actually open, and the sharer edits the same collaborative content everyone else sees instead of quietly staying on their local file. Items shared earlier can be unshared and shared again to pick this up, keeping the content that has been edited since.
 - An AI session that reports its previous conversation has expired now genuinely starts fresh on the next message, instead of repeating the same expiration error forever. (#1098)
