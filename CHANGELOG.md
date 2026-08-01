@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- The Agent mode header gains a pin toggle, and worktrees now show the worktree icon and their worktree name.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
