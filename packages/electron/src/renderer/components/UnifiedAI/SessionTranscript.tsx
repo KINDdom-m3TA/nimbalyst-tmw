@@ -48,6 +48,7 @@ import { serializeEditorContextItemsForIpc } from './editorContextSerialization'
 import { isClaudeCliTerminalSession } from './claudeCliInputRouting';
 import { expandSessionMentions } from './sessionMentions';
 import { diffTreeGroupByDirectoryAtom, setDiffTreeGroupByDirectoryAtom } from '../../store/atoms/projectState';
+import { openSettingsCommandAtom } from '../../store/atoms/settingsNavigation';
 import {
   sessionDraftInputAtom,
   sessionDraftHydratedAtom,
@@ -2015,6 +2016,42 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
         }
       },
 
+      getAttachmentStagingGitignoreStatus: async () => {
+        return window.electronAPI.invoke(
+          'attachment:workspace-staging-status',
+          workspacePath,
+        );
+      },
+      retryAttachmentStaging: async (prompt, blockedAttachments, addGitignore) => {
+        try {
+          const result = await window.electronAPI.invoke('attachment:retry-in-workspace', {
+            workspacePath,
+            sessionId,
+            attachments: blockedAttachments,
+            addGitignore,
+          }) as { success: boolean; attachments?: ChatAttachment[]; error?: string };
+          if (!result.success || !result.attachments) {
+            return { success: false, error: result.error ?? 'Failed to re-stage attachments' };
+          }
+
+          setDraftInput(prompt);
+          setDraftAttachments(result.attachments);
+          await Promise.resolve();
+          await handleSend();
+          return { success: true };
+        } catch (error) {
+          return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      },
+      openAttachmentSettings: () => {
+        store.set(openSettingsCommandAtom, {
+          category: 'agent-features',
+          scope: 'application',
+          anchor: 'attachment-staging-settings',
+          timestamp: Date.now(),
+        });
+      },
+
       // Common operations
       openFile: async (filePath: string) => {
         if (onFileClick) {
@@ -2055,6 +2092,9 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
       gitFileDiff: (...args) => liveHostRef.current!.gitFileDiff!(...args),
       setDiffPeekSize: (...args) => liveHostRef.current!.setDiffPeekSize!(...args),
       superLoopBlockedFeedback: (...args) => liveHostRef.current!.superLoopBlockedFeedback(...args),
+      getAttachmentStagingGitignoreStatus: (...args) => liveHostRef.current!.getAttachmentStagingGitignoreStatus!(...args),
+      retryAttachmentStaging: (...args) => liveHostRef.current!.retryAttachmentStaging!(...args),
+      openAttachmentSettings: (...args) => liveHostRef.current!.openAttachmentSettings!(...args),
       openFile: (...args) => liveHostRef.current!.openFile(...args),
       trackEvent: (...args) => liveHostRef.current!.trackEvent(...args),
     };

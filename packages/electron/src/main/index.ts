@@ -102,6 +102,7 @@ import {
     runMigrations,
     getAppSetting,
     getClaudeCodeSettings,
+    getAttachmentStagingConfig,
     isSettingsAgentToolsDisabled,
     isTrackersAgentToolsEnabled,
     store
@@ -125,6 +126,10 @@ import { registerMigrationHandlers } from './ipc/MigrationHandlers';
 import { registerTerminalHandlers, shutdownTerminalHandlers } from './ipc/TerminalHandlers';
 import { AIService } from './services/ai/AIService';
 import { detectFileWorkspace, suggestWorkspaceForFile, getAdditionalDirectoriesForWorkspace } from './utils/workspaceDetection';
+import {
+  getExternalAttachmentStagingDirectory,
+  resolveWorkspaceAttachmentStagingDirectory,
+} from './services/attachments/attachmentStagingRoot';
 import { cliManager, initEnhancedPath, getEnhancedPath, getShellEnvironment } from './services/CLIManager';
 import { registerWorkspaceWindow, registerExtensionTools, shutdownHttpServer, startMcpHttpServer, updateDocumentState, getActiveExtensionShortNames } from './mcp/httpServer';
 import { writeMcpEndpointDescriptor, removeMcpEndpointDescriptor, type EndpointWorkspace } from './mcp/mcpEndpointDescriptor';
@@ -2057,9 +2062,27 @@ app.whenReady().then(async () => {
     // copies of every project skill in the system prompt (~7K tokens wasted per
     // session). Claude has no Codex-style sandbox; cross-worktree file access
     // still works through the normal permission flow.
+    const withAttachmentStagingDirectory = (workspacePath: string, directories: string[]) => {
+      const attachmentDirectory = getExternalAttachmentStagingDirectory(workspacePath);
+      return attachmentDirectory
+        ? [...new Set([...directories, attachmentDirectory])]
+        : directories;
+    };
     ClaudeCodeProvider.setAdditionalDirectoriesLoader((workspacePath: string) =>
-      getAdditionalDirectoriesForWorkspace(workspacePath, { includeSiblingWorktrees: false }));
-    OpenAICodexProvider.setAdditionalDirectoriesLoader(getAdditionalDirectoriesForWorkspace);
+      withAttachmentStagingDirectory(
+        workspacePath,
+        getAdditionalDirectoriesForWorkspace(workspacePath, { includeSiblingWorktrees: false }),
+      ));
+    OpenAICodexProvider.setAdditionalDirectoriesLoader((workspacePath: string) =>
+      withAttachmentStagingDirectory(workspacePath, getAdditionalDirectoriesForWorkspace(workspacePath)));
+    ClaudeCodeProvider.setAttachmentStagingLoader((workspacePath: string) => ({
+      root: resolveWorkspaceAttachmentStagingDirectory(workspacePath),
+      mode: getAttachmentStagingConfig().mode,
+    }));
+    ClaudeCodeProvider.setAttachmentDenyRulesLoader(async (workspacePath: string) => {
+      const effective = await ClaudeSettingsManager.getInstance().getEffectiveSettings(workspacePath);
+      return effective.permissions.deny;
+    });
 
     // Wire the Codex PreToolUse hook (LEGACY -- only consulted by the SDK
     // transport, which is no longer the default). The hook script ships

@@ -27,6 +27,7 @@ import { ExtensionLogService } from '../services/ExtensionLogService';
 import { getMcpConfigService } from '../mcpConfigServiceRef';
 import { addNimAssetRoot } from '../protocols/nimAssetProtocol';
 import { addNimPreviewWorkspaceRoot } from '../protocols/nimPreviewProtocol';
+import { scheduleAttachmentStagingCleanup } from '../services/attachments/attachmentStagingCleanup';
 import { windows, windowStates, anyWindowReferencesWorkspace, resolveDocumentServicePath, getWindowIdForWindow } from './windowState';
 import { shouldSaveSessionOnWindowClose } from './sessionSaveOnClose';
 import {
@@ -305,6 +306,7 @@ export function createWindow(
         if (isWorkspaceMode && workspacePath) {
             addNimAssetRoot(workspacePath);
             addNimPreviewWorkspaceRoot(workspacePath);
+            scheduleAttachmentStagingCleanup(workspacePath);
         }
         if (isWorkspaceMode && workspacePath) {
             if (!documentServices.has(workspacePath)) {
