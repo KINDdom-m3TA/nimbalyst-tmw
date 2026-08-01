@@ -61,6 +61,11 @@ permissions:
 jobs:
   build:
     strategy:
+      # One platform failing must not cancel the others. With fail-fast on, a
+      # single red job skipped the `release` job entirely -- leaving the pushed
+      # tag in GitHub's releases.atom feed with no assets behind it, which 404s
+      # every client's update check until the tag is deleted by hand (v0.72.0).
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
@@ -509,32 +514,17 @@ jobs:
           $payload = Get-ChildItem release -Filter Nimbalyst.exe -File -Recurse |
             Where-Object { $_.FullName -match 'win-unpacked' } |
             Select-Object -First 1
-          $installer = Get-Item "release/Nimbalyst-Windows-${{ matrix.arch }}.exe"
 
           if (-not $payload) {
             throw "Could not find the staged Windows payload executable"
           }
 
-          foreach ($file in @($payload, $installer)) {
-            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
-            $subject = $signature.SignerCertificate.Subject
-            if ($signature.Status -ne 'Valid' -or $subject -notmatch 'O="?NIMBALYST, INC\.') {
-              throw "Invalid Nimbalyst Windows signature: $($file.FullName) status=$($signature.Status) subject=$subject"
-            }
-            Write-Host "Verified Windows signature: $($file.FullName) [$subject]"
-          }
-
-          $invalidNativeFiles = Get-ChildItem $payload.Directory.FullName -File -Recurse |
-            Where-Object { $_.Extension -in '.exe', '.dll', '.node' } |
-            ForEach-Object {
-              $signature = Get-AuthenticodeSignature -LiteralPath $_.FullName
-              if ($signature.Status -ne 'Valid') {
-                "$($_.FullName) status=$($signature.Status) subject=$($signature.SignerCertificate.Subject)"
-              }
-            }
-          if ($invalidNativeFiles) {
-            throw "Unsigned or untrusted native files remain in the Windows payload:`n$($invalidNativeFiles -join "`n")"
-          }
+          # Explicit, so a runner-image execution-policy change can never turn
+          # a release-blocking verification step into a silent skip or a crash.
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+          ./build/verify-windows-signatures.ps1 `
+            -PayloadDir $payload.Directory.FullName `
+            -InstallerPath "release/Nimbalyst-Windows-${{ matrix.arch }}.exe"
 
       # Create a backwards-compatible copy of the signed x64 exe so any existing
       # download links pointing at Nimbalyst-Windows.exe keep working. ARM64
@@ -716,29 +706,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $payload = Get-Item "${{ steps.arm-payload.outputs.path }}\Nimbalyst.exe"
-          $installer = Get-Item "packages/electron/release/Nimbalyst-Windows-arm64.exe"
-
-          foreach ($file in @($payload, $installer)) {
-            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
-            $subject = $signature.SignerCertificate.Subject
-            if ($signature.Status -ne 'Valid' -or $subject -notmatch 'O="?NIMBALYST, INC\.') {
-              throw "Invalid Nimbalyst Windows signature: $($file.FullName) status=$($signature.Status) subject=$subject"
-            }
-            Write-Host "Verified Windows signature: $($file.FullName) [$subject]"
-          }
-
-          $invalidNativeFiles = Get-ChildItem "${{ steps.arm-payload.outputs.path }}" -File -Recurse |
-            Where-Object { $_.Extension -in '.exe', '.dll', '.node' } |
-            ForEach-Object {
-              $signature = Get-AuthenticodeSignature -LiteralPath $_.FullName
-              if ($signature.Status -ne 'Valid') {
-                "$($_.FullName) status=$($signature.Status) subject=$($signature.SignerCertificate.Subject)"
-              }
-            }
-          if ($invalidNativeFiles) {
-            throw "Unsigned or untrusted native files remain in the Windows ARM64 payload:`n$($invalidNativeFiles -join "`n")"
-          }
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+          ./packages/electron/build/verify-windows-signatures.ps1 `
+            -PayloadDir "${{ steps.arm-payload.outputs.path }}" `
+            -InstallerPath "packages/electron/release/Nimbalyst-Windows-arm64.exe"
 
       - name: Prepare signed Windows ARM64 artifact
         shell: pwsh
