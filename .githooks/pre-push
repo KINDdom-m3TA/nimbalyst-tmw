@@ -36,6 +36,9 @@ fi
 echo "[pre-push] Checking override/dep sync..."
 npm run check:override-sync
 
+echo "[pre-push] Checking tracked text files for raw NUL bytes..."
+npm run check:text-nuls -- --ref HEAD
+
 echo "[pre-push] Building typecheck prerequisites and running the full typecheck..."
 npm run typecheck:prepush
 
