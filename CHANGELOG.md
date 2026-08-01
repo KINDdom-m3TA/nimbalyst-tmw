@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Changing a project's permission mode now applies to agent sessions that are already running, instead of taking effect only after they finish.
 
 ### Removed
 <!-- Removed features go here -->
