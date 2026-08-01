@@ -3,7 +3,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-vi.mock('@nimbalyst/runtime', () => ({
+vi.mock('@nimbalyst/runtime/ui/icons/MaterialSymbol', () => ({
   MaterialSymbol: ({ icon }: { icon: string }) => <span data-icon={icon} />,
 }));
 

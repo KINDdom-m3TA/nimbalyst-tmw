@@ -27,8 +27,7 @@ vi.mock('../../dialogs', () => ({
 // recent-workspaces IPC (not the heavy workspaceManager handler) is the source
 // of project data.
 
-vi.mock('@nimbalyst/runtime', async (importOriginal) => ({
-  ...await importOriginal<typeof import('@nimbalyst/runtime')>(),
+vi.mock('@nimbalyst/runtime/ui/icons/MaterialSymbol', () => ({
   MaterialSymbol: ({
     icon,
     className,
@@ -36,6 +35,10 @@ vi.mock('@nimbalyst/runtime', async (importOriginal) => ({
     icon: string;
     className?: string;
   }) => <span className={className} data-material-symbol={icon} />,
+}));
+
+vi.mock('@nimbalyst/runtime/ui/icons/ProviderIcons', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@nimbalyst/runtime/ui/icons/ProviderIcons')>(),
   ProviderIcon: () => null,
 }));
 

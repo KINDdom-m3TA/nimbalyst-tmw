@@ -27,7 +27,7 @@ import { TeamMode } from '../TeamMode';
 const counts = { symbol: 0 };
 const icons: string[] = [];
 
-vi.mock('@nimbalyst/runtime', () => ({
+vi.mock('@nimbalyst/runtime/ui/icons/MaterialSymbol', () => ({
   MaterialSymbol: ({ icon }: { icon: string }) => {
     counts.symbol += 1;
     icons.push(icon);

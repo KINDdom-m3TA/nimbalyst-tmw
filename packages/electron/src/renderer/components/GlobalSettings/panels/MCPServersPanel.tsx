@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { usePostHog } from 'posthog-js/react';
 import { useAtomValue } from 'jotai';
-import { MaterialSymbol } from '@nimbalyst/runtime';
+import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import { ErrorBoundary } from '../../ErrorBoundary';
 import { useTheme } from '../../../hooks/useTheme';
 import { enabledProvidersAtom } from '../../../store/atoms/appSettings';

@@ -12,7 +12,7 @@ import {
 } from '../../../store/atoms/collabDocuments';
 import { ShareToTeamDialog } from '../ShareToTeamDialog';
 
-vi.mock('@nimbalyst/runtime', () => ({
+vi.mock('@nimbalyst/runtime/ui/icons/MaterialSymbol', () => ({
   MaterialSymbol: ({ icon }: { icon: string }) => <span data-icon={icon} />,
 }));
 

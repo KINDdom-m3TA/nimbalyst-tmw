@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { CollabCreateItemDialog } from '../CollabCreateItemDialog';
 import type { SharedFolder } from '../../../store/atoms/collabDocuments';
 
-vi.mock('@nimbalyst/runtime', () => ({
+vi.mock('@nimbalyst/runtime/ui/icons/MaterialSymbol', () => ({
   MaterialSymbol: ({ icon }: { icon: string }) => <span data-icon={icon} />,
 }));
 
