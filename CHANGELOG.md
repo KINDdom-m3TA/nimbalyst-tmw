@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Committing with the AI commit widget no longer leaves the just-committed files showing as deleted or reverted, and no longer discards changes you staged elsewhere at the same time.
 - Projects with many new, uncommitted folders no longer stall while the file tree and changed-files list refresh, and ignored files inside those folders no longer show up as changed.
 - Adding a second account no longer changes which account personal sync runs as.
+- Answering or cancelling a question from an agent now closes it for good, instead of leaving it on screen and bringing it back when you switch sessions and return. (#1116, #773)
 
 ### Removed
 <!-- Removed features go here -->

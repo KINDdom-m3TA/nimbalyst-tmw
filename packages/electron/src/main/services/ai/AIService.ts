@@ -124,6 +124,10 @@ import {
 } from './aiServiceUtils';
 import { MessageStreamingHandler } from './MessageStreamingHandler';
 import { setSessionPendingPrompt } from './pendingPromptPersistence';
+import {
+  hasTerminalizedAskUserQuestion,
+  persistAskUserQuestionTerminalResult,
+} from './askUserQuestionFallbackResolution';
 import { HooklessAgentFileWatcher } from './HooklessAgentFileWatcher';
 import { getAgentWorkflowService } from '../AgentWorkflowService';
 import { tryClaimAndDispatchNextQueuedPrompt } from './queuedPromptDispatcher';
@@ -2542,6 +2546,24 @@ export class AIService {
       // a new message that includes the user's answer. The Claude Code SDK will
       // resume using the stored providerSessionId, picking up conversation history.
       if (resolvedSessionId && this.sendMessageHandler && session) {
+        // Issue #773: without a terminal tool_result the widget stayed pending, so
+        // every re-click auto-resumed again. Refuse a repeat answer for a question
+        // this process already terminalized.
+        if (hasTerminalizedAskUserQuestion(resolvedSessionId, questionId)) {
+          logger.main.info(`[AIService] AskUserQuestion already answered without a live handler; ignoring repeat: ${questionId}`);
+          return { success: false, error: 'Question already answered' };
+        }
+
+        // Issue #1116: terminalize the tool call BEFORE resuming. The live paths
+        // (provider resolve / MCP settle / abort) each write this row; the fallback
+        // did not, so the widget never completed and came back on every remount.
+        await persistAskUserQuestionTerminalResult({
+          sessionId: resolvedSessionId,
+          questionId,
+          answers,
+          cancelled: false,
+        });
+
         const answerText = Object.entries(answers)
           .map(([question, answer]) => `${question}: ${answer}`)
           .join('\n');
@@ -2663,6 +2685,15 @@ export class AIService {
         logger.main.info(`[AIService] Question cancel target not found; clearing stale pending-prompt bit: ${resolvedSessionId}`);
         await setSessionPendingPrompt(resolvedSessionId, false).catch((err) => {
           logger.main.warn(`[AIService] Failed to clear stale pending-prompt bit on cancel: ${err}`);
+        });
+        // Issue #1116: clearing the pending-prompt bit dismissed the session-level
+        // indicator but left the tool call pending, so the cancelled widget came
+        // back on the next session switch. Write the terminal result too.
+        await persistAskUserQuestionTerminalResult({
+          sessionId: resolvedSessionId,
+          questionId,
+          answers: {},
+          cancelled: true,
         });
         return { success: true, staleCleared: true };
       }
