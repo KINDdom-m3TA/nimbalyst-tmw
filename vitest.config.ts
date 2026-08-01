@@ -62,6 +62,15 @@ const setupFiles = ['./test-utils/setup.ts', './packages/electron/vitest.setup.t
 const TEST_TIMEOUT_MS = 20000;
 const HOOK_TIMEOUT_MS = 20000;
 
+// A full `vitest --run` used to emit ~1MB of output, ~90% of it console noise
+// from tests that PASSED (a single info-level log in a hot path can add half a
+// megabyte, since vitest prints a `stdout | <path> > <test name>` header line
+// for every console call). 'passed-only' suppresses console output for passing
+// tests and still prints it in full for failures, so nothing diagnostic is
+// lost. Set per-project: `test.projects` entries do NOT inherit root-level
+// `test` options.
+const SILENT: 'passed-only' = 'passed-only';
+
 const include = [
   'packages/**/__tests__/**/*.test.{ts,tsx}',
   'packages/**/__tests__/**/*.spec.{ts,tsx}',
@@ -104,6 +113,7 @@ export default defineConfig({
           name: 'jsdom',
           testTimeout: TEST_TIMEOUT_MS,
           hookTimeout: HOOK_TIMEOUT_MS,
+          silent: SILENT,
           globals: true,
           environment: 'jsdom',
           setupFiles,
@@ -121,6 +131,7 @@ export default defineConfig({
           name: 'node',
           testTimeout: TEST_TIMEOUT_MS,
           hookTimeout: HOOK_TIMEOUT_MS,
+          silent: SILENT,
           globals: true,
           environment: 'node',
           setupFiles,
