@@ -33,7 +33,7 @@ describe('NewFileDialog', () => {
     );
 
     expect(screen.getByLabelText('Type').tagName).toBe('SELECT');
-    expect(screen.getByTestId('new-file-type-chevron')).toBeTruthy();
+    screen.getByTestId('new-file-type-chevron');
     expect(document.querySelector('[data-icon="expand_more"]')).toBeTruthy();
   });
 });

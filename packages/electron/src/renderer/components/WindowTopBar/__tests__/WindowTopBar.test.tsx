@@ -285,8 +285,8 @@ describe('WindowTopBar', () => {
     renderAgentPanelControl({ onChat, onToggle });
 
     fireEvent.click(screen.getByTestId('window-top-bar-right-pane-menu-button'));
-    expect(screen.getByRole('menuitem', { name: 'Edited Files' })).toBeTruthy();
-    expect(screen.getByRole('menuitem', { name: 'Review' })).toBeTruthy();
+    screen.getByRole('menuitem', { name: 'Edited Files' });
+    screen.getByRole('menuitem', { name: 'Review' });
     fireEvent.click(screen.getByRole('menuitem', { name: 'Chat with Session' }));
     expect(onChat).toHaveBeenCalledTimes(1);
     // Opening or choosing from the menu must never toggle visibility.

@@ -77,7 +77,7 @@ describe('SharedDocsHome', () => {
     expect(screen.queryByText('Old empty draft')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Trash (1)' }));
-    expect(screen.getByText('Old empty draft')).toBeTruthy();
+    screen.getByText('Old empty draft');
     expect((screen.getByRole('button', { name: 'Restore' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

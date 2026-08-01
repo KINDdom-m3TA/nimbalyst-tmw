@@ -51,7 +51,7 @@ describe('DatabasePanel dry-run eligibility', () => {
     render(<DatabasePanel />);
 
     const button = await screen.findByRole('button', { name: 'Run dry-run migration' });
-    expect(screen.getByText(/Available only while PGLite is active/i)).toBeTruthy();
+    screen.getByText(/Available only while PGLite is active/i);
 
     fireEvent.click(button);
     await waitFor(() => {
@@ -75,7 +75,7 @@ describe('DatabasePanel dry-run eligibility', () => {
     render(<DatabasePanel />);
 
     await screen.findByText('SQLite (new)');
-    expect(screen.getByText(/No further\s+migration is needed/i)).toBeTruthy();
+    screen.getByText(/No further\s+migration is needed/i);
     expect(screen.queryByRole('button', { name: 'Migrate to SQLite' })).toBeNull();
   });
 });
