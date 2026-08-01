@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTTP MCP servers that authenticate with a static key now connect directly on Claude Code sessions instead of being routed through an extra helper process.
 - Unified Quick Open tabs now show compact platform keyboard glyphs without shortcut labels overflowing into neighboring tabs.
 - Desktop AI notifications now lead with the originating session name and open that exact session and project, including child sessions, instead of following whichever project is currently visible.
+- Dropdown menus no longer open underneath the macOS window controls — the project rail's "+" menu now opens beside the button instead of jumping to the top corner. (#1096)
 - File reveal menus now name Finder on macOS, Explorer on Windows, and the containing folder on Linux.
 - Main windows now restore their maximized state after restart instead of reopening at stale pre-maximize bounds. (#1077)
 - AI sessions that preview a web page no longer strand a blank, unclosable window on a second monitor.

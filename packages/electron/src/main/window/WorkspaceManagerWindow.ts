@@ -19,6 +19,7 @@ import { getDialogDefaultPath, rememberDialogSelection } from '../utils/dialogPa
 import { windowReferencesWorkspace } from './windowState';
 import { TutorialProjectService } from '../services/tutorial/TutorialProjectService';
 import type { TutorialStartResult } from '../../shared/tutorial';
+import { windowControlsOverlayOptions } from './windowChrome';
 import {
   createWorkspaceManagerDevUrl,
   createWorkspaceManagerRendererQuery,
@@ -132,6 +133,7 @@ export function createWorkspaceManagerWindow(options: WorkspaceManagerWindowOpti
     show: false,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: { x: 10, y: 10 },
+    ...windowControlsOverlayOptions(),
     vibrancy: 'sidebar',
     backgroundColor: getBackgroundColor()
   });
