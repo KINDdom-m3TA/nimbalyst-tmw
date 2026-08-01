@@ -865,7 +865,17 @@ export class MCPConfigService {
     //
     // Scoped to `http` on purpose. `sse` servers and stdio servers that are
     // themselves `npx mcp-remote` invocations still go through the real check.
-    if (serverConfig.type === 'http' && !requiresMcpRemote(serverConfig, options)) {
+    //
+    // `useMcpRemoteForNativeOAuth` opts a caller INTO the wrapper for native-OAuth
+    // servers (Codex, Codex ACP, Copilot), so it must not be short-circuited here:
+    // `requiresMcpRemote` says "no wrapper" for anything with OAuth credentials,
+    // which would report every such server authorized and stop those providers
+    // dropping the ones that are not.
+    if (
+      serverConfig.type === 'http' &&
+      !options.useMcpRemoteForNativeOAuth &&
+      !requiresMcpRemote(serverConfig, options)
+    ) {
       return true;
     }
     const remoteConfig = extractMcpRemoteConfig(serverConfig, options);

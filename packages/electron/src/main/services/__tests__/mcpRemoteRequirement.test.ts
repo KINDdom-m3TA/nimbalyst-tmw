@@ -1,6 +1,21 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment node
+import { describe, expect, it, vi } from 'vitest';
 import { requiresMcpRemote } from '../mcpRemoteRequirement';
+import { MCPConfigService } from '../MCPConfigService';
 import type { MCPServerConfig } from '@nimbalyst/runtime/types/MCPServerConfig';
+
+const discoverMcpRemoteOAuthRequirement = vi.fn(async () => true);
+const checkMcpRemoteAuthStatus = vi.fn(async () => ({ authorized: false }));
+
+// Narrow mock: only the three probe helpers are faked. `usesNativeRemoteOAuth`
+// and `extractMcpRemoteConfig` stay real so the classification under test is the
+// real one.
+vi.mock('../MCPRemoteOAuth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../MCPRemoteOAuth')>()),
+  discoverMcpRemoteOAuthRequirement: (...args: unknown[]) =>
+    discoverMcpRemoteOAuthRequirement(...(args as [])),
+  checkMcpRemoteAuthStatus: (...args: unknown[]) => checkMcpRemoteAuthStatus(...(args as [])),
+}));
 
 const http = (extra: Partial<MCPServerConfig> = {}): MCPServerConfig =>
   ({ type: 'http', url: 'https://api.example.com/mcp', ...extra }) as MCPServerConfig;
@@ -49,5 +64,36 @@ describe('requiresMcpRemote', () => {
     // An unknown caller must keep today's behaviour, not silently lose the wrapper.
     const config = http({ headers: { Authorization: 'Bearer x' } });
     expect(requiresMcpRemote(config, {})).toBe(true);
+  });
+});
+
+describe('MCPConfigService.isOAuthAuthorized', () => {
+  const service = new MCPConfigService();
+
+  it('still probes mcp-remote for a native-OAuth server when the caller opted into the wrapper', async () => {
+    // Codex, Codex ACP and Copilot pass useMcpRemoteForNativeOAuth, meaning "wrap
+    // native-OAuth servers with mcp-remote". requiresMcpRemote answers "no wrapper"
+    // for anything carrying OAuth credentials, so skipping the probe on its say-so
+    // reported every such server authorized and stopped those providers dropping
+    // the unauthorized ones.
+    checkMcpRemoteAuthStatus.mockResolvedValueOnce({ authorized: false });
+
+    const config = http({ oauth: { clientId: 'abc' } } as Partial<MCPServerConfig>);
+    await expect(
+      service.isOAuthAuthorized(config, { useMcpRemoteForNativeOAuth: true })
+    ).resolves.toBe(false);
+    expect(checkMcpRemoteAuthStatus).toHaveBeenCalled();
+  });
+
+  it('skips the probe for a static-key server on a native-HTTP CLI', async () => {
+    // The case the short-circuit exists for: no OAuth of any kind, so a 401 from
+    // the probe must not get it classified as an unauthorized OAuth server.
+    checkMcpRemoteAuthStatus.mockClear();
+
+    const config = http({ headers: { Authorization: 'Bearer ghp_static' } });
+    await expect(
+      service.isOAuthAuthorized(config, { nativeHttpSupported: true })
+    ).resolves.toBe(true);
+    expect(checkMcpRemoteAuthStatus).not.toHaveBeenCalled();
   });
 });
