@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Provider as JotaiProvider, createStore } from 'jotai';
 import { activeWorkspacePathAtom } from '../../store/atoms/openProjects';
 import {
@@ -319,11 +319,11 @@ describe('UnifiedQuickOpen — Memory tab', () => {
 
     await screen.findByRole('tab', { name: /Memory/ });
     expect(screen.queryByRole('tab', { name: /Trackers/ })).toBeNull();
-    await screen.findByRole('group', { name: 'Search in' });
-    const allScope = screen.getByRole('button', { name: 'All' });
-    const docsScope = screen.getByRole('button', { name: 'Docs' });
-    const trackersScope = screen.getByRole('button', { name: 'Trackers' });
-    const sessionsScope = screen.getByRole('button', { name: 'Sessions' });
+    const scopeGroup = await screen.findByRole('group', { name: 'Search in' });
+    const allScope = within(scopeGroup).getByRole('button', { name: 'All' });
+    const docsScope = within(scopeGroup).getByRole('button', { name: 'Docs' });
+    const trackersScope = within(scopeGroup).getByRole('button', { name: 'Trackers' });
+    const sessionsScope = within(scopeGroup).getByRole('button', { name: 'Sessions' });
 
     expect(allScope.getAttribute('aria-pressed')).toBe('true');
     expect(docsScope.getAttribute('aria-pressed')).toBe('false');
@@ -429,7 +429,7 @@ describe('UnifiedQuickOpen — Prompts tab', () => {
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
   });
 
-  it('filters forward-provenance prompts with from:me and from:agent qualifiers', async () => {
+  it('filters forward-provenance prompts with visible actor toggles', async () => {
     const { listUserPrompts } = setupElectronApiMock();
     listUserPrompts.mockResolvedValue({
       success: true,
@@ -466,20 +466,30 @@ describe('UnifiedQuickOpen — Prompts tab', () => {
     renderQuickOpen({ initialTab: 'prompts' });
 
     await screen.findByText('web console design question');
+    const actorGroup = screen.getByRole('group', { name: 'Prompts from' });
+    const allPrompts = within(actorGroup).getByRole('button', { name: 'All' });
+    const myPrompts = within(actorGroup).getByRole('button', { name: 'Me' });
+    const agentPrompts = within(actorGroup).getByRole('button', { name: 'Agents' });
+
+    expect(allPrompts.getAttribute('aria-pressed')).toBe('true');
     screen.getByText('web console implementation task');
     screen.getByText('web console historical prompt');
 
-    typeSearch('from:me web');
+    typeSearch('web');
+    fireEvent.click(myPrompts);
     screen.getByText('web console design question');
     expect(screen.queryByText('web console implementation task')).toBeNull();
     expect(screen.queryByText('web console historical prompt')).toBeNull();
+    expect(myPrompts.getAttribute('aria-pressed')).toBe('true');
 
-    typeSearch('from:agent web');
+    fireEvent.click(agentPrompts);
     screen.getByText('web console implementation task');
     expect(screen.queryByText('web console design question')).toBeNull();
     expect(screen.queryByText('web console historical prompt')).toBeNull();
+    expect(agentPrompts.getAttribute('aria-pressed')).toBe('true');
 
-    typeSearch('web');
+    fireEvent.click(agentPrompts);
+    expect(allPrompts.getAttribute('aria-pressed')).toBe('true');
     screen.getByText('web console design question');
     screen.getByText('web console implementation task');
     screen.getByText('web console historical prompt');
