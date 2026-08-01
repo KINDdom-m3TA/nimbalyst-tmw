@@ -124,6 +124,7 @@ import {
 } from './aiServiceUtils';
 import { MessageStreamingHandler } from './MessageStreamingHandler';
 import { setSessionPendingPrompt } from './pendingPromptPersistence';
+import { shouldForceIdleOnCancel } from './sessionSettlePolicy';
 import {
   hasTerminalizedAskUserQuestion,
   persistAskUserQuestionTerminalResult,
@@ -334,6 +335,27 @@ export class AIService {
    * wakeup — funnels through this so a blocked attempt re-drives itself
    * instead of evaporating (#962).
    */
+  /**
+   * Make Cancel authoritative over session state.
+   *
+   * `provider.abort()` only unwinds a turn that is still in flight; once the
+   * per-turn AbortController has been cleared it is a no-op. If the turn died
+   * without a terminal transition (e.g. a Codex app-server RPC error yielded an
+   * in-band error chunk and returned), SessionStateManager still holds
+   * `running`, so the renderer's 15s processing reconcile puts the spinner back
+   * a few seconds after every click. Clearing the state here means one click
+   * always stops the session, whichever way the turn ended.
+   */
+  private async forceSessionIdleOnCancel(sessionId: string): Promise<void> {
+    try {
+      const stateManager = getSessionStateManager();
+      if (!shouldForceIdleOnCancel(stateManager.getSessionState(sessionId))) return;
+      await stateManager.interruptSession(sessionId);
+    } catch (error) {
+      logger.main.error(`[AIService] Failed to clear session state on cancel for ${sessionId}:`, error);
+    }
+  }
+
   private getQueueDrive(): QueueDriveService {
     if (!this.queueDriveService) {
       this.queueDriveService = new QueueDriveService({
@@ -3039,10 +3061,16 @@ export class AIService {
         provider.abort();
         // console.log(`[AIService] Cancelled request for session ${sessionId}`);
         this.analytics.sendEvent('cancel_ai_request', {provider: providerType})
+        await this.forceSessionIdleOnCancel(sessionId);
         return { success: true };
       }
-      console.warn(`[AIService] Cancel failed - no active provider for session: ${sessionId}`);
-      return { success: false, error: 'No active provider for session' };
+      // No live provider: the turn is already gone (e.g. it died on an in-band
+      // error chunk without settling). Cancel must still be authoritative --
+      // otherwise the stale 'running' state in SessionStateManager survives and
+      // the renderer's processing reconcile re-asserts the spinner seconds later.
+      console.warn(`[AIService] Cancel: no active provider for session ${sessionId} - clearing stale running state`);
+      await this.forceSessionIdleOnCancel(sessionId);
+      return { success: true };
     });
 
     // Interrupt the current turn (graceful when possible) so queued prompts

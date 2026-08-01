@@ -115,6 +115,7 @@ import {
 } from './aiServiceUtils';
 import { disableParentNotificationsAfterDirectTakeover } from './childSessionTakeover';
 import { installScopedProviderListener } from './providerListenerRegistry';
+import { shouldSettleUnterminatedTurn } from './sessionSettlePolicy';
 import type Store from 'electron-store';
 import type { AIService } from './AIService';
 import type { HooklessAgentFileWatcher } from './HooklessAgentFileWatcher';
@@ -1228,6 +1229,8 @@ export class MessageStreamingHandler {
       let hasStreamingContent = false;  // Track if we used streamContent tool
       let hadError = false;  // Track if an error occurred during the stream
       let providerError: string | undefined;
+      let sawCompleteChunk = false;  // A terminal 'complete' chunk arrived
+      let settledOnErrorChunk = false;  // The error branch already ended the session
       let firstChunkTime: number | undefined;
       let chunkCount = 0;
       let textChunks = 0;
@@ -2237,6 +2240,7 @@ export class MessageStreamingHandler {
                 await stateManager.updateActivity({ sessionId: session.id, status: 'error' });
                 await stateManager.endSession(session.id);
                 await this.svc.hooklessWatcher.stopForSession(session.id);
+                settledOnErrorChunk = true;
               } catch (settleErr) {
                 logger.main.error('[AIService] Failed to settle extension-agent error chunk:', settleErr);
               }
@@ -2246,6 +2250,7 @@ export class MessageStreamingHandler {
           case 'complete':
             // if (isClaudeCode) {
             // }
+            sawCompleteChunk = true;
             perfLog.totalTime = Date.now() - startTime;
             perfLog.streamTime = Date.now() - streamStartTime;
             perfLog.chunkCount = chunkCount;
@@ -2790,6 +2795,31 @@ export class MessageStreamingHandler {
             }
 
             break;
+        }
+      }
+
+      // A built-in provider can yield an in-band 'error' chunk and then return
+      // normally instead of throwing (the Codex app-server transport catches
+      // RPC failures this way). That reaches neither the 'complete' branch nor
+      // the outer catch, so nothing ended the session and it stayed 'running'
+      // forever -- Cancel then no-ops, because the turn is already gone, while
+      // the renderer's processing reconcile keeps re-asserting the spinner.
+      if (session?.id && shouldSettleUnterminatedTurn({
+        sawComplete: sawCompleteChunk,
+        providerError,
+        alreadySettled: settledOnErrorChunk,
+        queuedChainActive: this.svc.sessionsProcessingQueue.has(session.id),
+      })) {
+        logger.main.warn(
+          `[AIService] Provider stream for ${session.id} ended on an error chunk without completing -- settling session`
+        );
+        try {
+          await stateManager.updateActivity({ sessionId: session.id, status: 'error' });
+          await stateManager.endSession(session.id);
+          await this.svc.hooklessWatcher.stopForSession(session.id);
+          codexEditWindowRegistry.clearSession(session.id);
+        } catch (settleErr) {
+          logger.main.error('[AIService] Failed to settle unterminated provider error:', settleErr);
         }
       }
 
