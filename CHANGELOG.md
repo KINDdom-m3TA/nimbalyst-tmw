@@ -10,11 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+
+### Changed
+<!-- Changes to existing functionality go here -->
+
+### Fixed
+<!-- Bug fixes go here -->
+
+### Removed
+<!-- Removed features go here -->
+
+## [0.72.0] - 2026-08-01
+
+
+### Added
+<!-- New features go here -->
 - The new-worktree dialog can now search branches, narrowing the local and remote lists as you type.
 - The organization window gains rooms and direct messages, a rich message composer with attachments and mentions, live chips for pasted plan and tracker links, unread badges, and desktop notifications for new messages.
 - Tracker items can now open as full documents with collaborative editing, inline comments, consistent editable field chips (including collection creation), keyboard-driven search and filters, shared-document navigation, a side-by-side AI chat panel, and a visible action to copy shareable reopen links.
 - A new install now starts on the onboarding screen and can open a ready-made tutorial project — documents, data, designs, plans, and finished AI sessions to explore — reachable any time from the project manager or Help > Launch Tutorial.
 - Agent sessions can show an MCP status chip in the header listing which servers the session has, which are connected, and which never reached it at all — off by default, enable it under Settings > Agent Features.
+- Quick Open prompt search now distinguishes prompts you wrote from ones an agent sent, with filter controls to narrow to either.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
@@ -49,6 +65,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Projects with many new, uncommitted folders no longer stall while the file tree and changed-files list refresh, and ignored files inside those folders no longer show up as changed.
 - Adding a second account no longer changes which account personal sync runs as.
 - Answering or cancelling a question from an agent now closes it for good, instead of leaving it on screen and bringing it back when you switch sessions and return. (#1116, #773)
+- Attaching a file the agent is not permitted to read now says so and offers an inline retry, and staged attachments are kept out of workspace scans and cleaned up afterwards. (#1086)
+- The sidebar extension panel reopens where you left it after a reload instead of coming back blank. (#1114)
+- Comments whose anchor text was deleted now scroll into view instead of being unreachable, and new comments are composed in the comments panel.
+- The Tracker columns menu now stays inside the window instead of running off the edge.
+- Window icons no longer flash their text labels while the window starts up.
+- Mockups containing XML-incompatible comments can be captured as screenshots again.
+- The organization inbox reconnects on its own after the connection drops.
+- Session titles inside an expanded workstream update as they change instead of showing the old name. (#973)
+- Windows builds sign the app payload before packaging, so the installer no longer reports an unsigned application. (#853)
 
 ### Removed
 <!-- Removed features go here -->
