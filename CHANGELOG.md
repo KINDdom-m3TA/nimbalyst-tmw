@@ -12,18 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- New features go here -->
 - The new-worktree dialog can now search branches, narrowing the local and remote lists as you type.
 - The organization window gains rooms and direct messages, a rich message composer with attachments and mentions, live chips for pasted plan and tracker links, unread badges, and desktop notifications for new messages.
-- Tracker items can now open as full documents with collaborative editing, inline comments, consistent editable field chips (including collection creation), keyboard-driven search and filters, shared-document navigation, a side-by-side AI chat panel, and shareable reopen links.
+- Tracker items can now open as full documents with collaborative editing, inline comments, consistent editable field chips (including collection creation), keyboard-driven search and filters, shared-document navigation, a side-by-side AI chat panel, and a visible action to copy shareable reopen links.
 - A new install now starts on the onboarding screen and can open a ready-made tutorial project — documents, data, designs, plans, and finished AI sessions to explore — reachable any time from the project manager or Help > Launch Tutorial.
 - Agent sessions can show an MCP status chip in the header listing which servers the session has, which are connected, and which never reached it at all — off by default, enable it under Settings > Agent Features.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
 - The Agent mode right-panel control in the title bar is now a split button: one click hides or restores the panel, and the caret picks which panel to show.
+- Organizations are now managed in a dialog in whichever window you are already in — members, projects, settings, billing and the danger zone — leaving the organization window for messages, with a bottom-left profile menu that matches the project window's.
+- Signing in now hands back to the copy of Nimbalyst that started it rather than through a system-wide link handler.
+- Turning an MCP server off for Claude now also turns it off for Claude Code outside Nimbalyst in that project, because Nimbalyst records it the same way Claude Code does.
 
 ### Fixed
 <!-- Bug fixes go here -->
 - Web search and web fetch no longer fail in Claude Code CLI sessions running at max effort.
+- Sharing a plan or decision now produces a link your teammates can actually open, and the sharer edits the same collaborative content everyone else sees instead of quietly staying on their local file. Items shared earlier can be unshared and shared again to pick this up, keeping the content that has been edited since.
+- An AI session that reports its previous conversation has expired now genuinely starts fresh on the next message, instead of repeating the same expiration error forever. (#1098)
 - Tracker items with structured array fields no longer crash when opened, even when older schemas describe those fields as text lists. (#1104)
+- Claude Code sessions now use your existing MCP setup instead of overriding it, so account connectors load again and sessions no longer fail to start on machines with an organization-managed MCP policy. (#1051)
+- HTTP MCP servers that authenticate with a static key now connect directly on Claude Code sessions instead of being routed through an extra helper process.
 - Unified Quick Open tabs now show compact platform keyboard glyphs without shortcut labels overflowing into neighboring tabs.
 - Desktop AI notifications now lead with the originating session name and open that exact session and project, including child sessions, instead of following whichever project is currently visible.
 - File reveal menus now name Finder on macOS, Explorer on Windows, and the containing folder on Linux.
@@ -36,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tracker sidebar type counts no longer read 0 for types that have items, and listing archived items no longer comes back empty.
 - Committing with the AI commit widget no longer leaves the just-committed files showing as deleted or reverted, and no longer discards changes you staged elsewhere at the same time.
 - Projects with many new, uncommitted folders no longer stall while the file tree and changed-files list refresh, and ignored files inside those folders no longer show up as changed.
+- Adding a second account no longer changes which account personal sync runs as.
 
 ### Removed
 <!-- Removed features go here -->
@@ -53,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Queued chat messages now continue through a replacement project window after the original window reloads or closes.
 - Windows and Linux get the File/Edit/View menus back, now drawn in the project window's title bar.
 - Menus and popups that open over the title bar respond to clicks again on Windows and Linux, including "Open folder…" in the project switcher (#1052).
 - Tracker types defined in one project no longer overwrite another open project's identically-named types (#1035).

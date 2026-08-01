@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -31,7 +32,6 @@ function model(
       canCreateRoom: true,
       canCreateDirectMessage: true,
     },
-    adminTabs: [],
   };
 }
 

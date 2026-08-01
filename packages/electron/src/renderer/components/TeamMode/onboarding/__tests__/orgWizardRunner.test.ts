@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ConversationDirectoryEntry } from '../../../../../shared/conversationDirectory';
@@ -12,6 +13,8 @@ import {
 
 function fakeApi(overrides: Partial<OrgWizardApi> = {}): OrgWizardApi {
   return {
+    findPendingInvitation: vi.fn(async () => null),
+    acceptInvitation: vi.fn(async (orgId: string) => ({ orgId })),
     createOrganization: vi.fn(async () => ({ orgId: 'org-1' })),
     inviteMember: vi.fn(async () => {}),
     listConversations: vi.fn(async () => [] as ConversationDirectoryEntry[]),
