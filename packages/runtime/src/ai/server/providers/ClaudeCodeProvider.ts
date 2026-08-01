@@ -770,7 +770,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
 
       // Log the raw input to the SDK (include attachments and mode in metadata for UI restoration)
       if (sessionId) {
-        const metadataToLog: Record<string, any> = {};
+        const metadataToLog: Record<string, any> = this.withPromptProvenanceMetadata(documentContext);
         if (attachments && attachments.length > 0) {
           metadataToLog.attachments = attachments;
         }
@@ -781,9 +781,6 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
         if (teammateMatch) {
           metadataToLog.messageType = 'teammate_message_injected';
           metadataToLog.teammateName = teammateMatch[1];
-        }
-        if (documentContext?.promptOrigin) {
-          metadataToLog.promptOrigin = documentContext.promptOrigin;
         }
         await this.logAgentMessage(sessionId, 'claude-code', 'input', JSON.stringify({
           prompt: message,

@@ -2494,7 +2494,13 @@ app.whenReady().then(async () => {
                 if (!aiSvcRef) {
                     return { triggered: false };
                 }
-                await aiSvcRef.queuePromptForSession(sessionId, prompt, undefined, { promptOrigin: 'wakeup_resume' });
+                await aiSvcRef.queuePromptForSession(sessionId, prompt, undefined, {
+                  promptOrigin: 'wakeup_resume',
+                  promptProvenance: {
+                    actor: 'system',
+                    origin: 'automation',
+                  },
+                });
                 const outcome = await aiSvcRef.driveQueuedPrompts(sessionId, workspacePath, 'wakeup');
                 // A deferred outcome still counts as triggered: the queue driver
                 // owns the retry from here. Reporting false would send the row

@@ -6,6 +6,7 @@
  */
 
 import { toMillis } from '../utils/timestampUtils';
+import type { PromptProvenance } from '@nimbalyst/runtime/ai/server/types';
 
 export interface QueuedPrompt {
   id: string;
@@ -19,6 +20,7 @@ export interface QueuedPrompt {
     fileType?: string;
     /** Identifies the origin of this queued prompt (e.g. 'wakeup_resume' for ScheduleWakeup). */
     promptOrigin?: string;
+    promptProvenance?: PromptProvenance;
   };
   createdAt: number;  // epoch ms
   claimedAt?: number; // epoch ms
@@ -37,6 +39,7 @@ export interface CreateQueuedPromptInput {
     fileType?: string;
     /** Identifies the origin of this queued prompt (e.g. 'wakeup_resume' for ScheduleWakeup). */
     promptOrigin?: string;
+    promptProvenance?: PromptProvenance;
   };
 }
 

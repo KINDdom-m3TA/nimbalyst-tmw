@@ -560,7 +560,7 @@ export const UnifiedQuickOpen: React.FC<UnifiedQuickOpenProps> = ({
           : activeTab === 'sessions'
             ? 'Search sessions... (@ to filter by file edited)'
             : activeTab === 'prompts'
-              ? 'Search your prompts...'
+              ? 'Search prompts... (from:me or from:agent)'
               : 'Search files...';
 
   return (
@@ -2110,7 +2110,23 @@ interface PromptItem {
   sessionTitle: string;
   provider: string;
   parentSessionId?: string | null;
+  promptActor?: 'human' | 'agent';
 }
+
+const parsePromptSearchQuery = (query: string): {
+  text: string;
+  actor?: 'human' | 'agent';
+} => {
+  let actor: 'human' | 'agent' | undefined;
+  const text = query
+    .replace(/\bfrom:(me|agent|agents)\b/gi, (_match, value: string) => {
+      actor = value.toLowerCase() === 'me' ? 'human' : 'agent';
+      return '';
+    })
+    .replace(/\s+/g, ' ')
+    .trim();
+  return { text, actor };
+};
 
 const extractPromptText = (content: string): string => {
   try {
@@ -2180,9 +2196,12 @@ const PromptsPane: React.FC<PromptsPaneProps> = memo(({
   }, [isOpen, workspacePath]);
 
   const displayPrompts = useMemo(() => {
-    if (!visibleQuery.trim()) return allPrompts;
-    const q = visibleQuery.toLowerCase();
-    return allPrompts.filter((p) => extractPromptText(p.content).toLowerCase().includes(q));
+    const { text, actor } = parsePromptSearchQuery(visibleQuery);
+    const q = text.toLowerCase();
+    return allPrompts.filter((prompt) => {
+      if (actor && prompt.promptActor !== actor) return false;
+      return !q || extractPromptText(prompt.content).toLowerCase().includes(q);
+    });
   }, [visibleQuery, allPrompts]);
 
   useEffect(() => {

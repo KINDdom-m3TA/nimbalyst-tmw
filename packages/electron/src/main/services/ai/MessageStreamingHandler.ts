@@ -1371,6 +1371,15 @@ export class MessageStreamingHandler {
         // The transcript parser uses this to render wakeup resumes as a system marker
         // instead of a user-lane message.
         promptOrigin: documentContext?.promptOrigin,
+
+        // Queued orchestration paths provide their own provenance. A direct
+        // ai:sendMessage call is a human composer submission. Older queued
+        // rows intentionally remain unclassified rather than being guessed.
+        promptProvenance: documentContext?.promptProvenance ?? (
+          queuedPromptId
+            ? undefined
+            : { actor: 'human', origin: 'composer' }
+        ),
       };
 
       // Update MCP document state for Claude Code provider so it knows which tools to show

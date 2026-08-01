@@ -287,12 +287,21 @@ export class AIService {
     const { getQueuedPromptsStore } = await import('../RepositoryManager');
     const queueStore = getQueuedPromptsStore();
     const promptId = `meta-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const queuedDocumentContext = documentContext?.promptProvenance
+      ? {
+          ...documentContext,
+          promptProvenance: {
+            ...documentContext.promptProvenance,
+            queuedPromptId: promptId,
+          },
+        }
+      : documentContext;
     const created = await queueStore.create({
       id: promptId,
       sessionId,
       prompt,
       attachments,
-      documentContext,
+      documentContext: queuedDocumentContext,
     });
     return { id: created.id, prompt: created.prompt, createdAt: created.createdAt };
   }
@@ -1105,6 +1114,13 @@ export class AIService {
                     sessionId,
                     prompt: prompt.prompt,
                     attachments: prompt.attachments,
+                    documentContext: {
+                      promptProvenance: {
+                        actor: 'human',
+                        origin: 'mobile',
+                        queuedPromptId: prompt.id,
+                      },
+                    },
                   });
                   newPromptsCount++;
                 }
@@ -2346,13 +2362,22 @@ export class AIService {
       // Generate a unique ID with 'local-' prefix to identify locally-created prompts
       // This prevents the mobile sync handler from re-broadcasting these prompts
       const promptId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const queuedDocumentContext = {
+        ...(documentContext ?? {}),
+        promptProvenance: {
+          actor: 'human' as const,
+          origin: 'composer' as const,
+          ...documentContext?.promptProvenance,
+          queuedPromptId: promptId,
+        },
+      };
 
       const created = await queueStore.create({
         id: promptId,
         sessionId,
         prompt,
         attachments,
-        documentContext,
+        documentContext: queuedDocumentContext,
       });
 
       logger.main.info(`[AIService] createQueuedPrompt: created ${promptId} for session ${sessionId}`);

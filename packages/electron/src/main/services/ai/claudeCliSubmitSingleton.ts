@@ -6,7 +6,7 @@
  * terminal manager, the transcript user-prompt log, and PostHog analytics.
  */
 
-import type { ChatAttachment } from '@nimbalyst/runtime/ai/server/types';
+import type { ChatAttachment, PromptProvenance } from '@nimbalyst/runtime/ai/server/types';
 import { getTerminalSessionManager } from '../TerminalSessionManager';
 import { AnalyticsService } from '../analytics/AnalyticsService';
 import { bucketMessageLength } from './aiServiceUtils';
@@ -27,6 +27,7 @@ export async function submitClaudeCliPromptProduction(
       workspacePath: string;
       prompt: string;
       attachments?: ChatAttachment[];
+      promptProvenance?: PromptProvenance;
     }) => logClaudeCliUserPrompt(p),
     sendAnalytics: ({ messageLength, hasAttachments, attachmentCount, hasDocumentContext }) => {
       // Analytics parity with the SDK path (MessageStreamingHandler fires

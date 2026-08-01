@@ -94,6 +94,7 @@ function setupElectronApiMock(trackerItems: unknown[] = []) {
     isAvailable: vi.fn().mockResolvedValue(false),
     query: vi.fn().mockResolvedValue([]),
   };
+  const listUserPrompts = vi.fn().mockResolvedValue({ success: true, prompts: [] });
 
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
@@ -105,7 +106,7 @@ function setupElectronApiMock(trackerItems: unknown[] = []) {
         openWorkspace: vi.fn().mockResolvedValue({ success: true }),
       },
       ai: {
-        listUserPrompts: vi.fn().mockResolvedValue({ success: true, prompts: [] }),
+        listUserPrompts,
       },
       getRecentWorkspaceFiles: vi.fn().mockResolvedValue([]),
       buildQuickOpenCache: vi.fn().mockResolvedValue(undefined),
@@ -115,7 +116,7 @@ function setupElectronApiMock(trackerItems: unknown[] = []) {
     },
   });
 
-  return { invoke, getRecentWorkspaces, getOpenWorkspaces, appSettings, semanticSearch };
+  return { invoke, getRecentWorkspaces, getOpenWorkspaces, appSettings, semanticSearch, listUserPrompts };
 }
 
 function renderQuickOpen(
@@ -416,6 +417,72 @@ describe('UnifiedQuickOpen — Memory tab', () => {
     });
     expect(semanticSearch.query).not.toHaveBeenCalled();
     expect(screen.queryByRole('group', { name: 'Search in' })).toBeNull();
+  });
+});
+
+describe('UnifiedQuickOpen — Prompts tab', () => {
+  beforeEach(() => {
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+  });
+
+  afterEach(() => {
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  it('filters forward-provenance prompts with from:me and from:agent qualifiers', async () => {
+    const { listUserPrompts } = setupElectronApiMock();
+    listUserPrompts.mockResolvedValue({
+      success: true,
+      prompts: [
+        {
+          id: 'human-prompt',
+          sessionId: 'session-human',
+          content: 'web console design question',
+          createdAt: 3,
+          sessionTitle: 'Human session',
+          provider: 'openai-codex',
+          promptActor: 'human',
+        },
+        {
+          id: 'agent-prompt',
+          sessionId: 'session-agent',
+          content: 'web console implementation task',
+          createdAt: 2,
+          sessionTitle: 'Agent session',
+          provider: 'claude-code',
+          promptActor: 'agent',
+        },
+        {
+          id: 'historical-prompt',
+          sessionId: 'session-old',
+          content: 'web console historical prompt',
+          createdAt: 1,
+          sessionTitle: 'Historical session',
+          provider: 'claude-code',
+        },
+      ],
+    });
+
+    renderQuickOpen({ initialTab: 'prompts' });
+
+    await screen.findByText('web console design question');
+    screen.getByText('web console implementation task');
+    screen.getByText('web console historical prompt');
+
+    typeSearch('from:me web');
+    screen.getByText('web console design question');
+    expect(screen.queryByText('web console implementation task')).toBeNull();
+    expect(screen.queryByText('web console historical prompt')).toBeNull();
+
+    typeSearch('from:agent web');
+    screen.getByText('web console implementation task');
+    expect(screen.queryByText('web console design question')).toBeNull();
+    expect(screen.queryByText('web console historical prompt')).toBeNull();
+
+    typeSearch('web');
+    screen.getByText('web console design question');
+    screen.getByText('web console implementation task');
+    screen.getByText('web console historical prompt');
   });
 });
 
