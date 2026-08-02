@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- The organization Inbox is easier to triage: shorter rows that lead with what each delivery points at — a bug, a decision, the document's own icon — clearer unread state, unread and source-type filters that combine with mentions and assignments, and a click that previews a delivery instead of navigating away from the list.
 
 ### Fixed
 <!-- Bug fixes go here -->
