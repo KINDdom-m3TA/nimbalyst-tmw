@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - Changing a project's permission mode now applies to agent sessions that are already running, instead of taking effect only after they finish.
+- Prompts you queue from the phone now disappear from the queued list once the agent picks them up, instead of staying there for the rest of the session.
 - Tables exported to PDF now span the full page width with content-sized columns, instead of collapsing into a narrow strip; columns you sized with the resizer are still honoured.
 
 ### Removed
