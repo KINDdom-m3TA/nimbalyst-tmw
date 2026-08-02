@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- The organization inbox is reachable from any project in that organization — a title-bar button badges unread messages, and the account menu gains a Messages entry.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
