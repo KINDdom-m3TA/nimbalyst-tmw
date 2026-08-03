@@ -40,7 +40,7 @@ import {
   type CommentsConfig,
 } from '@nimbalyst/runtime/editor';
 import { $getRoot, $setSelection } from 'lexical';
-import { resolveCollabConfigForUri } from '../utils/collabDocumentOpener';
+import { resolveDesktopCollabConfigForUri } from '../utils/collabDocumentOpener';
 import { getBodyDocCache, type BodyDocAcquisition, type BodyDocConfigFactory } from '../services/BodyDocCache';
 import { exportCollabRecoveryPlaintext, getCollabContentAdapter } from '@nimbalyst/collab-adapters';
 import { store } from '@nimbalyst/runtime/store';
@@ -53,7 +53,7 @@ import {
   publishCollabTransportState,
   setCollabOutboxState,
 } from '../store/listeners/collabStateListeners';
-import { getTeamSyncProvider } from '../store/atoms/collabDocuments';
+import { getTeamSyncProviderForScopeKey } from '../store/atoms/collabDocuments';
 import { buildCollabUri } from '../utils/collabUri';
 import { notifyDocumentCommentRecipients } from '../services/documentCommentNotifier';
 import { trackerContentCollabKey } from './trackerContentCollabKey';
@@ -234,7 +234,7 @@ export function useTrackerContentCollab({
     const factory: BodyDocConfigFactory = async (id) => {
       const documentId = `tracker-content/${id}`;
       const uri = `collab://tracker-content/${id}`;
-      const config = await resolveCollabConfigForUri(
+      const config = await resolveDesktopCollabConfigForUri(
         workspacePath,
         uri,
         documentId,
@@ -399,6 +399,12 @@ export function useTrackerContentCollab({
 
     return {
       providerFactory: (id: string, yjsDocMap: Map<string, Doc>): Provider => {
+        // A config-identity change (notably right-panel -> focused document
+        // presentation) can replace CollaborationPlugin's binding while this
+        // adapter and its shared provider stay alive. Each replacement binding
+        // must receive a fresh editorDoc so connect-time replay is observable;
+        // reusing the already-populated claimed doc paints a blank editor.
+        provider.prepareForBinding();
         yjsDocMap.set(id, provider.getYDoc());
         return provider;
       },
@@ -438,7 +444,7 @@ export function useTrackerContentCollab({
       isHydrated: () => syncProviderRef.current?.isSynced() ?? false,
       currentUser,
       getMembers: () => {
-        const teamProvider = getTeamSyncProvider(workspacePath);
+        const teamProvider = getTeamSyncProviderForScopeKey(workspacePath);
         return (teamProvider?.getTeamState()?.members ?? [])
           .filter((member) => member.userId !== currentUser.id)
           .map((member) => ({

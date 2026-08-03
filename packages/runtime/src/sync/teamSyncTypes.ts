@@ -175,6 +175,8 @@ export interface TeamState {
 /** Decrypted document index entry for UI consumption */
 export interface DocIndexEntry {
   documentId: string;
+  /** Owning project carried by the team document index. */
+  projectId?: string | null;
   title: string;
   documentType: string;
   /** Optional V2 type metadata; absent on legacy rows. */

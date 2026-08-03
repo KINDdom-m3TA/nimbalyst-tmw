@@ -212,6 +212,12 @@ export type AwarenessState = Record<string, unknown> & {
    *  the extension path so the SDK hook can dedupe remote collaborators by
    *  stable user id rather than y-protocols clientID. */
   user: { name: string; color: string; id?: string; [k: string]: unknown };
+  /**
+   * Additive, ephemeral departure marker. Updated clients delete the sender's
+   * remote state immediately; older clients ignore it and fall back to their
+   * existing stale-state cleanup while retaining the required user block.
+   */
+  nimbalystDeparture?: { version: 1 };
   /** Lexical-style cursor block (markdown path only). */
   cursor?: {
     anchor: SerializedRelativePosition;

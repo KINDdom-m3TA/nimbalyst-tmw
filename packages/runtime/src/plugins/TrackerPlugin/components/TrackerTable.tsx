@@ -1431,7 +1431,7 @@ export function TrackerTable({
                 </div>
 
                 {/* Right-side metadata: render visible columns (except type/title which are already shown) */}
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="tracker-table-row-meta flex items-center gap-2 shrink-0">
                   {visibleColumnDefs.filter(col => col.id !== 'type' && col.id !== 'title').map(col => {
                     const value = getCellValue(item, col.id);
                     return (

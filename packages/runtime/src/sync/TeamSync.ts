@@ -544,6 +544,7 @@ export class TeamSyncProvider {
       );
       entry = {
         documentId: msg.document.documentId,
+        projectId: msg.document.projectId ?? null,
         title: '',
         documentType: msg.document.documentType,
         metadataVersion: msg.document.metadataVersion,
@@ -700,6 +701,7 @@ export class TeamSyncProvider {
         }
         results.push({
           documentId: e.documentId,
+          projectId: e.projectId ?? null,
           title: '',
           documentType: e.documentType,
           metadataVersion: e.metadataVersion,
@@ -731,6 +733,7 @@ export class TeamSyncProvider {
     );
     return {
       documentId: encrypted.documentId,
+      projectId: encrypted.projectId ?? null,
       title,
       documentType: encrypted.documentType,
       metadataVersion: encrypted.metadataVersion,

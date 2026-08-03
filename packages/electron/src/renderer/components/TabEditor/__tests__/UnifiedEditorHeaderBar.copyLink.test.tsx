@@ -34,6 +34,13 @@ vi.mock('../../../store/atoms/collabDocuments', async () => {
   return {
     sharedDocumentsAtom: atom([]),
     pendingCollabDocumentAtom: atom(null),
+    // Deliberately differs from the explicit link target below. Copy Link must
+    // use the canonical document target, not ambient active-scope identity.
+    activeCollabScopeAtom: atom({
+      scopeKey: '/workspace',
+      orgId: 'different-active-org',
+      indexConfig: { serverUrl: 'wss://test.invalid', userId: 'user-1' },
+    }),
     activeTeamOrgIdAtom: atom(null),
     buildSharedDocumentDeepLink,
   };

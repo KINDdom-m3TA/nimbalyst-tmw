@@ -59,6 +59,7 @@ import {
 } from '../../services/CollaborativeEmbedProviderCache';
 import { resolveSharedSpaceEmbedReference } from './sharedSpaceEmbedResolution';
 import {
+  activeCollabScopeAtom,
   activeTeamOrgIdAtom,
   pendingCollabDocumentAtom,
   sharedDocumentsAtom,
@@ -173,8 +174,15 @@ function openFileInTab(absolutePath: string): void {
 }
 
 function openSharedDocumentInTab(documentId: string): void {
+  const scope = store.get(activeCollabScopeAtom);
+  if (!scope) return;
   store.set(setWindowModeAtom, 'collab');
-  store.set(pendingCollabDocumentAtom, { documentId, analyticsSource: 'embedded_document' });
+  store.set(pendingCollabDocumentAtom, {
+    documentId,
+    scopeKey: scope.scopeKey,
+    orgId: scope.orgId,
+    analyticsSource: 'embedded_document',
+  });
 }
 
 type ReadFileResult =

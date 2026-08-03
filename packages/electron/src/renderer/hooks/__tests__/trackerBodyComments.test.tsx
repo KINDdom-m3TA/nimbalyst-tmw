@@ -51,8 +51,13 @@ vi.mock('@nimbalyst/runtime/sync', async (importOriginal) => {
 });
 
 vi.mock('../../utils/collabDocumentOpener', () => ({
-  resolveCollabConfigForUri: vi.fn(
-    async (_workspacePath: string, _uri: string, documentId: string) => ({
+  resolveDesktopCollabConfigForUri: vi.fn(
+    async (scopeKey: string, _uri: string, documentId: string) => ({
+      scope: {
+        scopeKey,
+        orgId: 'org-1',
+        indexConfig: { serverUrl: 'wss://test.invalid', userId: 'user-1' },
+      },
       serverUrl: 'wss://test.invalid',
       getJwt: async () => 'jwt',
       orgId: 'org-1',
@@ -68,7 +73,7 @@ vi.mock('../../utils/collabDocumentOpener', () => ({
 }));
 
 vi.mock('../../store/atoms/collabDocuments', () => ({
-  getTeamSyncProvider: () => ({
+  getTeamSyncProviderForScopeKey: () => ({
     getTeamState: () => ({
       members: [
         {

@@ -43,7 +43,7 @@ describe('TeamSyncProvider pre-cutover content', () => {
           createdBy: 'user-1',
           createdAt: 1,
           updatedAt: 2,
-          projectId: null,
+          projectId: 'project-plain',
           lastWriterUserId: null,
           parentFolderId: null,
           trashedAt: null,
@@ -56,7 +56,7 @@ describe('TeamSyncProvider pre-cutover content', () => {
           createdBy: 'user-1',
           createdAt: 1,
           updatedAt: 2,
-          projectId: null,
+          projectId: 'project-legacy',
           lastWriterUserId: null,
           parentFolderId: null,
           trashedAt: null,
@@ -65,15 +65,16 @@ describe('TeamSyncProvider pre-cutover content', () => {
     });
 
     const documents = onDocumentsLoaded.mock.calls[0][0] as Array<{
-      documentId: string; title: string; decryptFailed?: boolean;
+      documentId: string; projectId?: string | null; title: string; decryptFailed?: boolean;
     }>;
     const plain = documents.find(d => d.documentId === 'doc-plain');
     const legacy = documents.find(d => d.documentId === 'doc-legacy');
 
-    expect(plain).toMatchObject({ title: 'Readable Title' });
+    expect(plain).toMatchObject({ title: 'Readable Title', projectId: 'project-plain' });
     expect(plain?.decryptFailed).toBeUndefined();
 
     expect(legacy?.decryptFailed).toBe(true);
+    expect(legacy?.projectId).toBe('project-legacy');
     expect(legacy?.title).not.toContain('c2hyZWRkZWQ');
 
     provider.destroy();

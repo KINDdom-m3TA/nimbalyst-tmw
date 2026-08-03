@@ -8,6 +8,14 @@ const mocks = vi.hoisted(() => ({
   resolveMetadata: vi.fn(),
   openDialog: vi.fn(),
   activeTeamOrgIdAtom: Symbol('activeTeamOrgId'),
+  resolveDesktopCollabScope: vi.fn(async () => ({
+    scope: {
+      scopeKey: '/workspace',
+      orgId: 'team-1',
+      indexConfig: { serverUrl: 'ws://sync', userId: 'user-1' },
+    },
+    retryable: false,
+  })),
   trashSharedDocument: vi.fn(),
   createCollaborativeDocument: vi.fn(),
   buildSharedDocumentDeepLink: vi.fn((documentId: string, orgId: string) =>
@@ -32,7 +40,10 @@ vi.mock('@nimbalyst/runtime/store', () => ({
     get: vi.fn((atom: unknown) => (atom === mocks.activeTeamOrgIdAtom ? 'team-1' : '/workspace')),
   },
 }));
-vi.mock('jotai', () => ({ useAtomValue: vi.fn(() => true) }));
+vi.mock('jotai', async (importOriginal) => ({
+  ...await importOriginal<typeof import('jotai')>(),
+  useAtomValue: vi.fn(() => true),
+}));
 vi.mock('../../hooks/useFileActions', () => ({
   useFileActions: () => ({
     openInDefaultApp: vi.fn(),
@@ -45,6 +56,7 @@ vi.mock('../../hooks/useFileActions', () => ({
 vi.mock('../../store/atoms/collabDocuments', () => ({
   workspaceHasTeamAtom: Symbol('workspaceHasTeam'),
   activeTeamOrgIdAtom: mocks.activeTeamOrgIdAtom,
+  resolveDesktopCollabScope: mocks.resolveDesktopCollabScope,
   buildSharedDocumentDeepLink: mocks.buildSharedDocumentDeepLink,
   trashSharedDocument: mocks.trashSharedDocument,
 }));

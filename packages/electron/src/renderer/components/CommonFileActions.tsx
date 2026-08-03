@@ -24,6 +24,7 @@ import {
   activeTeamOrgIdAtom,
   buildSharedDocumentDeepLink,
   trashSharedDocument,
+  resolveDesktopCollabScope,
   workspaceHasTeamAtom,
 } from '../store/atoms/collabDocuments';
 import { activeWorkspacePathAtom } from '../store/atoms/openProjects';
@@ -175,6 +176,17 @@ export function CommonFileActions({
     // base64 images, mindmap's no-attachments) are handled differently or
     // not at all; we skip the markdown rewriter for them entirely.
     const workspacePath = store.get(activeWorkspacePathAtom);
+    const scope = workspacePath
+      ? (await resolveDesktopCollabScope(workspacePath)).scope
+      : null;
+    if (!scope) {
+      trackShareFailure('Collaboration scope is unavailable.');
+      errorNotificationService.showError(
+        'Could not share to team',
+        'The active team collaboration scope is unavailable.',
+      );
+      return;
+    }
     const normalizedFolder = normalizeCollabPath(folderPath);
     const trimmedName = sharedName.trim() || fileName;
     // joinCollabPath handles empty parent -> root and normalizes separators.
@@ -276,7 +288,7 @@ export function CommonFileActions({
         parentFolderId: folderId,
         readSourceContent: candidate =>
           readShareToTeamSourceContent(candidate.absolutePath, candidate.descriptor),
-        createDocument: createCollaborativeDocument,
+        createDocument: input => createCollaborativeDocument({ ...input, scope }),
         generateId: () => crypto.randomUUID(),
         resolveOrgId: async () => {
           const orgId = store.get(activeTeamOrgIdAtom);
@@ -298,6 +310,7 @@ export function CommonFileActions({
     let createdDocument;
     try {
       createdDocument = await createCollaborativeDocument({
+        scope,
         descriptor,
         requestedName: trimmedName,
         parentFolderId: folderId,
@@ -325,7 +338,7 @@ export function CommonFileActions({
       // team is left with orphaned embeds whose parent never existed.
       for (const orphanId of embeddedShareResult.createdDocumentIds) {
         try {
-          trashSharedDocument(orphanId);
+          trashSharedDocument(scope, orphanId);
         } catch (rollbackError) {
           console.warn('[CommonFileActions] Could not roll back linked document:', rollbackError);
         }

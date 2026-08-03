@@ -54,17 +54,26 @@ function ensureActiveWorkspace(workspacePath: string): void {
 }
 
 function applySharedDocPayload(data: SharedDocPayload): void {
-  if (!data?.documentId || !data?.workspacePath) return;
+  if (!data?.documentId || !data?.orgId || !data?.workspacePath) return;
   ensureActiveWorkspace(data.workspacePath);
   store.set(setWindowModeAtom, 'collab');
-  store.set(pendingCollabDocumentAtom, { documentId: data.documentId, analyticsSource: 'deep_link' });
+  store.set(pendingCollabDocumentAtom, {
+    scopeKey: data.workspacePath,
+    orgId: data.orgId,
+    documentId: data.documentId,
+    analyticsSource: 'deep_link',
+  });
 }
 
 function applySharedFolderPayload(data: SharedFolderPayload): void {
-  if (!data?.folderId || !data?.workspacePath) return;
+  if (!data?.folderId || !data?.orgId || !data?.workspacePath) return;
   ensureActiveWorkspace(data.workspacePath);
   store.set(setWindowModeAtom, 'collab');
-  store.set(pendingCollabFolderAtom, { folderId: data.folderId });
+  store.set(pendingCollabFolderAtom, {
+    scopeKey: data.workspacePath,
+    orgId: data.orgId,
+    folderId: data.folderId,
+  });
 }
 
 function applyTrackerPayload(data: TrackerPayload): void {

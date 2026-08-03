@@ -38,12 +38,11 @@ import { isCollabUri, parseCollabUri } from '../utils/collabUri';
 import {
   sharedDocumentsAtom,
   sharedFoldersAtom,
-  activeTeamOrgIdAtom,
+  activeCollabScopeAtom,
   buildSharedDocumentDeepLink,
   pendingCollabDocumentAtom,
   type SharedFolder,
 } from '../store/atoms/collabDocuments';
-import { activeWorkspacePathAtom } from '../store/atoms/openProjects';
 import { setWindowModeAtom } from '../store/atoms/windowMode';
 import { store } from '../store';
 
@@ -125,11 +124,10 @@ function DocumentLinkPluginWrapper() {
   const isCollab = documentPath ? isCollabUri(documentPath) : false;
   const sharedDocuments = useAtomValue(sharedDocumentsAtom);
   const sharedFolders = useAtomValue(sharedFoldersAtom);
-  const orgId = useAtomValue(activeTeamOrgIdAtom);
-  const workspacePath = useAtomValue(activeWorkspacePathAtom);
+  const scope = useAtomValue(activeCollabScopeAtom);
 
   const collabReferenceSource = useMemo<CollabReferenceSource | null>(() => {
-    if (!isCollab || !orgId || !workspacePath || !documentPath) {
+    if (!isCollab || !scope || !documentPath) {
       return null;
     }
 
@@ -149,7 +147,7 @@ function DocumentLinkPluginWrapper() {
           .map((doc) => ({
             documentId: doc.documentId,
             title: doc.title || 'Untitled',
-            target: buildSharedDocumentDeepLink(doc.documentId, orgId),
+            target: buildSharedDocumentDeepLink(doc.documentId, scope.orgId),
             folderPath: doc.parentFolderId
               ? breadcrumbs.get(doc.parentFolderId) || undefined
               : undefined,
@@ -164,10 +162,15 @@ function DocumentLinkPluginWrapper() {
         // the pending atom. CollabMode consumes it, opening (or focusing) the
         // shared doc with its own tab context + dedup.
         store.set(setWindowModeAtom, 'collab');
-        store.set(pendingCollabDocumentAtom, { documentId: targetDocumentId, analyticsSource: 'deep_link' });
+        store.set(pendingCollabDocumentAtom, {
+          documentId: targetDocumentId,
+          scopeKey: scope.scopeKey,
+          orgId: scope.orgId,
+          analyticsSource: 'deep_link',
+        });
       },
     };
-  }, [isCollab, orgId, workspacePath, documentPath, sharedDocuments, sharedFolders]);
+  }, [isCollab, scope, documentPath, sharedDocuments, sharedFolders]);
 
   return (
     <DocumentLinkPlugin

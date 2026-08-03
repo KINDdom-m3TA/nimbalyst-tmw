@@ -58,7 +58,15 @@
  * destroy it on release.
  */
 
-import { DocumentSyncProvider } from '@nimbalyst/runtime/sync';
+import {
+  DocumentSyncProvider,
+} from '@nimbalyst/runtime/sync';
+import {
+  COLLAB_CONNECTION_DIAGNOSTICS_COMPILED,
+  emitCollabConnectionEvent,
+  getCollabConnectionInstanceId,
+  setCollabConnectionDiagnosticContext,
+} from '@nimbalyst/runtime/sync/collabConnectionDiagnostics';
 import { CollabLexicalProvider } from '@nimbalyst/runtime/collab-lexical';
 import type {
   AwarenessState,
@@ -194,8 +202,15 @@ export class BodyDocCache {
     const entry = await this.ensureEntry(itemId, factory);
     if (!entry) return null;
 
+    const previousRefCount = entry.refCount;
     entry.refCount += 1;
     entry.lastTouchedAt = Date.now();
+    if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+      emitCollabConnectionEvent(entry.syncProvider, 'BodyDocCache', 'acquire', {
+        fromRefCount: previousRefCount,
+        refCount: entry.refCount,
+      });
+    }
     this.clearIdleTimer(entry);
     // Pinning is done; safe to evict other unpinned entries now.
     this.maybeEvictForCap();
@@ -266,6 +281,12 @@ export class BodyDocCache {
    */
   dispose(): void {
     for (const entry of this.entries.values()) {
+      if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+        emitCollabConnectionEvent(entry.syncProvider, 'BodyDocCache', 'destroy', {
+          reason: 'dispose',
+          refCount: entry.refCount,
+        });
+      }
       this.clearIdleTimer(entry);
       try { entry.awarenessUnsubscribe?.(); } catch { /* ignore */ }
       entry.awarenessUnsubscribe = null;
@@ -286,10 +307,35 @@ export class BodyDocCache {
     factory: BodyDocConfigFactory,
   ): Promise<CacheEntry | null> {
     const existing = this.entries.get(itemId);
-    if (existing) return existing;
+    if (existing) {
+      if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+        emitCollabConnectionEvent(existing.syncProvider, 'BodyDocCache', 'warm-hit', {
+          refCount: existing.refCount,
+          idleTimerActive: existing.idleTimer !== null,
+        });
+      }
+      return existing;
+    }
 
     const inflight = this.pending.get(itemId);
-    if (inflight) return inflight.catch(() => null);
+    if (inflight) {
+      if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+        emitCollabConnectionEvent(this, 'BodyDocCache', 'pending-hit', {
+          cache: 'body-doc',
+          cacheKey: itemId,
+          itemId,
+        });
+      }
+      return inflight.catch(() => null);
+    }
+
+    if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+      emitCollabConnectionEvent(this, 'BodyDocCache', 'cold-construct-start', {
+        cache: 'body-doc',
+        cacheKey: itemId,
+        itemId,
+      });
+    }
 
     const promise = this.createEntry(itemId, factory).finally(() => {
       this.pending.delete(itemId);
@@ -358,6 +404,22 @@ export class BodyDocCache {
     };
 
     entry.syncProvider = new DocumentSyncProvider(cacheConfig);
+    if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+      setCollabConnectionDiagnosticContext(entry.syncProvider, {
+        cache: 'body-doc',
+        cacheKey: itemId,
+        documentId: config.documentId,
+        itemId,
+        shared: true,
+      });
+      emitCollabConnectionEvent(entry.syncProvider, 'BodyDocCache', 'cold-construct', {
+        refCount: entry.refCount,
+        syncProviderId: getCollabConnectionInstanceId(
+          entry.syncProvider,
+          'DocumentSyncProvider',
+        ),
+      });
+    }
     if (typeof entry.syncProvider.onAwarenessChange === 'function') {
       entry.awarenessUnsubscribe = entry.syncProvider.onAwarenessChange((states) => {
         entry.lastAwarenessStates = new Map(states);
@@ -379,15 +441,33 @@ export class BodyDocCache {
   }
 
   private releaseEntry(entry: CacheEntry): void {
+    const previousRefCount = entry.refCount;
     entry.refCount = Math.max(0, entry.refCount - 1);
     entry.lastTouchedAt = Date.now();
+    if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+      emitCollabConnectionEvent(entry.syncProvider, 'BodyDocCache', 'release', {
+        fromRefCount: previousRefCount,
+        refCount: entry.refCount,
+      });
+    }
     if (entry.refCount === 0) {
       // Start the idle timer. On expiry the entry is destroyed.
       this.clearIdleTimer(entry);
+      if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+        emitCollabConnectionEvent(entry.syncProvider, 'BodyDocCache', 'idle-timer-start', {
+          refCount: entry.refCount,
+          timeoutMs: this.idleTimeoutMs,
+        });
+      }
       entry.idleTimer = setTimeout(() => {
         // Guard: a late acquire may have raced the timer.
         if (entry.refCount === 0) {
-          this.destroyEntry(entry);
+          if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+            emitCollabConnectionEvent(entry.syncProvider, 'BodyDocCache', 'idle-timer-expire', {
+              refCount: entry.refCount,
+            });
+          }
+          this.destroyEntry(entry, 'idle-timeout');
         }
       }, this.idleTimeoutMs);
     }
@@ -395,12 +475,23 @@ export class BodyDocCache {
 
   private clearIdleTimer(entry: CacheEntry): void {
     if (entry.idleTimer !== null) {
+      if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+        emitCollabConnectionEvent(entry.syncProvider, 'BodyDocCache', 'idle-timer-cancel', {
+          refCount: entry.refCount,
+        });
+      }
       clearTimeout(entry.idleTimer);
       entry.idleTimer = null;
     }
   }
 
-  private destroyEntry(entry: CacheEntry): void {
+  private destroyEntry(entry: CacheEntry, reason = 'destroy'): void {
+    if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+      emitCollabConnectionEvent(entry.syncProvider, 'BodyDocCache', 'destroy', {
+        reason,
+        refCount: entry.refCount,
+      });
+    }
     this.clearIdleTimer(entry);
     try { entry.awarenessUnsubscribe?.(); } catch { /* ignore */ }
     entry.awarenessUnsubscribe = null;
@@ -426,7 +517,14 @@ export class BodyDocCache {
         }
       }
       if (!oldest) return; // every entry pinned; soft cap exceeded
-      this.destroyEntry(oldest);
+      if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+        emitCollabConnectionEvent(oldest.syncProvider, 'BodyDocCache', 'lru-evict', {
+          refCount: oldest.refCount,
+          cacheSize: this.entries.size,
+          lruCap: this.lruCap,
+        });
+      }
+      this.destroyEntry(oldest, 'lru-cap');
     }
   }
 
@@ -446,8 +544,23 @@ export class BodyDocCache {
         // Start the idle timer right away so prewarm-only entries don't
         // pin the cache indefinitely.
         if (entry.refCount === 0 && entry.idleTimer === null) {
+          if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+            emitCollabConnectionEvent(entry.syncProvider, 'BodyDocCache', 'idle-timer-start', {
+              refCount: entry.refCount,
+              timeoutMs: this.idleTimeoutMs,
+              source: 'prewarm',
+            });
+          }
           entry.idleTimer = setTimeout(() => {
-            if (entry.refCount === 0) this.destroyEntry(entry);
+            if (entry.refCount === 0) {
+              if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+                emitCollabConnectionEvent(entry.syncProvider, 'BodyDocCache', 'idle-timer-expire', {
+                  refCount: entry.refCount,
+                  source: 'prewarm',
+                });
+              }
+              this.destroyEntry(entry, 'idle-timeout');
+            }
           }, this.idleTimeoutMs);
         }
       }

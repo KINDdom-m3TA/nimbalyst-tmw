@@ -36,7 +36,7 @@ import { FilePathBreadcrumb } from '../common/FilePathBreadcrumb';
 import { dialogRef, DIALOG_IDS } from '../../dialogs';
 import type { ShareDialogData } from '../../dialogs';
 import { useLocalFileSharedDocLink } from '../../hooks/useCollabLocalOrigin';
-import { sharedDocumentsAtom, pendingCollabDocumentAtom, activeTeamOrgIdAtom, buildSharedDocumentDeepLink } from '../../store/atoms/collabDocuments';
+import { sharedDocumentsAtom, pendingCollabDocumentAtom, activeCollabScopeAtom, activeTeamOrgIdAtom, buildSharedDocumentDeepLink } from '../../store/atoms/collabDocuments';
 import { setWindowModeAtom } from '../../store/atoms/windowMode';
 import { getCollabNodeName, getCollabParentPath, normalizeCollabPath } from '../CollabMode/collabTree';
 
@@ -207,6 +207,7 @@ export const UnifiedEditorHeaderBar: React.FC<UnifiedEditorHeaderBarProps> = ({
   const sharedDocLink = useLocalFileSharedDocLink(workspaceId ?? '', filePath);
   const sharedDocuments = useAtomValue(sharedDocumentsAtom);
   const teamOrgId = useAtomValue(activeTeamOrgIdAtom);
+  const activeCollabScope = useAtomValue(activeCollabScopeAtom);
   const setWindowMode = useSetAtom(setWindowModeAtom);
   const setPendingCollabDoc = useSetAtom(pendingCollabDocumentAtom);
 
@@ -234,10 +235,12 @@ export const UnifiedEditorHeaderBar: React.FC<UnifiedEditorHeaderBarProps> = ({
 
   const handleOpenSharedDoc = useCallback(() => {
     const documentId = sharedDocLink.binding?.documentId;
-    if (!documentId) return;
+    if (!documentId || !activeCollabScope) return;
     setWindowMode('collab');
     setPendingCollabDoc({
       documentId,
+      scopeKey: activeCollabScope.scopeKey,
+      orgId: activeCollabScope.orgId,
       documentType: sharedDocument?.documentType ?? sharedDocLink.binding?.documentType,
       analyticsSource: 'home',
     });
@@ -245,6 +248,7 @@ export const UnifiedEditorHeaderBar: React.FC<UnifiedEditorHeaderBarProps> = ({
   }, [
     sharedDocLink.binding?.documentId,
     sharedDocLink.binding?.documentType,
+    activeCollabScope,
     sharedDocument?.documentType,
     setWindowMode,
     setPendingCollabDoc,

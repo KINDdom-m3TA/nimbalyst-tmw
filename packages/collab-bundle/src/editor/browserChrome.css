@@ -1,0 +1,132 @@
+.collab-bundle-editor {
+  container-name: collab-bundle-editor;
+  container-type: inline-size;
+  block-size: 100%;
+  inline-size: 100%;
+  min-block-size: 0;
+  min-inline-size: 0;
+  overflow: hidden;
+  background: var(--nim-bg);
+  color: var(--nim-text);
+}
+
+.collab-bundle-editor > .nimbalyst-editor,
+.collab-bundle-editor .editor-shell,
+.collab-bundle-editor .editor-container {
+  min-block-size: 0;
+  min-inline-size: 0;
+}
+
+.collab-bundle-editor .editor-scroller.select-text {
+  user-select: text;
+}
+
+/* Announcements are for assistive tech only: kept in the accessibility tree,
+   out of the visual layout, and never `display: none` (which would remove the
+   live region entirely). */
+.collab-bundle-presence-announcements {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The runtime toolbar relies on the user-agent focus ring, which is drawn
+   outside the button box and is therefore clipped by the toolbar's
+   `overflow-y: hidden` (there are only ~3px of vertical slack). A negative
+   offset draws the ring inside the button, where nothing can clip it, and
+   `--nim-border-focus` keeps it visible on dark themes where the UA blue is
+   not. */
+.collab-bundle-editor .toolbar button:focus-visible,
+.collab-bundle-editor .dropdown .item:focus-visible {
+  outline: 2px solid var(--nim-border-focus, #3b82f6);
+  outline-offset: -2px;
+}
+
+/* Remote cursors -----------------------------------------------------------
+   `@lexical/yjs` builds the cursor layer imperatively and writes every style
+   inline, so overriding it needs `!important`. The shape it produces is
+   container > div > span (one selection rectangle) > span (the caret, on the
+   last rectangle only) > span (the name label).
+
+   The label ships as white text on the participant's color. Every color in the
+   presence palette lands between 2.9:1 and 4.7:1 against white, so most names
+   fail WCAG AA at 12px bold. The same palette carries black text at 4.5:1 or
+   better, so the identity color is kept and the name becomes legible. */
+.collab-bundle-editor .collab-cursors-container > div > span > span > span {
+  color: #000 !important;
+  border-radius: 3px;
+}
+
+/* The one animation on this surface: remote cursors cross-fade when they go
+   idle. */
+@media (prefers-reduced-motion: reduce) {
+  .collab-bundle-editor .collab-cursors-container > div > span {
+    transition: none !important;
+  }
+}
+
+/* Narrow layout ------------------------------------------------------------
+   The runtime hides toolbar groups through `.editor-width-*` classes that a
+   ResizeObserver puts on the editor shell, and its ladder drops the formatting
+   group first: below 1024px a browser tab loses bold, italic, underline,
+   inline code and link, while the Insert and extra-styles menus survive down
+   to 600px, and below 480px the code-language picker — the only way to set a
+   fenced block's language — goes too. That ordering is upside down for a
+   surface whose whole purpose is writing markdown.
+
+   Inside this surface the container query below is the single authority, so
+   the runtime ladder is neutralized first. The attribute selector is what
+   carries the specificity to beat `.nimbalyst-editor.editor-width-medium ...`,
+   and it also documents exactly which rules are being overridden. */
+.collab-bundle-editor .nimbalyst-editor[class*='editor-width-'] .toolbar .toolbar-formatting,
+.collab-bundle-editor .nimbalyst-editor[class*='editor-width-'] .toolbar .toolbar-code-language,
+.collab-bundle-editor .nimbalyst-editor[class*='editor-width-'] .toolbar .toolbar-additional,
+.collab-bundle-editor .nimbalyst-editor[class*='editor-width-'] .toolbar .toolbar-insert {
+  display: flex;
+}
+
+.collab-bundle-editor .nimbalyst-editor[class*='editor-width-'] .toolbar .toolbar-insert-divider {
+  display: block;
+}
+
+/* Least essential first. Formatting and the code-language picker are never
+   hidden; below the last breakpoint the toolbar scrolls horizontally rather
+   than dropping controls silently. */
+@container collab-bundle-editor (max-width: 760px) {
+  .collab-bundle-editor .nimbalyst-editor[class*='editor-width-'] .toolbar .toolbar-additional {
+    display: none;
+  }
+}
+
+@container collab-bundle-editor (max-width: 560px) {
+  .collab-bundle-editor .nimbalyst-editor[class*='editor-width-'] .toolbar .toolbar-insert,
+  .collab-bundle-editor .nimbalyst-editor[class*='editor-width-'] .toolbar .toolbar-insert-divider {
+    display: none;
+  }
+}
+
+/* The block-format dropdown's label is the only place the current block type is
+   named ("Normal", "Heading 1", "Bulleted List"); without it the control is an
+   unlabelled icon. The runtime hides it from a viewport `@media screen and
+   (max-width: 1100px)` with `!important` — the wrong axis for a browser tab,
+   where the label vanishes because the *window* is narrow even though the
+   editor has room, and would survive once a sidebar squeezes the editor. Take
+   it back onto the container axis; the `!important` is only here to answer the
+   `!important` it overrides. */
+.collab-bundle-editor .nimbalyst-editor .toolbar .block-controls .dropdown-button-text {
+  display: inline-block !important;
+}
+
+/* Reclaim that label before dropping any control: the icon plus chevron still
+   identifies the menu, and the accessible name lives on the button. */
+@container collab-bundle-editor (max-width: 460px) {
+  .collab-bundle-editor .nimbalyst-editor .toolbar .block-controls .dropdown-button-text {
+    display: none !important;
+  }
+}

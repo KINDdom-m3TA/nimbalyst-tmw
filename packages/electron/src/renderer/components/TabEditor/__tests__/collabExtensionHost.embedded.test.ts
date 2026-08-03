@@ -32,7 +32,11 @@ describe('createCollabExtensionHost embedded mode', () => {
       isActive: true,
       workspaceId: '/workspace',
       activeConfig: {
-        workspacePath: '/workspace',
+        scope: {
+          scopeKey: '/workspace',
+          orgId: 'team-1',
+          indexConfig: { serverUrl: 'ws://sync', userId: 'user-1' },
+        },
         orgId: 'team-1',
         documentId: 'mockup-1',
         title: 'Wireframe',

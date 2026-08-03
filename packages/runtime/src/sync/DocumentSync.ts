@@ -35,6 +35,11 @@ import type {
 import { appendSyncClientParams } from './syncClientInfo';
 import { encodeDocumentRoomId, isValidCollabDocumentId } from './collabDocumentId';
 import { isConfirmedOutboxRevocationCode } from './OutboxDrainer';
+import {
+  COLLAB_CONNECTION_DIAGNOSTICS_COMPILED,
+  emitCollabConnectionEvent,
+  setCollabConnectionDiagnosticContext,
+} from './collabConnectionDiagnostics';
 
 // ============================================================================
 // Base64 / Encryption Utilities
@@ -219,6 +224,17 @@ export class DocumentSyncProvider {
 
   constructor(config: DocumentSyncConfig) {
     this.config = config;
+    if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+      setCollabConnectionDiagnosticContext(this, {
+        documentId: config.documentId,
+        shared: false,
+      });
+      emitCollabConnectionEvent(this, 'DocumentSyncProvider', 'construct', {
+        orgId: config.orgId,
+        hasReplica: Boolean(config.replica),
+        ownsConfiguredYDoc: !config.replica && !config.ydoc,
+      });
+    }
     this.ydoc = config.replica?.getYDoc() ?? config.ydoc ?? new Y.Doc();
     this.ownsYDoc = !config.replica && !config.ydoc;
     this.setupUpdateObserver();
@@ -262,8 +278,28 @@ export class DocumentSyncProvider {
   private connecting = false;
 
   async connect(): Promise<void> {
-    if (this.destroyed) return;
-    if (this.ws || this.connecting) return;
+    if (this.destroyed) {
+      if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+        emitCollabConnectionEvent(this, 'DocumentSyncProvider', 'connect-skipped', {
+          reason: 'destroyed',
+        });
+      }
+      return;
+    }
+    if (this.ws || this.connecting) {
+      if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+        emitCollabConnectionEvent(this, 'DocumentSyncProvider', 'connect-skipped', {
+          reason: this.ws ? 'socket-present' : 'already-connecting',
+        });
+      }
+      return;
+    }
+
+    if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+      emitCollabConnectionEvent(this, 'DocumentSyncProvider', 'connect', {
+        reconnectAttempt: this.reconnectAttempt,
+      });
+    }
 
     this.suppressReconnect = false;
     this.connecting = true;
@@ -334,10 +370,20 @@ export class DocumentSyncProvider {
       : new WebSocket(url);
     this.ws = ws;
     this.connecting = false;
+    if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+      emitCollabConnectionEvent(this, 'DocumentSyncProvider', 'socket-create', {
+        reconnectAttempt: this.reconnectAttempt,
+      });
+    }
 
     ws.addEventListener('open', () => {
       if (this.ws !== ws) return;
       console.log('[DocumentSync] WebSocket open');
+      if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+        emitCollabConnectionEvent(this, 'DocumentSyncProvider', 'socket-open', {
+          reconnectAttempt: this.reconnectAttempt,
+        });
+      }
       this.suppressReconnect = false;
       this.reconnectAttempt = 0;
       this.setStatus('syncing');
@@ -356,6 +402,12 @@ export class DocumentSyncProvider {
       // clobber the new socket.
       if (this.ws !== ws) return;
       console.log('[DocumentSync] WebSocket closed, code:', event.code, 'reason:', event.reason);
+      if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+        emitCollabConnectionEvent(this, 'DocumentSyncProvider', 'socket-close', {
+          code: event.code,
+          reason: event.reason,
+        });
+      }
       // NIM-949: the proxy encodes an auth-style upgrade rejection as
       // `auth-rejected:<status>`. Force a fresh JWT exchange on the next attempt
       // so we don't re-present the same rejected (wrong-org / expired) token.
@@ -368,6 +420,9 @@ export class DocumentSyncProvider {
     ws.addEventListener('error', (event) => {
       if (this.ws !== ws) return;
       console.error('[DocumentSync] WebSocket error:', event);
+      if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+        emitCollabConnectionEvent(this, 'DocumentSyncProvider', 'socket-error');
+      }
       this.handleDisconnect();
     });
   }
@@ -376,6 +431,12 @@ export class DocumentSyncProvider {
    * Disconnect from the DocumentRoom.
    */
   disconnect(): void {
+    if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+      emitCollabConnectionEvent(this, 'DocumentSyncProvider', 'disconnect', {
+        hadSocket: Boolean(this.ws),
+        wasConnecting: this.connecting,
+      });
+    }
     this.cancelReconnect();
     this.clearReplayAckTimer();
     this.clearCompactionAckTimer();
@@ -403,6 +464,11 @@ export class DocumentSyncProvider {
 
   /** Destroy this network attachment. Externally supplied Y.Docs survive. */
   destroy(): void {
+    if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+      emitCollabConnectionEvent(this, 'DocumentSyncProvider', 'destroy', {
+        status: this.status,
+      });
+    }
     this.destroyed = true;
     this.disconnect();
     this.teardownUpdateObserver();
@@ -540,6 +606,17 @@ export class DocumentSyncProvider {
     return base64ToUint8Array(encrypted);
   }
 
+  private sendAwarenessImmediately(state: AwarenessState): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    const jsonBytes = new TextEncoder().encode(JSON.stringify(state));
+    this.send({
+      type: 'docAwareness',
+      encryptedState: uint8ArrayToBase64(jsonBytes),
+      iv: '',
+    });
+    return true;
+  }
+
   /**
    * Send awareness state to other connected clients. Awareness is plaintext
    * over TLS now that team custody is server-managed; the empty-iv sentinel
@@ -547,15 +624,22 @@ export class DocumentSyncProvider {
    * Sends immediately (no throttling). Use setLocalAwareness() for throttled updates.
    */
   async sendAwareness(state: AwarenessState): Promise<void> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.sendAwarenessImmediately(state);
+  }
 
-    const jsonBytes = new TextEncoder().encode(JSON.stringify(state));
-    const { encrypted, iv } = await this.encryptForWire(jsonBytes);
-
-    this.send({
-      type: 'docAwareness',
-      encryptedState: encrypted,
-      iv,
+  /**
+   * Synchronously put an additive departure marker on the open socket.
+   *
+   * This deliberately bypasses both the 500ms awareness throttle and the
+   * async encryptForWire seam: awareness is already plaintext-over-TLS with
+   * an empty IV. Teardown can therefore send this frame before closing the
+   * socket, including from pagehide where awaiting is unreliable.
+   */
+  sendAwarenessDeparture(user: AwarenessState['user']): boolean {
+    this.clearAwarenessThrottle();
+    return this.sendAwarenessImmediately({
+      user: { ...user },
+      nimbalystDeparture: { version: 1 },
     });
   }
 
@@ -1087,8 +1171,13 @@ export class DocumentSyncProvider {
       const state: AwarenessState = JSON.parse(
         new TextDecoder().decode(stateBytes)
       );
-      this.awarenessStates.set(msg.fromUserId, state);
-      this.awarenessTimestamps.set(msg.fromUserId, Date.now());
+      if (state.nimbalystDeparture?.version === 1) {
+        this.awarenessStates.delete(msg.fromUserId);
+        this.awarenessTimestamps.delete(msg.fromUserId);
+      } else {
+        this.awarenessStates.set(msg.fromUserId, state);
+        this.awarenessTimestamps.set(msg.fromUserId, Date.now());
+      }
       this.notifyAwarenessListeners();
     } catch (err) {
       console.error('[DocumentSync] Failed to decrypt awareness:', err);
@@ -1175,7 +1264,14 @@ export class DocumentSyncProvider {
 
   private setStatus(status: DocumentSyncStatus): void {
     if (this.status === status) return;
+    const previousStatus = this.status;
     this.status = status;
+    if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+      emitCollabConnectionEvent(this, 'DocumentSyncProvider', 'status', {
+        from: previousStatus,
+        to: status,
+      });
+    }
     this.config.onStatusChange?.(status);
   }
 
@@ -1423,6 +1519,11 @@ export class DocumentSyncProvider {
 
   private handleDisconnect(): void {
     const shouldReconnect = !this.suppressReconnect;
+    if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+      emitCollabConnectionEvent(this, 'DocumentSyncProvider', 'socket-detach', {
+        shouldReconnect,
+      });
+    }
     this.suppressReconnect = false;
     this.clearReplayAckTimer();
     this.ws = null;
@@ -1518,7 +1619,14 @@ export class DocumentSyncProvider {
   }
 
   private scheduleReconnect(): void {
-    if (this.destroyed || this.reconnectTimer) return;
+    if (this.destroyed || this.reconnectTimer) {
+      if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+        emitCollabConnectionEvent(this, 'DocumentSyncProvider', 'reconnect-skipped', {
+          reason: this.destroyed ? 'destroyed' : 'timer-present',
+        });
+      }
+      return;
+    }
 
     const delay = Math.min(
       DocumentSyncProvider.RECONNECT_BASE_MS * Math.pow(2, this.reconnectAttempt),
@@ -1528,10 +1636,22 @@ export class DocumentSyncProvider {
     const jittered = delay * (0.5 + Math.random());
     this.reconnectAttempt++;
 
+    if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+      emitCollabConnectionEvent(this, 'DocumentSyncProvider', 'reconnect-scheduled', {
+        attempt: this.reconnectAttempt,
+        delayMs: Math.round(jittered),
+      });
+    }
+
     console.log(`[DocumentSync] Reconnecting in ${Math.round(jittered / 1000)}s (attempt ${this.reconnectAttempt})`);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (!this.destroyed) {
+        if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+          emitCollabConnectionEvent(this, 'DocumentSyncProvider', 'reconnect-fired', {
+            attempt: this.reconnectAttempt,
+          });
+        }
         this.connect().catch(err => {
           console.error('[DocumentSync] Reconnect failed:', err);
         });
@@ -1541,6 +1661,11 @@ export class DocumentSyncProvider {
 
   private cancelReconnect(): void {
     if (this.reconnectTimer) {
+      if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
+        emitCollabConnectionEvent(this, 'DocumentSyncProvider', 'reconnect-cancelled', {
+          attempt: this.reconnectAttempt,
+        });
+      }
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }

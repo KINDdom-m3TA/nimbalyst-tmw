@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { store } from '@nimbalyst/runtime/store';
 import { activeWorkspacePathAtom } from '../../atoms/openProjects';
+import { pendingCollabDocumentAtom } from '../../atoms/collabDocuments';
 import {
   trackerModeDocumentItemIdAtom,
   trackerModeLayoutAtom,
@@ -19,6 +20,7 @@ describe('tracker deep-link routing', () => {
     pendingTrackerPayload = null;
     store.set(activeWorkspacePathAtom, '/workspace/source');
     store.set(windowModeAtom, 'files');
+    store.set(pendingCollabDocumentAtom, null);
     store.set(trackerModeLayoutAtom, {
       ...store.get(trackerModeLayoutAtom),
       selectedType: 'plan',
@@ -51,6 +53,26 @@ describe('tracker deep-link routing', () => {
     cleanup = undefined;
     store.set(activeWorkspacePathAtom, null);
     store.set(windowModeAtom, 'files');
+    store.set(pendingCollabDocumentAtom, null);
+  });
+
+  it('binds a shared-document link to the workspace scope selected by the desktop host', () => {
+    cleanup = initDeepLinkListeners();
+
+    handlers['deep-link:open-shared-document']({
+      documentId: 'doc-target',
+      orgId: 'org-target',
+      workspacePath: '/workspace/target',
+    });
+
+    expect(store.get(activeWorkspacePathAtom)).toBe('/workspace/target');
+    expect(store.get(windowModeAtom)).toBe('collab');
+    expect(store.get(pendingCollabDocumentAtom)).toMatchObject({
+      documentId: 'doc-target',
+      scopeKey: '/workspace/target',
+      orgId: 'org-target',
+      analyticsSource: 'deep_link',
+    });
   });
 
   it('keeps links without view on the plain tracker selection path', () => {
