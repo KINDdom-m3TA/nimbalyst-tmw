@@ -1244,7 +1244,7 @@ const REQUEST_USER_INPUT_FIELD_SCHEMA = {
     "  - singleSelect: options[]; optional allowOther\n" +
     "  - reorder: items[]; optional minItems\n" +
     "  - editText: initialText; optional format ('markdown'|'plain'), placeholder, minLength, maxLength\n" +
-    "  - confirm: optional defaultValue (boolean)",
+    "  - confirm: optional defaultValue (boolean); omit it to make the user pick yes or no before they can submit",
   properties: {
     type: {
       type: "string",
@@ -1314,7 +1314,11 @@ const REQUEST_USER_INPUT_FIELD_SCHEMA = {
     maxLength: { type: "integer", minimum: 1, description: "editText: maximum length." },
 
     // confirm.
-    defaultValue: { type: "boolean", description: "confirm: initial state (default false)." },
+    defaultValue: {
+      type: "boolean",
+      description:
+        "confirm: pre-select yes or no. Omitted means unanswered -- submit stays blocked until the user picks, so an untouched field can never be read as a deliberate no.",
+    },
   },
   required: ["type", "id", "label"],
 };
