@@ -1065,6 +1065,7 @@ export class DocumentSyncProvider {
             // payload problem, so deliberately no skip flag -- see the note on
             // `skippedUndecodablePayload`.
             console.error('[DocumentSync] Snapshot applied, but a Y.Doc listener threw while handling it (editor/binding failure, not a bad payload):', outcome.error);
+            this.config.onEditorBindingError?.(outcome.error);
           }
         }
       }
@@ -1103,6 +1104,7 @@ export class DocumentSyncProvider {
             decodedCompleteBatch = false;
           } else if (!outcome.ok) {
             console.error(`[DocumentSync] Update at seq ${update.sequence} applied, but a Y.Doc listener threw while handling it (editor/binding failure, not a bad payload):`, outcome.error);
+            this.config.onEditorBindingError?.(outcome.error);
           }
         }
       }
@@ -1221,6 +1223,7 @@ export class DocumentSyncProvider {
           // would only replay the same update into the same broken listener).
           // Fall through to the normal post-apply bookkeeping.
           console.error(`[DocumentSync] Broadcast at seq ${msg.sequence} applied, but a Y.Doc listener threw while handling it (editor/binding failure, not a bad payload):`, outcome.error);
+          this.config.onEditorBindingError?.(outcome.error);
         }
       }
     } catch (err) {

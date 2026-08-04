@@ -17,7 +17,9 @@ import { DocumentSyncProvider } from '../DocumentSync';
  *      a readable row in the same batch still applies, and sync survives.
  */
 
-function createProvider(): DocumentSyncProvider {
+function createProvider(
+  overrides: Partial<ConstructorParameters<typeof DocumentSyncProvider>[0]> = {},
+): DocumentSyncProvider {
   return new DocumentSyncProvider({
     serverUrl: 'ws://example.test',
     getJwt: async () => 'token',
@@ -25,6 +27,7 @@ function createProvider(): DocumentSyncProvider {
     userId: 'user-1',
     documentId: 'doc-1',
     reviewGateEnabled: false,
+    ...overrides,
   });
 }
 
@@ -176,6 +179,57 @@ describe('DocumentSync apply failures vs undecodable payloads', () => {
     provider.destroy();
     warn.mockRestore();
     error.mockRestore();
+  });
+
+  /**
+   * A console error is not a user-visible failure. Because sync stays healthy,
+   * a host with no signal here reports the document as connected and shows the
+   * empty editor the aborted binding left behind — which is how an unregistered
+   * `tracker-reference` node shipped as "some docs still don't load".
+   */
+  it('tells the host when the binding, not the payload, is what failed', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const onEditorBindingError = vi.fn();
+    const provider = createProvider({ onEditorBindingError });
+    const dispose = installThrowingObserver(provider, 'Minified Lexical error #88');
+
+    await (provider as any).handleSyncResponse({
+      type: 'docSyncResponse',
+      updates: [{ sequence: 7, encryptedUpdate: plaintextUpdate('hello'), iv: '' }],
+      cursor: 7,
+      hasMore: false,
+      serverHead: 7,
+      serverHasState: true,
+    });
+
+    expect(onEditorBindingError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Minified Lexical error #88' }),
+    );
+
+    dispose();
+    provider.destroy();
+    error.mockRestore();
+  });
+
+  it('does not report a binding failure when a payload is merely unreadable', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const onEditorBindingError = vi.fn();
+    const provider = createProvider({ onEditorBindingError });
+
+    await (provider as any).handleSyncResponse({
+      type: 'docSyncResponse',
+      updates: [{ sequence: 3, encryptedUpdate: NOT_YJS_BYTES, iv: '' }],
+      cursor: 3,
+      hasMore: false,
+      serverHead: 3,
+      serverHasState: true,
+    });
+
+    // A bad payload is the host's problem to skip, not the editor's to report.
+    expect(onEditorBindingError).not.toHaveBeenCalled();
+
+    provider.destroy();
+    warn.mockRestore();
   });
 
   it('still skips a payload that decrypts but is not readable Yjs', async () => {

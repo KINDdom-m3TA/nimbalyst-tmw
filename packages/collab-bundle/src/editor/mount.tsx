@@ -11,7 +11,7 @@ import { encodeStateAsUpdate, type Doc } from 'yjs';
 import type { EditorConfig } from '@nimbalyst/runtime/editor/EditorConfig';
 import '@nimbalyst/runtime/editor/extensions/registerBuiltinExtensions';
 import '@nimbalyst/runtime/editor/index.css';
-import './referenceNodes';
+import { registerBrowserReferenceNodes } from './referenceNodes';
 import { CollabLexicalProvider } from '@nimbalyst/runtime/sync/CollabLexicalProvider';
 import { DocumentSyncProvider } from '@nimbalyst/runtime/sync/DocumentSync';
 import type {
@@ -42,6 +42,12 @@ import {
   classifyDocumentClose,
   parseDocumentServerSignal,
 } from './serverSignals';
+
+// Must run before any editor mounts: `@lexical/yjs` resolves node types against
+// `editor._nodes` while applying the first update, and an unregistered type
+// aborts the binding so nothing paints. A call rather than a bare import on
+// purpose — see the header of `./referenceNodes`.
+registerBrowserReferenceNodes();
 
 class InMemoryDocumentSyncSurface {
   constructor(private readonly document: Doc) {}
@@ -240,6 +246,13 @@ export function mountCollabEditor(options: CollabEditorMountOptions): CollabEdit
         return socket;
       },
       onLocalUpdate: setDirty,
+      onEditorBindingError: (cause) => {
+        options.onBindingError?.(
+          cause instanceof Error
+            ? cause
+            : new Error('The shared document could not be rendered.'),
+        );
+      },
       onStatusChange: (status) => {
         if (!state.termination) state.connection = status;
         lexicalProvider?.handleStatusChange(status);

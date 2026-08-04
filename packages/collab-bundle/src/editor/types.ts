@@ -140,6 +140,14 @@ export interface CollabEditorMountOptions {
   onTermination?: (termination: CollabEditorTermination) => void;
   onReady?: (handle: CollabEditorHandle) => void;
   onError?: (error: Error) => void;
+  /**
+   * The document reached the Y.Doc but the Lexical binding threw while
+   * rendering it, so nothing painted. Distinct from `onError`: sync is healthy
+   * and the connection is live, but what the host is showing is an empty
+   * editor that looks like a blank document. Hosts must not present that as a
+   * document the user can type into.
+   */
+  onBindingError?: (error: Error) => void;
 }
 
 export interface CollabEditorHandle {
