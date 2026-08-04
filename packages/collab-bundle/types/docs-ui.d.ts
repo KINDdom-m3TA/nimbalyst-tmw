@@ -7,3 +7,4 @@
  */
 export * from './internal/collab-client/src/docs/index';
 export * from './internal/collab-client/src/docs-ui/index';
+export { appendSyncClientParams, getSyncClientInfo, setSyncClientInfo, type SyncClientInfo, } from './internal/runtime/src/sync/syncClientInfo';

@@ -19,6 +19,7 @@ import {
   type TeamSyncConfig,
 } from '@nimbalyst/runtime/sync';
 import { asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
+import { createProxiedWebSocket } from '../utils/proxiedWebSocket';
 
 export interface ElectronCollabDocumentsDataSourceEvents {
   observeStatus?: (status: ReturnType<TeamSyncProvider['getStatus']>, error?: unknown) => void;
@@ -35,6 +36,11 @@ export interface ElectronCollabDocumentsDataSourceOptions {
   getJwt: TeamSyncConfig['getJwt'];
   events?: ElectronCollabDocumentsDataSourceEvents;
   createProvider?: (config: TeamSyncConfig) => TeamSyncProvider;
+}
+
+/** True when the main-process WebSocket proxy IPC is reachable. */
+function hasWebSocketProxy(): boolean {
+  return typeof window !== 'undefined' && !!window.electronAPI?.documentSync?.wsConnect;
 }
 
 function mapDocument(document: TeamDocIndexEntry): SharedDocument {
@@ -125,6 +131,11 @@ export class ElectronCollabDocumentsDataSource implements CollabDocsDataSource {
         this.emit({ type: 'status', status });
         observeStatus?.(status);
       },
+      // The team socket must go through the main process like every other
+      // desktop collab socket. A browser WebSocket sends an Origin header the
+      // sync server rejects for non-allowlisted origins (the dev renderer's
+      // http://localhost:5273), which surfaces as an opaque 1006 close.
+      ...(hasWebSocketProxy() ? { createWebSocket: createProxiedWebSocket } : {}),
       ...providerEvents,
     };
     this.provider = (options.createProvider ?? ((providerConfig) => (

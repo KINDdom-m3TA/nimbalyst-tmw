@@ -8,7 +8,6 @@ import {
   emptyPresenceAnnouncementState,
   type PresenceAnnouncementState,
 } from './presenceAnnouncements';
-import { isRenderedToolbarButton } from './toolbarChrome';
 import type { CollabEditorPresence } from './types';
 
 /** Long enough to fold a reconnect's leave/rejoin pair into one message. */
@@ -20,17 +19,15 @@ export type PresenceSubscription = (
 
 interface BrowserEditorSurfaceProps {
   config: EditorConfig;
-  focusDocument: () => void;
   subscribeToPresence?: PresenceSubscription;
 }
 
 /**
  * Polite announcements of who joined or left, for assistive tech only.
  *
- * Kept out of the toolbar's DOM so a `role="toolbar"` traversal never walks
- * into it, and rendered unconditionally so the live region exists in the
- * accessibility tree before the first message lands — a region inserted at the
- * same time as its text is frequently not spoken.
+ * Rendered unconditionally so the live region exists in the accessibility tree
+ * before the first message lands — a region inserted at the same time as its
+ * text is frequently not spoken.
  */
 function PresenceAnnouncements({
   subscribeToPresence,
@@ -124,46 +121,12 @@ function releaseTabFromDocument(event: React.KeyboardEvent<HTMLDivElement>): voi
 
 export function BrowserEditorSurface({
   config,
-  focusDocument,
   subscribeToPresence,
 }: BrowserEditorSurfaceProps): React.JSX.Element {
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) return;
-    const toolbar = target.closest<HTMLElement>('.toolbar');
-    if (!toolbar || !event.currentTarget.contains(toolbar)) {
-      releaseTabFromDocument(event);
-      return;
-    }
-
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      event.stopPropagation();
-      focusDocument();
-      return;
-    }
-
-    if (!(target instanceof HTMLButtonElement)) return;
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-    const buttons = [...toolbar.querySelectorAll<HTMLButtonElement>('button:not([disabled])')]
-      .filter((button) => isRenderedToolbarButton(button, toolbar));
-    if (buttons.length === 0) return;
-    const currentIndex = Math.max(0, buttons.indexOf(target));
-    const nextIndex = event.key === 'Home'
-      ? 0
-      : event.key === 'End'
-        ? buttons.length - 1
-        : event.key === 'ArrowLeft'
-          ? (currentIndex - 1 + buttons.length) % buttons.length
-          : (currentIndex + 1) % buttons.length;
-    event.preventDefault();
-    buttons[nextIndex].focus();
-  };
-
   return (
     <div
       className="collab-bundle-editor"
-      onKeyDownCapture={handleKeyDown}
+      onKeyDownCapture={releaseTabFromDocument}
     >
       {subscribeToPresence && (
         <PresenceAnnouncements subscribeToPresence={subscribeToPresence} />

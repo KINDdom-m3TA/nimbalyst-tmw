@@ -85,4 +85,45 @@ describe('ElectronCollabDocumentsDataSource', () => {
     source.dispose();
     expect(provider.destroy).toHaveBeenCalledTimes(1);
   });
+
+  // The team socket must not be opened with the browser WebSocket: Chromium
+  // stamps an Origin header the sync server rejects for non-allowlisted origins
+  // (the dev renderer is http://localhost:5273), which surfaces only as an
+  // opaque 1006 close and leaves Shared Docs stuck on "Disconnected".
+  it('opens the team socket through the main-process proxy when it is available', () => {
+    const wsConnect = vi.fn(async () => ({ success: true, wsId: 'ws-1' }));
+    const onWsEvent = vi.fn(() => () => {});
+    vi.stubGlobal('window', { electronAPI: { documentSync: { wsConnect, onWsEvent } } });
+    try {
+      let config!: TeamSyncConfig;
+      new ElectronCollabDocumentsDataSource({
+        scope,
+        getJwt: async () => 'team-jwt',
+        createProvider: (nextConfig) => {
+          config = nextConfig;
+          return { getStatus: () => 'disconnected' } as any;
+        },
+      });
+      // Not just "some function": driving it must reach the main-process IPC
+      // rather than constructing a browser WebSocket, whose Origin header the
+      // sync server rejects with a 403 the renderer only sees as a 1006.
+      config.createWebSocket!('wss://sync.nimbalyst.test/sync/room');
+      expect(wsConnect).toHaveBeenCalledWith('wss://sync.nimbalyst.test/sync/room');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('falls back to the platform WebSocket when no proxy IPC is exposed', () => {
+    let config!: TeamSyncConfig;
+    new ElectronCollabDocumentsDataSource({
+      scope,
+      getJwt: async () => 'team-jwt',
+      createProvider: (nextConfig) => {
+        config = nextConfig;
+        return { getStatus: () => 'disconnected' } as any;
+      },
+    });
+    expect(config.createWebSocket).toBeUndefined();
+  });
 });

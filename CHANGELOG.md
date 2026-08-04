@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Shared documents and team collaboration connect again, instead of failing to sync after the collaboration server began rejecting the desktop app's connections.
 - Tracker items in list and table views now expose their action menu without requiring a right-click.
 - Committing an agent's work now closes the tracker item it fixed and marks the session complete, instead of leaving finished work sitting in review for you to clear by hand.
 - Changing a project's permission mode now applies to agent sessions that are already running, instead of taking effect only after they finish.

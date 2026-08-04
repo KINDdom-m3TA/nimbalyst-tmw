@@ -217,6 +217,15 @@ export class DocumentSyncProvider {
    * compaction: a `docCompact` of an incomplete doc buries the unread rows
    * behind `replacesUpTo` for every client and prune later deletes them
    * (NIM-1519). Deliberately never reset for the provider's lifetime.
+   *
+   * The trigger is "content we do not hold", NOT "something threw while
+   * applying". A Y.Doc listener that throws AFTER `Y.applyUpdate` integrated
+   * the update (an editor binding hitting an unregistered node type, say) does
+   * not set this flag: yjs commits the transaction and then calls observers via
+   * `lib0/function.callAll`, which runs every listener and rethrows at the end,
+   * so the CRDT already holds the full update. Vetoing compaction there would
+   * degrade a whole room's sync on the strength of a client-side rendering bug.
+   * See `applyDecryptedUpdate` for how the two are told apart.
    */
   private skippedUndecodablePayload = false;
   private lastCompactionAttemptAt = 0;
@@ -919,6 +928,50 @@ export class DocumentSyncProvider {
     }
   }
 
+  /**
+   * Apply already-decrypted bytes to the Y.Doc, separating the two very
+   * different ways `Y.applyUpdate` can throw:
+   *
+   *  - `integrated: false` -- the bytes could not be read/integrated. The
+   *    payload is bad and the Y.Doc may hold only part of it.
+   *  - `integrated: true` -- the update was fully integrated into the CRDT and
+   *    then a Y.Doc *listener* threw (e.g. an editor binding hitting an
+   *    unregistered node type). The document content is complete; the failure
+   *    is downstream of sync.
+   *
+   * The discriminator is exact rather than heuristic. `Y.applyUpdate` opens its
+   * own transaction; nesting it inside one of ours makes the inner call a no-op
+   * nest (yjs reuses the open transaction), so observers fire only when the
+   * OUTER transaction unwinds. `integrated` is therefore set if and only if
+   * `readUpdate` completed, before any observer has run. `local: false` matches
+   * what `applyUpdate` sets on the transaction itself.
+   */
+  private applyDecryptedUpdate(
+    bytes: Uint8Array,
+    origin: string,
+  ): { ok: true } | { ok: false; integrated: boolean; error: unknown } {
+    let integrated = false;
+    try {
+      Y.transact(
+        this.ydoc,
+        () => {
+          Y.applyUpdate(this.ydoc, bytes, origin);
+          integrated = true;
+        },
+        origin,
+        false,
+      );
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, integrated, error };
+    }
+  }
+
+  /** Matches the shape the existing skip logs pass as their second argument. */
+  private static logDetail(err: unknown): unknown {
+    return err instanceof Error ? err.message : err;
+  }
+
   private async handleSyncResponse(msg: DocSyncResponseMessage): Promise<void> {
     const hasExplicitHead =
       typeof msg.serverHead === 'number' &&
@@ -965,11 +1018,23 @@ export class DocumentSyncProvider {
     let decodedCompleteBatch = true;
 
     if (msg.snapshot) {
+      let stateBytes: Uint8Array | null = null;
       try {
-        const stateBytes = await this.decryptFromWire(
+        stateBytes = await this.decryptFromWire(
           msg.snapshot.encryptedState,
           msg.snapshot.iv,
         );
+      } catch (err) {
+        // The payload is unreadable -- a pre-cutover client-encrypted row, or
+        // corrupt ciphertext. Skip only THIS payload, never abort the whole
+        // sync: one bad row must not blank the entire document body. The doc
+        // is now missing server content it can never re-fetch. See NIM-878.
+        console.warn('[DocumentSync] Skipping undecodable snapshot; sync will continue:', DocumentSyncProvider.logDetail(err));
+        this.skippedUndecodablePayload = true;
+        decodedCompleteBatch = false;
+      }
+
+      if (stateBytes !== null) {
         if (this.config.replica) {
           replicaUpdates.push({
             update: stateBytes,
@@ -980,16 +1045,21 @@ export class DocumentSyncProvider {
             serverSequence: null,
           });
         } else {
-          Y.applyUpdate(this.ydoc, stateBytes, SNAPSHOT_ORIGIN);
+          const outcome = this.applyDecryptedUpdate(stateBytes, SNAPSHOT_ORIGIN);
+          if (!outcome.ok && !outcome.integrated) {
+            // Decrypted fine but the bytes are not valid Yjs -- same standing
+            // as an undecodable row: content we hold only partially and can
+            // never re-fetch, so the skip flag applies. See NIM-878.
+            console.warn('[DocumentSync] Skipping snapshot that decrypted but could not be integrated; sync will continue:', DocumentSyncProvider.logDetail(outcome.error));
+            this.skippedUndecodablePayload = true;
+            decodedCompleteBatch = false;
+          } else if (!outcome.ok) {
+            // The snapshot IS in the Y.Doc; a listener threw afterwards. Not a
+            // payload problem, so deliberately no skip flag -- see the note on
+            // `skippedUndecodablePayload`.
+            console.error('[DocumentSync] Snapshot applied, but a Y.Doc listener threw while handling it (editor/binding failure, not a bad payload):', outcome.error);
+          }
         }
-      } catch (err) {
-        // Any per-payload failure -- a pre-cutover client-encrypted row, or
-        // corrupt bytes that make Y.applyUpdate throw (TypeError/RangeError) --
-        // must skip only THIS payload, never abort the whole sync. One bad row
-        // must not blank the entire document body. See NIM-878.
-        console.warn('[DocumentSync] Skipping undecodable snapshot; sync will continue:', err instanceof Error ? err.message : err);
-        this.skippedUndecodablePayload = true;
-        decodedCompleteBatch = false;
       }
       this.lastSeq = Math.max(this.lastSeq, msg.snapshot.replacesUpTo);
       this.lastSnapshotSeq = Math.max(this.lastSnapshotSeq, msg.snapshot.replacesUpTo);
@@ -997,11 +1067,21 @@ export class DocumentSyncProvider {
 
     // Apply incremental updates, per-update tolerant of decryption failures.
     for (const update of msg.updates) {
+      let updateBytes: Uint8Array | null = null;
       try {
-        const updateBytes = await this.decryptFromWire(
+        updateBytes = await this.decryptFromWire(
           update.encryptedUpdate,
           update.iv,
         );
+      } catch (err) {
+        // Skip only this update (a pre-cutover client-encrypted row, or
+        // corrupt ciphertext); never abort the whole sync. See NIM-878.
+        console.warn(`[DocumentSync] Skipping undecodable update at seq ${update.sequence}:`, DocumentSyncProvider.logDetail(err));
+        this.skippedUndecodablePayload = true;
+        decodedCompleteBatch = false;
+      }
+
+      if (updateBytes !== null) {
         if (this.config.replica) {
           replicaUpdates.push({
             update: updateBytes,
@@ -1009,14 +1089,15 @@ export class DocumentSyncProvider {
             serverSequence: update.sequence,
           });
         } else {
-          Y.applyUpdate(this.ydoc, updateBytes, REMOTE_ORIGIN);
+          const outcome = this.applyDecryptedUpdate(updateBytes, REMOTE_ORIGIN);
+          if (!outcome.ok && !outcome.integrated) {
+            console.warn(`[DocumentSync] Skipping update at seq ${update.sequence} that decrypted but could not be integrated:`, DocumentSyncProvider.logDetail(outcome.error));
+            this.skippedUndecodablePayload = true;
+            decodedCompleteBatch = false;
+          } else if (!outcome.ok) {
+            console.error(`[DocumentSync] Update at seq ${update.sequence} applied, but a Y.Doc listener threw while handling it (editor/binding failure, not a bad payload):`, outcome.error);
+          }
         }
-      } catch (err) {
-        // Skip only this update (a pre-cutover client-encrypted row, or
-        // corrupt bytes); never abort the whole sync. See NIM-878.
-        console.warn(`[DocumentSync] Skipping undecodable update at seq ${update.sequence}:`, err instanceof Error ? err.message : err);
-        this.skippedUndecodablePayload = true;
-        decodedCompleteBatch = false;
       }
       this.lastSeq = Math.max(this.lastSeq, update.sequence);
     }
@@ -1121,13 +1202,25 @@ export class DocumentSyncProvider {
           return;
         }
       } else {
-        Y.applyUpdate(this.ydoc, updateBytes, REMOTE_ORIGIN);
+        const outcome = this.applyDecryptedUpdate(updateBytes, REMOTE_ORIGIN);
+        if (!outcome.ok && !outcome.integrated) {
+          // Decrypted, but the bytes are not valid Yjs -- rethrow into the skip
+          // handler below so the "one bad row" path is unchanged. See NIM-878.
+          throw outcome.error;
+        }
+        if (!outcome.ok) {
+          // The update IS in the Y.Doc; a listener threw afterwards. Do NOT
+          // treat it as a bad payload: no skip flag, no forced reconnect (which
+          // would only replay the same update into the same broken listener).
+          // Fall through to the normal post-apply bookkeeping.
+          console.error(`[DocumentSync] Broadcast at seq ${msg.sequence} applied, but a Y.Doc listener threw while handling it (editor/binding failure, not a bad payload):`, outcome.error);
+        }
       }
     } catch (err) {
-      // Skip only this broadcast (a pre-cutover client-encrypted row, or
-      // corrupt bytes that make Y.applyUpdate throw); never abort sync. The
-      // applyUpdate is INSIDE the try so garbage bytes can't escape. See NIM-878.
-      console.warn(`[DocumentSync] Skipping undecodable or unpersisted broadcast at seq ${msg.sequence}:`, err instanceof Error ? err.message : err);
+      // Skip only this broadcast (a pre-cutover client-encrypted row, corrupt
+      // bytes, or a replica persistence failure); never abort sync. Apply-time
+      // listener failures are handled above and never reach here. See NIM-878.
+      console.warn(`[DocumentSync] Skipping undecodable or unpersisted broadcast at seq ${msg.sequence}:`, DocumentSyncProvider.logDetail(err));
       this.skippedUndecodablePayload = true;
       if (this.config.replica) {
         try {

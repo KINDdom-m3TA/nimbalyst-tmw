@@ -36,13 +36,11 @@
   border: 0;
 }
 
-/* The runtime toolbar relies on the user-agent focus ring, which is drawn
-   outside the button box and is therefore clipped by the toolbar's
-   `overflow-y: hidden` (there are only ~3px of vertical slack). A negative
-   offset draws the ring inside the button, where nothing can clip it, and
-   `--nim-border-focus` keeps it visible on dark themes where the UA blue is
-   not. */
-.collab-bundle-editor .toolbar button:focus-visible,
+/* The floating menus (table cell actions, the code block menu) rely on the
+   user-agent focus ring, whose blue is close to invisible on the dark themes
+   this surface ships with. `--nim-border-focus` restores the contrast; the
+   negative offset draws the ring inside the item so a menu that clips its
+   overflow cannot cut it off. */
 .collab-bundle-editor .dropdown .item:focus-visible {
   outline: 2px solid var(--nim-border-focus, #3b82f6);
   outline-offset: -2px;
@@ -68,65 +66,5 @@
 @media (prefers-reduced-motion: reduce) {
   .collab-bundle-editor .collab-cursors-container > div > span {
     transition: none !important;
-  }
-}
-
-/* Narrow layout ------------------------------------------------------------
-   The runtime hides toolbar groups through `.editor-width-*` classes that a
-   ResizeObserver puts on the editor shell, and its ladder drops the formatting
-   group first: below 1024px a browser tab loses bold, italic, underline,
-   inline code and link, while the Insert and extra-styles menus survive down
-   to 600px, and below 480px the code-language picker — the only way to set a
-   fenced block's language — goes too. That ordering is upside down for a
-   surface whose whole purpose is writing markdown.
-
-   Inside this surface the container query below is the single authority, so
-   the runtime ladder is neutralized first. The attribute selector is what
-   carries the specificity to beat `.nimbalyst-editor.editor-width-medium ...`,
-   and it also documents exactly which rules are being overridden. */
-.collab-bundle-editor .nimbalyst-editor[class*='editor-width-'] .toolbar .toolbar-formatting,
-.collab-bundle-editor .nimbalyst-editor[class*='editor-width-'] .toolbar .toolbar-code-language,
-.collab-bundle-editor .nimbalyst-editor[class*='editor-width-'] .toolbar .toolbar-additional,
-.collab-bundle-editor .nimbalyst-editor[class*='editor-width-'] .toolbar .toolbar-insert {
-  display: flex;
-}
-
-.collab-bundle-editor .nimbalyst-editor[class*='editor-width-'] .toolbar .toolbar-insert-divider {
-  display: block;
-}
-
-/* Least essential first. Formatting and the code-language picker are never
-   hidden; below the last breakpoint the toolbar scrolls horizontally rather
-   than dropping controls silently. */
-@container collab-bundle-editor (max-width: 760px) {
-  .collab-bundle-editor .nimbalyst-editor[class*='editor-width-'] .toolbar .toolbar-additional {
-    display: none;
-  }
-}
-
-@container collab-bundle-editor (max-width: 560px) {
-  .collab-bundle-editor .nimbalyst-editor[class*='editor-width-'] .toolbar .toolbar-insert,
-  .collab-bundle-editor .nimbalyst-editor[class*='editor-width-'] .toolbar .toolbar-insert-divider {
-    display: none;
-  }
-}
-
-/* The block-format dropdown's label is the only place the current block type is
-   named ("Normal", "Heading 1", "Bulleted List"); without it the control is an
-   unlabelled icon. The runtime hides it from a viewport `@media screen and
-   (max-width: 1100px)` with `!important` — the wrong axis for a browser tab,
-   where the label vanishes because the *window* is narrow even though the
-   editor has room, and would survive once a sidebar squeezes the editor. Take
-   it back onto the container axis; the `!important` is only here to answer the
-   `!important` it overrides. */
-.collab-bundle-editor .nimbalyst-editor .toolbar .block-controls .dropdown-button-text {
-  display: inline-block !important;
-}
-
-/* Reclaim that label before dropping any control: the icon plus chevron still
-   identifies the menu, and the accessible name lives on the button. */
-@container collab-bundle-editor (max-width: 460px) {
-  .collab-bundle-editor .nimbalyst-editor .toolbar .block-controls .dropdown-button-text {
-    display: none !important;
   }
 }

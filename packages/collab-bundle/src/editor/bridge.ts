@@ -31,7 +31,6 @@ export interface BridgeMountRequest {
   };
   user: Omit<CollabEditorUser, 'memberId'>;
   readOnly?: boolean;
-  showToolbar?: boolean;
 }
 
 export interface BridgeAuthResponse {
@@ -174,7 +173,6 @@ export function installCollabEditorBridge(
             memberId: request.source.auth.memberId as TeamMemberId,
           },
           readOnly: request.readOnly,
-          showToolbar: request.showToolbar,
           onReady: () => postMessage({ type: 'editorReady' }),
           onStateChange: (state) => postMessage({ type: 'stateChanged', state }),
           onPresenceChange: (presence) => postMessage({ type: 'presenceChanged', presence }),

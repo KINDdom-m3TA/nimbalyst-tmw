@@ -3,22 +3,25 @@
  * service and publish it as a renderer-contributed Lexical UI plugin.
  *
  * The plugin's headless concerns (markdown transformers, the
- * `DocumentReferenceNode` registration) flow through the extension
- * contributions stores instead of the deleted `pluginRegistry`.
+ * `DocumentReferenceNode` registration) come from
+ * `registerDocumentReferenceContributions`, shared with every other host that
+ * opens a document — a host missing the node class cannot decode a Y.Doc that
+ * contains one.
  */
 
 import React, { useMemo } from 'react';
-import { defineExtension } from 'lexical';
 import { useAtomValue } from 'jotai';
 import {
   TypeaheadMenuPlugin,
   registerExtensionEditorComponent,
-  setExtensionContributions,
-  setExtensionLexicalExtension,
   setWorkspaceFileLinkOpener,
   useAnchorElem,
   useDocumentPath,
 } from '@nimbalyst/runtime';
+import {
+  DOCUMENT_LINK_SOURCE,
+  registerDocumentReferenceContributions,
+} from '@nimbalyst/runtime/plugins/referenceNodeContributions';
 import {
   DocumentLinkPlugin,
   type CollabReferenceSource,
@@ -27,12 +30,6 @@ import {
   resolveDocumentLinkLookupPath,
   parseCollabReferenceDocumentId,
 } from '@nimbalyst/runtime/plugins/DocumentLinkPlugin/documentLinkPaths';
-import {
-  DocumentReferenceNode,
-  DocumentReferenceTransformer,
-  CollabDocumentReferenceTransformer,
-  LegacyDocumentReferenceTransformer,
-} from '@nimbalyst/runtime/plugins/DocumentLinkPlugin/DocumentLinkNode';
 import { ElectronRendererDocumentService } from '../services/ElectronDocumentService';
 import { isCollabUri, parseCollabUri } from '../utils/collabUri';
 import {
@@ -46,7 +43,7 @@ import {
 import { setWindowModeAtom } from '../store/atoms/windowMode';
 import { store } from '../store';
 
-const SOURCE = 'document-link';
+const SOURCE = DOCUMENT_LINK_SOURCE;
 const documentService = new ElectronRendererDocumentService();
 
 // Custom trigger function that allows dots and hyphens in filenames so
@@ -209,24 +206,7 @@ export function registerDocumentLinkPlugin(): void {
     });
   });
 
-  setExtensionLexicalExtension(
-    SOURCE,
-    defineExtension({
-      name: '@nimbalyst/document-link',
-      nodes: [DocumentReferenceNode],
-    }),
-  );
-  setExtensionContributions(SOURCE, {
-    markdownTransformers: [
-      // Main transformer exports as markdown links; the collab transformer
-      // imports shared-doc references (`nimbalyst://doc/...` / `collab://...`);
-      // the legacy transformer imports the old `[[wikilink]]`-style format
-      // produced before the CommonMark migration.
-      DocumentReferenceTransformer,
-      CollabDocumentReferenceTransformer,
-      LegacyDocumentReferenceTransformer,
-    ],
-  });
+  registerDocumentReferenceContributions();
   registerExtensionEditorComponent({
     name: SOURCE,
     Component: DocumentLinkPluginWrapper as React.ComponentType<unknown>,

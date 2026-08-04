@@ -22,12 +22,7 @@ interface Harness {
 
 function renderSurface(documentMarkup: string): Harness {
   const reachedLexical: string[] = [];
-  const { container } = render(
-    <BrowserEditorSurface
-      config={{} as never}
-      focusDocument={() => {}}
-    />,
-  );
+  const { container } = render(<BrowserEditorSurface config={{} as never} />);
   const surface = container.querySelector<HTMLElement>('.collab-bundle-editor')!;
   const editable = document.createElement('div');
   editable.setAttribute('contenteditable', 'true');

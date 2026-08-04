@@ -11,6 +11,7 @@ import { encodeStateAsUpdate, type Doc } from 'yjs';
 import type { EditorConfig } from '@nimbalyst/runtime/editor/EditorConfig';
 import '@nimbalyst/runtime/editor/extensions/registerBuiltinExtensions';
 import '@nimbalyst/runtime/editor/index.css';
+import './referenceNodes';
 import { CollabLexicalProvider } from '@nimbalyst/runtime/sync/CollabLexicalProvider';
 import { DocumentSyncProvider } from '@nimbalyst/runtime/sync/DocumentSync';
 import type {
@@ -23,7 +24,7 @@ import {
   type PresenceSubscription,
 } from './BrowserEditorSurface';
 import './browserChrome.css';
-import { installBrowserEditorChrome } from './toolbarChrome';
+import { applyBrowserEditorChrome } from './browserChrome';
 import {
   CollabPresenceSurface,
   resolveCollabEditorUser,
@@ -178,7 +179,6 @@ export function mountCollabEditor(options: CollabEditorMountOptions): CollabEdit
   let removeInMemoryUpdateListener: (() => void) | null = null;
   let removePresenceListener: (() => void) | null = null;
   let removePresenceLifecycleListeners: (() => void) | null = null;
-  let removeEditorChrome: (() => void) | null = null;
 
   if (options.source.kind === 'team-room') {
     const source = options.source;
@@ -397,8 +397,6 @@ export function mountCollabEditor(options: CollabEditorMountOptions): CollabEdit
       presenceSurface.setActive(false);
       removePresenceLifecycleListeners?.();
       removePresenceLifecycleListeners = null;
-      removeEditorChrome?.();
-      removeEditorChrome = null;
       root?.unmount();
       root = null;
       lexicalProvider.destroy();
@@ -416,7 +414,6 @@ export function mountCollabEditor(options: CollabEditorMountOptions): CollabEdit
     const config: EditorConfig = {
       isRichText: true,
       editable: !state.readOnly,
-      showToolbar: options.showToolbar ?? true,
       isCodeHighlighted: true,
       hasLinkAttributes: true,
       markdownOnly: true,
@@ -434,8 +431,7 @@ export function mountCollabEditor(options: CollabEditorMountOptions): CollabEdit
       },
       onEditorReady: (editor) => {
         lexicalEditor = editor as LexicalEditor;
-        removeEditorChrome?.();
-        removeEditorChrome = installBrowserEditorChrome(options.element);
+        applyBrowserEditorChrome(options.element);
         if (!readyReported) {
           readyReported = true;
           options.onReady?.(handle);
@@ -447,7 +443,6 @@ export function mountCollabEditor(options: CollabEditorMountOptions): CollabEdit
       <BundleEditorErrorBoundary onError={(error) => options.onError?.(error)}>
         <BrowserEditorSurface
           config={config}
-          focusDocument={focusDocument}
           subscribeToPresence={subscribeToPresence}
         />
       </BundleEditorErrorBoundary>,

@@ -63,6 +63,35 @@ const electronCollabDocsUIController: CollabDocsUIController = {
   },
 };
 
+/**
+ * Context only, for trees mounted in their own React root.
+ *
+ * TabContent gives every tab its own `createRoot`, and React context does not
+ * cross roots — a Shared Docs component mounted there sees no provider and
+ * throws at mount. Such a root needs the context but must NOT re-run
+ * `useDocUnread`: that hook is documented as single-mount and reseeds the
+ * receipt map, so a second copy would clear and reload unread state.
+ *
+ * The session is cached per scopeKey, so mounting this alongside the main tree
+ * shares one session (and one team socket) rather than opening a second.
+ */
+export function ElectronCollabDocsUIRoot({
+  scope,
+  children,
+}: {
+  scope: CollabScope;
+  children: React.ReactNode;
+}) {
+  return (
+    <CollabDocsUIProvider
+      session={getElectronCollabDocsSession(scope)}
+      controller={electronCollabDocsUIController}
+    >
+      {children}
+    </CollabDocsUIProvider>
+  );
+}
+
 export function ElectronCollabDocsUIProvider({
   scope,
   children,
@@ -74,11 +103,8 @@ export function ElectronCollabDocsUIProvider({
   // owns the receipt/unread atoms that this hook updates.
   useDocUnread();
   return (
-    <CollabDocsUIProvider
-      session={getElectronCollabDocsSession(scope)}
-      controller={electronCollabDocsUIController}
-    >
+    <ElectronCollabDocsUIRoot scope={scope}>
       {children}
-    </CollabDocsUIProvider>
+    </ElectronCollabDocsUIRoot>
   );
 }

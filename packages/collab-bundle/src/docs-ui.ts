@@ -7,3 +7,9 @@
  */
 export * from '@nimbalyst/collab-client/docs';
 export * from '@nimbalyst/collab-client/docs-ui';
+export {
+  appendSyncClientParams,
+  getSyncClientInfo,
+  setSyncClientInfo,
+  type SyncClientInfo,
+} from '@nimbalyst/runtime/sync/syncClientInfo';

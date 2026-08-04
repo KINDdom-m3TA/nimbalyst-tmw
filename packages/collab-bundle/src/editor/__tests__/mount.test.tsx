@@ -1,4 +1,4 @@
-import { act, fireEvent } from '@testing-library/react';
+import { act } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 
@@ -39,7 +39,6 @@ describe('in-memory collaborative editor harness', () => {
         name: 'Harness User',
         cursorColor: '#3366ff',
       },
-      showToolbar: false,
       onReady: () => { ready = true; },
     });
     mountedHandles.push(handle);
@@ -67,9 +66,44 @@ describe('in-memory collaborative editor harness', () => {
     });
   });
 
-  it('provides keyboard-navigable browser chrome and restores document focus on Escape', async () => {
+  it('paints tracker and shared-document references written by a desktop client', async () => {
+    // A desktop client's node set is wider than the bundle's. A Y.Doc holding
+    // either reference node used to abort the whole binding with
+    // "Node <type> is not registered", so the document never painted.
     const yDocument = new Y.Doc();
-    MarkdownCollabContentAdapter.seedFromFile(yDocument, 'Toolbar keyboard marker');
+    MarkdownCollabContentAdapter.seedFromFile(
+      yDocument,
+      'Blocked by [NIM-123](nimbalyst://NIM-123), see [Launch Plan](nimbalyst://doc/fa164469-0e2b-4f1a-9c2d-6b1f0a3d5e77).',
+    );
+    const element = globalThis.document.createElement('div');
+    globalThis.document.body.append(element);
+
+    const errors: string[] = [];
+    const handle = mountCollabEditor({
+      element,
+      source: { kind: 'in-memory', document: yDocument },
+      user: {
+        memberId: asTeamMemberId('member-references'),
+        name: 'Reference User',
+      },
+      onError: (error) => { errors.push(error.message); },
+    });
+    mountedHandles.push(handle);
+    await settle();
+
+    const editable = element.querySelector<HTMLElement>('[contenteditable="true"]');
+    expect(errors).toEqual([]);
+    expect(editable?.textContent).toContain('NIM-123');
+    expect(editable?.textContent).toContain('Launch Plan');
+    expect(handle.getMarkdown()).toContain('[NIM-123](nimbalyst://NIM-123)');
+    expect(handle.getMarkdown()).toContain(
+      '(nimbalyst://doc/fa164469-0e2b-4f1a-9c2d-6b1f0a3d5e77)',
+    );
+  });
+
+  it('carries no formatting toolbar and applies the browser-host chrome', async () => {
+    const yDocument = new Y.Doc();
+    MarkdownCollabContentAdapter.seedFromFile(yDocument, 'Chrome marker');
     const element = globalThis.document.createElement('div');
     globalThis.document.body.append(element);
 
@@ -77,30 +111,21 @@ describe('in-memory collaborative editor harness', () => {
       element,
       source: { kind: 'in-memory', document: yDocument },
       user: {
-        memberId: asTeamMemberId('member-keyboard'),
-        name: 'Keyboard User',
+        memberId: asTeamMemberId('member-chrome'),
+        name: 'Chrome User',
         cursorColor: '#3366ff',
       },
-      showToolbar: true,
     });
     mountedHandles.push(handle);
     await settle();
 
-    const toolbar = element.querySelector<HTMLElement>('[role="toolbar"]');
-    const buttons = [...(toolbar?.querySelectorAll<HTMLButtonElement>('button:not([disabled])') ?? [])];
-    const editable = element.querySelector<HTMLElement>('[contenteditable="true"]');
-    const contentArea = element.querySelector<HTMLElement>('.editor-scroller');
-    expect(toolbar?.getAttribute('aria-label')).toBe('Formatting toolbar');
-    expect(buttons.length).toBeGreaterThan(1);
-    expect(contentArea?.classList.contains('select-text')).toBe(true);
-
-    buttons[0].focus();
-    fireEvent.keyDown(buttons[0], { key: 'ArrowRight' });
-    expect(document.activeElement).toBe(buttons[1]);
-
-    fireEvent.keyDown(buttons[1], { key: 'Escape' });
-    await settle();
-    expect(document.activeElement).toBe(editable);
+    // The desktop document editor has no top toolbar; this host must match it.
+    expect(element.querySelector('.toolbar')).toBeNull();
+    expect(element.querySelector<HTMLElement>('.editor-scroller')?.classList.contains('select-text'))
+      .toBe(true);
+    // Remote carets would otherwise read collaborators' names into the prose.
+    expect(element.querySelector('.collab-cursors-container')?.getAttribute('aria-hidden'))
+      .toBe('true');
   });
 
   it('announces lifecycle departure and rejoins when the document becomes active', async () => {
@@ -115,7 +140,6 @@ describe('in-memory collaborative editor harness', () => {
         memberId: asTeamMemberId('member-lifecycle'),
         name: 'Lifecycle User',
       },
-      showToolbar: false,
     });
     mountedHandles.push(handle);
     await settle();

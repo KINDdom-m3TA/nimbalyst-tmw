@@ -134,7 +134,6 @@ export interface CollabEditorMountOptions {
   source: CollabEditorSource;
   user: CollabEditorUser;
   readOnly?: boolean;
-  showToolbar?: boolean;
   onStateChange?: (state: CollabEditorState) => void;
   onPresenceChange?: (presence: CollabEditorPresence) => void;
   onWriteRejected?: (rejection: CollabEditorWriteRejection) => void;

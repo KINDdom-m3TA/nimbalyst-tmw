@@ -25,6 +25,7 @@ import { logger } from '../../utils/logger';
 import { useTabsActions, type TabData, notifyDirtyStateChange, isTrackerTabPath } from '../../contexts/TabsContext';
 import { TrackerResourceEditor } from '../AgentMode/TrackerResourceEditor';
 import { SharedDocsListView } from '@nimbalyst/collab-client/docs-ui';
+import { ElectronCollabDocsUIRoot } from '../CollabMode/ElectronCollabDocsUIProvider';
 import { isSharedHomeTab } from '../CollabMode/sharedHomeTab';
 import { isCollabUri, parseCollabUri } from '../../utils/collabUri';
 import {
@@ -317,7 +318,13 @@ const TabContentComponent: React.FC<TabContentProps> = ({
             }}
           >
             {propsRef.current.collabScope
-              ? <SharedDocsListView />
+              ? (
+                // Own React root: context does not cross, so the Shared Docs
+                // context has to be re-established here or the view throws.
+                <ElectronCollabDocsUIRoot scope={propsRef.current.collabScope}>
+                  <SharedDocsListView />
+                </ElectronCollabDocsUIRoot>
+              )
               : null}
           </TabEditorErrorBoundary>
         </JotaiProvider>
