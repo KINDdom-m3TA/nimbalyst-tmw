@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Team messages sent to you now raise a desktop notification, and a direct message is titled after the other person, when more than one account is signed in.
 - Shared documents and team collaboration connect again, instead of failing to sync after the collaboration server began rejecting the desktop app's connections.
 - Shared documents now keep retrying when a sign-in token could not be refreshed, instead of silently giving up and sitting on a connection that would never come back.
 - Sessions no longer sit showing as running after their work has finished, whether you interrupt a stuck one or interrupt an agent with background work still in flight, so prompts queued behind them send instead of waiting.

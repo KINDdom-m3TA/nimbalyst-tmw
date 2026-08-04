@@ -63,6 +63,7 @@ vi.mock('../StytchAuthService', () => ({
   getUserEmail: vi.fn(() => 'sync@test.com'),
   getPersonalOrgId: vi.fn(() => SYNC_ACCOUNT),
   getPersonalUserId: vi.fn(() => 'user-1'),
+  getSyncAccount: vi.fn(() => ({ personalOrgId: SYNC_ACCOUNT, email: 'sync@test.com' })),
 }));
 
 vi.mock('@nimbalyst/runtime', () => ({

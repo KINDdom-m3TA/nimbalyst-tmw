@@ -280,6 +280,11 @@ export class TeamInboxOrgClient implements TeamInboxOrgClientLike {
           });
           return;
         case 'inboxDeliveryBroadcast':
+          // console.log('[TeamInboxSync] inboxDeliveryBroadcast received:', {
+          //   org: this.config.org.orgId,
+          //   hasDelivery: !!message.delivery,
+          //   id: message.delivery?.id,
+          // });
           if (message.delivery) {
             this.emit({ type: 'delivery', delivery: message.delivery });
           }
@@ -567,6 +572,11 @@ export class TeamInboxFanIn {
         this.lastSyncedAt = this.config.now?.() ?? Date.now();
         break;
       case 'delivery':
+        // console.log('[TeamInboxFanIn] delivery event applied:', {
+        //   orgId,
+        //   id: event.delivery.id,
+        //   alreadyKnown: state.deliveries.has(event.delivery.id),
+        // });
         if (!state.deliveries.has(event.delivery.id)) {
           newDelivery = event.delivery;
         }

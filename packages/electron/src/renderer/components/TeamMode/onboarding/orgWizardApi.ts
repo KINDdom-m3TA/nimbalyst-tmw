@@ -68,9 +68,10 @@ export function createOrgWizardApi(): OrgWizardApi {
     },
 
     async resolveViewerUserId(orgId) {
-      const [roster, accounts] = await Promise.all([
+      const [roster, accounts, syncAccount] = await Promise.all([
         window.electronAPI?.organization?.listMembers?.(orgId),
         window.electronAPI?.stytch?.getAccounts?.(),
+        window.electronAPI?.stytch?.getSyncAccount?.(),
       ]);
       const members: OrgRosterMember[] = roster?.success && Array.isArray(roster.members)
         ? roster.members
@@ -79,6 +80,7 @@ export function createOrgWizardApi(): OrgWizardApi {
       return resolveViewerMemberId(
         members,
         accountRows.map((account: { email?: string | null }) => account.email),
+        syncAccount?.email,
       );
     },
 

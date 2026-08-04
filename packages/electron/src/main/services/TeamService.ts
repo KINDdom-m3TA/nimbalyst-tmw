@@ -44,6 +44,7 @@ import {
   getUserEmail,
   getPersonalOrgId,
   getPersonalUserId,
+  getSyncAccount,
 } from './StytchAuthService';
 import { asTeamJwt, type PersonalJwt, type TeamJwt } from '@nimbalyst/runtime';
 import type {
@@ -265,7 +266,12 @@ export async function getOrgScopedJwt(
     const signedInAccounts = getAccounts();
     const signedInAccountIds = signedInAccounts.map((account) => account.personalOrgId);
     let binding = db
-      ? await resolveTeamOrgAccountBinding(db, orgId, signedInAccountIds)
+      ? await resolveTeamOrgAccountBinding(
+        db,
+        orgId,
+        signedInAccountIds,
+        getSyncAccount()?.personalOrgId,
+      )
       : null;
     const discoveryHint = teamAccountBindingHints.get(orgId);
     resolvedAccountOrgId = binding?.personalOrgId
@@ -284,7 +290,12 @@ export async function getOrgScopedJwt(
           orgId,
           account.email,
         );
-        binding = await resolveTeamOrgAccountBinding(db, orgId, signedInAccountIds);
+        binding = await resolveTeamOrgAccountBinding(
+          db,
+          orgId,
+          signedInAccountIds,
+          getSyncAccount()?.personalOrgId,
+        );
         if (binding) {
           resolvedAccountOrgId = binding.personalOrgId;
           break;
@@ -1043,7 +1054,12 @@ export async function listTeams(): Promise<TeamDetails[]> {
     const signedInAccountIds = allAccounts.map((account) => account.personalOrgId);
     for (const team of allTeams) {
       const resolved = db
-        ? await resolveTeamOrgAccountBinding(db, team.orgId, signedInAccountIds)
+        ? await resolveTeamOrgAccountBinding(
+          db,
+          team.orgId,
+          signedInAccountIds,
+          getSyncAccount()?.personalOrgId,
+        )
         : null;
       team.boundPersonalOrgId = resolved?.personalOrgId
         ?? [...(team.accountBindings ?? [])]
@@ -1736,8 +1752,9 @@ const runAuthenticatedTeamBootstrap = createTeamAuthBootstrap(async () => {
 
 /**
  * Resolve the viewer's per-org member id from the team org's explicit account
- * binding, independently of the sync-account selection. Legacy email matching
- * remains isolated to the logged, one-time repair path.
+ * binding. The sync account only breaks a tie between two signed-in accounts
+ * that both bind this org. Legacy email matching remains isolated to the
+ * logged, one-time repair path.
  */
 export async function canAccessForCurrentUser(input: CanAccessInput): Promise<{
   allowed: boolean; orgRole: string | null; projectRole: string | null; reason: string;
@@ -1749,7 +1766,7 @@ export async function canAccessForCurrentUser(input: CanAccessInput): Promise<{
   let viewerUserId = '';
 
   // Resolve the org first (from projectId if needed), then resolve its bound
-  // signed-in account. The sync account is deliberately not consulted.
+  // signed-in account, preferring the sync account when the org is ambiguous.
   let orgId = input.orgId ?? null;
   if (!orgId && input.projectId) {
     const pr = await db.query<{ org_id: string }>(`SELECT org_id FROM projects WHERE id = $1`, [input.projectId]);
@@ -1764,6 +1781,7 @@ export async function canAccessForCurrentUser(input: CanAccessInput): Promise<{
         db,
         orgId,
         signedInAccounts.map((account) => account.personalOrgId),
+        getSyncAccount()?.personalOrgId,
       );
       if (!binding) {
         for (const account of signedInAccounts) {
@@ -1778,6 +1796,7 @@ export async function canAccessForCurrentUser(input: CanAccessInput): Promise<{
             db,
             orgId,
             signedInAccounts.map((candidate) => candidate.personalOrgId),
+            getSyncAccount()?.personalOrgId,
           );
           if (binding) break;
         }
