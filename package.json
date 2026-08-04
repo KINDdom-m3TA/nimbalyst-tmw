@@ -21,7 +21,7 @@
     "test": "npm run test:unit",
     "test:unit": "vitest",
     "test:prepush": "vitest --run",
-    "test:prepush-gate": "node --test scripts/__tests__/prepush-test-gate.test.mjs scripts/__tests__/check-collab-client-boundaries.test.mjs scripts/__tests__/check-main-bundle-graph.test.mjs scripts/__tests__/check-push-authors.test.mjs scripts/__tests__/check-renderer-sync-sockets.test.mjs scripts/__tests__/check-text-file-nuls.test.mjs scripts/__tests__/check-toolchain.test.mjs packages/electron/scripts/__tests__/dev-user2.test.mjs",
+    "test:prepush-gate": "node --test scripts/__tests__/prepush-test-gate.test.mjs scripts/__tests__/check-collab-client-boundaries.test.mjs scripts/__tests__/check-main-bundle-graph.test.mjs scripts/__tests__/check-push-authors.test.mjs scripts/__tests__/check-renderer-sync-sockets.test.mjs scripts/__tests__/check-shared-document-nodes.test.mjs scripts/__tests__/check-text-file-nuls.test.mjs scripts/__tests__/check-toolchain.test.mjs packages/electron/scripts/__tests__/dev-user2.test.mjs",
     "test:unit:ui": "vitest --ui",
     "test:unit:coverage": "vitest --coverage",
     "test:provider:integration": "cross-env RUN_AI_PROVIDER_TESTS=true vitest --run",
@@ -51,7 +51,8 @@
     "electron:resign": "bash scripts/resign-dev-electron.sh",
     "dev:url-handler": "bash scripts/install-dev-url-handler.sh",
     "postinstall": "patch-package",
-    "check:renderer-sync-sockets": "node scripts/check-renderer-sync-sockets.mjs"
+    "check:renderer-sync-sockets": "node scripts/check-renderer-sync-sockets.mjs",
+    "check:shared-document-nodes": "node scripts/check-shared-document-nodes.mjs"
   },
   "devDependencies": {
     "@babel/plugin-transform-flow-strip-types": "^7.24.7",
