@@ -13,9 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- The sessions popover in the gutter is wider, drag-resizable, and gives each session title a full row so long titles are readable.
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Yes/no questions from the agent now show both answers as pickable buttons and wait for you to choose, instead of a single control that submitted "no" untouched.
 
 ### Removed
 <!-- Removed features go here -->
