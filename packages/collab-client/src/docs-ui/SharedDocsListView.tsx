@@ -47,7 +47,15 @@ import { bucketItemCount, bucketQueryLength, stableCategory } from './analytics'
 import { useCollabDocsUI } from './CollabDocsUIProvider';
 import { resolveSharedDocumentTypePresentation } from './documentPresentation';
 
-export interface SharedDocsListViewProps {}
+export interface SharedDocsListViewProps {
+  /**
+   * Render only one folder's direct children. Hosts that address a folder by
+   * route (the browser console's `/docs/folder/:folderId`) pass it here so the
+   * URL and the list agree; desktop leaves it unset and the folder facet stays
+   * the only filter.
+   */
+  folderId?: string | null;
+}
 
 type Segment = 'all' | 'favorites' | 'review' | 'recent' | 'sharedWithMe' | 'sharedByMe';
 type SortColumn =
@@ -112,7 +120,7 @@ function memberName(
   return 'Unknown';
 }
 
-export const SharedDocsListView: React.FC<SharedDocsListViewProps> = () => {
+export const SharedDocsListView: React.FC<SharedDocsListViewProps> = ({ folderId }) => {
   const { scope, host, session } = useCollabDocsUI();
 
   const documentTypesRevision = useSyncExternalStore(
@@ -299,16 +307,22 @@ export const SharedDocsListView: React.FC<SharedDocsListViewProps> = () => {
   }, [openableDocs, folderNames]);
 
   // --- Facet + search filtering ---
+  // A routed folder is a scope, not a facet: it overrides the dropdown so the
+  // list can never disagree with the URL the user is looking at.
+  const scopedFolders = useMemo(
+    () => (folderId ? new Set([folderId]) : selectedFolders),
+    [folderId, selectedFolders],
+  );
   const trimmedQuery = query.trim().toLowerCase();
   const filteredDocs = useMemo(() => {
     return segmentDocs.filter((d) => {
       if (trimmedQuery && !docName(d).toLowerCase().includes(trimmedQuery)) return false;
       if (selectedTypes.size > 0 && !selectedTypes.has(typePresentation(d).typeLabel)) return false;
       if (selectedPeople.size > 0 && !(d.createdBy && selectedPeople.has(d.createdBy))) return false;
-      if (selectedFolders.size > 0 && !selectedFolders.has(d.parentFolderId ?? ROOT_FOLDER)) return false;
+      if (scopedFolders.size > 0 && !scopedFolders.has(d.parentFolderId ?? ROOT_FOLDER)) return false;
       return true;
     });
-  }, [segmentDocs, trimmedQuery, selectedTypes, selectedPeople, selectedFolders, typePresentation]);
+  }, [segmentDocs, trimmedQuery, selectedTypes, selectedPeople, scopedFolders, typePresentation]);
 
   useEffect(() => {
     if (!trimmedQuery) {
@@ -448,12 +462,21 @@ export const SharedDocsListView: React.FC<SharedDocsListViewProps> = () => {
         detail: `There are ${totalOpenable} shared documents in All.`,
       };
     }
+    // On a routed folder page there is no folder filter left to clear, so
+    // "clear a filter" would name a control the page does not have.
+    if (folderId) {
+      return {
+        icon: 'folder_open',
+        title: 'This folder is empty',
+        detail: `Nothing is filed here yet. ${totalOpenable} shared documents live elsewhere in this project.`,
+      };
+    }
     return {
       icon: 'filter_list_off',
       title: 'No documents match these filters',
       detail: `Clear a filter to see the other ${totalOpenable} shared documents.`,
     };
-  }, [segment, totalOpenable, trimmedQuery, visibleSegments]);
+  }, [folderId, segment, totalOpenable, trimmedQuery, visibleSegments]);
 
   return (
     <div className="shared-docs-list-view h-full flex flex-col min-h-0 bg-nim select-text">
@@ -546,14 +569,34 @@ export const SharedDocsListView: React.FC<SharedDocsListViewProps> = () => {
             onToggle={(v) => toggleFacet(setSelectedPeople, v)}
             onClear={() => setSelectedPeople(new Set())}
           />
-          <FacetDropdown
-            label="Folder"
-            icon="folder"
-            options={folderOptions}
-            selected={selectedFolders}
-            onToggle={(v) => toggleFacet(setSelectedFolders, v)}
-            onClear={() => setSelectedFolders(new Set())}
-          />
+          {folderId ? (
+            /**
+             * A routed folder page is scoped by its URL, and the URL wins (see
+             * `scopedFolders`). The checkbox menu is multi-select and has no
+             * route to clear to, so rendering it here would give the reader
+             * three controls — pick another folder, uncheck this one, Clear all
+             * — that all mutate state the list ignores. Moving between folders
+             * belongs to the tree and the breadcrumb, which route.
+             */
+            <span
+              className="shared-docs-facet shared-docs-facet-scope flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] border whitespace-nowrap bg-[var(--nim-bg-active)] text-[var(--nim-text)] border-[var(--nim-border)]"
+              data-facet="folder"
+              data-facet-scope="route"
+              title="This page shows one folder. Use the document tree or the breadcrumb to open another."
+            >
+              <MaterialSymbol icon="folder" size={15} />
+              {folderNames.get(folderId) ?? 'Unknown folder'}
+            </span>
+          ) : (
+            <FacetDropdown
+              label="Folder"
+              icon="folder"
+              options={folderOptions}
+              selected={selectedFolders}
+              onToggle={(v) => toggleFacet(setSelectedFolders, v)}
+              onClear={() => setSelectedFolders(new Set())}
+            />
+          )}
         </div>
       </div>
 

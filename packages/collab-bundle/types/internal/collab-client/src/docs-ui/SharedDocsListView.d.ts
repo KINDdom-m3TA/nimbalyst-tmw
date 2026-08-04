@@ -19,5 +19,12 @@
  */
 import React from 'react';
 export interface SharedDocsListViewProps {
+    /**
+     * Render only one folder's direct children. Hosts that address a folder by
+     * route (the browser console's `/docs/folder/:folderId`) pass it here so the
+     * URL and the list agree; desktop leaves it unset and the folder facet stays
+     * the only filter.
+     */
+    folderId?: string | null;
 }
 export declare const SharedDocsListView: React.FC<SharedDocsListViewProps>;

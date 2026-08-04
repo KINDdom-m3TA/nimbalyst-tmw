@@ -5,6 +5,7 @@ import type { CollabHost, CollabScope } from '@nimbalyst/collab-client/core';
 import type {
   CollabDocsSession,
   SharedDocument,
+  SharedFolder,
 } from '@nimbalyst/collab-client/docs';
 import { store } from '@nimbalyst/runtime/store';
 
@@ -106,4 +107,46 @@ export function useSharedDocumentTitles(): Map<string, string> {
     ])),
     [documents],
   );
+}
+
+export interface SharedDocumentBreadcrumb {
+  documentTitle: string | null;
+  folders: Array<{ folderId: string; name: string }>;
+}
+
+const noSharedFolders: Atom<SharedFolder[]> = atom<SharedFolder[]>([]);
+
+/** Resolved first-class folder ancestry for browser/native breadcrumb chrome. */
+export function useSharedDocumentBreadcrumb(
+  documentId?: string | null,
+  folderId?: string | null,
+): SharedDocumentBreadcrumb {
+  const value = useContext(CollabDocsUIContext);
+  const documents = useAtomValue(value?.session.atoms.allSharedDocuments ?? noSharedDocuments);
+  const folders = useAtomValue(value?.session.atoms.sharedFolders ?? noSharedFolders);
+  return useMemo(() => {
+    const document = documentId
+      ? documents.find(candidate => candidate.documentId === documentId) ?? null
+      : null;
+    const folderById = new Map(folders.map(folder => [folder.folderId, folder]));
+    const ancestry: Array<{ folderId: string; name: string }> = [];
+    const visited = new Set<string>();
+    let currentId = document?.parentFolderId ?? folderId ?? null;
+    while (currentId && !visited.has(currentId)) {
+      visited.add(currentId);
+      const folder = folderById.get(currentId);
+      if (!folder) break;
+      ancestry.unshift({
+        folderId: folder.folderId,
+        name: folder.decryptFailed ? 'Locked folder' : folder.name,
+      });
+      currentId = folder.parentFolderId ?? null;
+    }
+    return {
+      documentTitle: document
+        ? getSharedDocumentDisplayName(document.title, document.documentId)
+        : null,
+      folders: ancestry,
+    };
+  }, [documentId, documents, folderId, folders]);
 }

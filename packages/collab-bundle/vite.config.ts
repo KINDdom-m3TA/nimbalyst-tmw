@@ -3,6 +3,7 @@ import { defineConfig, type Plugin } from 'vite';
 import { fileURLToPath, URL } from 'node:url';
 import { resolve } from 'node:path';
 
+const repoRoot = resolve(import.meta.dirname, '../..').replaceAll('\\', '/');
 const runtimeSource = fileURLToPath(new URL('../runtime/src', import.meta.url));
 const collabClientSource = fileURLToPath(new URL('../collab-client/src', import.meta.url));
 const emptyBrowserModule = '\0nimbalyst-empty-browser-module';
@@ -55,16 +56,26 @@ function browserHostWorkarounds(): Plugin[] {
 }
 
 function bundleGraphReport(): Plugin {
+  const normalizeModuleId = (id: string | null) => {
+    if (id === null) return null;
+    const normalized = id.replaceAll('\\', '/');
+    const virtualPrefix = normalized.startsWith('\0') ? '\0' : '';
+    const pathPart = virtualPrefix ? normalized.slice(1) : normalized;
+    return pathPart.startsWith(`${repoRoot}/`)
+      ? `${virtualPrefix}${pathPart.slice(repoRoot.length)}`
+      : normalized;
+  };
+
   return {
     name: 'collab-bundle-graph-report',
     generateBundle(_options, outputBundle) {
       const modules = Array.from(this.getModuleIds(), (id) => {
         const info = this.getModuleInfo(id);
         return {
-          id,
+          id: normalizeModuleId(id),
           external: info?.isExternal ?? false,
-          importers: info?.importers ?? [],
-          dynamicImporters: info?.dynamicImporters ?? [],
+          importers: (info?.importers ?? []).map(normalizeModuleId),
+          dynamicImporters: (info?.dynamicImporters ?? []).map(normalizeModuleId),
         };
       });
       const chunks = Object.values(outputBundle)
@@ -73,11 +84,11 @@ function bundleGraphReport(): Plugin {
           fileName: chunk.fileName,
           name: chunk.name,
           isEntry: chunk.isEntry,
-          facadeModuleId: chunk.facadeModuleId,
+          facadeModuleId: normalizeModuleId(chunk.facadeModuleId),
           imports: chunk.imports,
           dynamicImports: chunk.dynamicImports,
           exports: chunk.exports,
-          modules: Object.keys(chunk.modules),
+          modules: Object.keys(chunk.modules).map((id) => normalizeModuleId(id)),
           codeBytes: Buffer.byteLength(chunk.code),
         }));
       this.emitFile({
@@ -181,6 +192,9 @@ export default defineConfig({
       external: isHostSingleton,
       preserveEntrySignatures: 'exports-only',
       output: {
+        // Keep public source maps and their relative module mappings, but do
+        // not copy source-file contents (including path examples) into dist.
+        sourcemapExcludeSources: true,
         entryFileNames: '[name].js',
         chunkFileNames: 'chunks/[name]-[hash].js',
         assetFileNames: (assetInfo) => assetInfo.name?.endsWith('.css')

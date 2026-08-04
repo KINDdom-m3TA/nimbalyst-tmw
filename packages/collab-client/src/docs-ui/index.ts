@@ -4,5 +4,6 @@ export * from './CollabNewDocumentMenu';
 export * from './CollabSidebar';
 export * from './DocUnreadDot';
 export * from './documentPresentation';
+export * from './primitives/ScopeSummaryHeader';
 export * from './SharedDocsHome';
 export * from './SharedDocsListView';

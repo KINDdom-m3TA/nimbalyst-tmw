@@ -16,7 +16,8 @@ export function generateScopeAccentColor(scopeKey: string): string {
 
 export interface ScopeSummaryHeaderProps {
   scopeKey: string;
-  scopeName?: string;
+  scopeName?: React.ReactNode;
+  scopePath?: React.ReactNode;
   actions?: React.ReactNode;
   subtitle?: React.ReactNode;
   showAccent?: boolean;
@@ -27,13 +28,14 @@ export interface ScopeSummaryHeaderProps {
 export function ScopeSummaryHeader({
   scopeKey,
   scopeName,
+  scopePath,
   actions,
   subtitle,
   showAccent = true,
   headerClassName = '',
   actionsClassName = '',
 }: ScopeSummaryHeaderProps) {
-  const displayName = scopeName || basename(scopeKey) || 'Shared Docs';
+  const displayName = scopeName ?? (basename(scopeKey) || 'Shared Docs');
   return (
     <>
       {showAccent ? <div className="workspace-color-accent h-[3px] w-full opacity-90 shrink-0" style={{ backgroundColor: generateScopeAccentColor(scopeKey) }} /> : null}
@@ -45,7 +47,7 @@ export function ScopeSummaryHeader({
           </div>
           {actions ? <div className={`workspace-summary-header-actions flex items-center gap-1.5 shrink-0 ${actionsClassName}`.trim()}>{actions}</div> : null}
         </div>
-        <div className="workspace-summary-header-path mt-0.5 text-[11px] text-[var(--nim-text-muted)] overflow-hidden text-ellipsis whitespace-nowrap opacity-75 font-normal" title={scopeKey}>{scopeKey}</div>
+        <div className="workspace-summary-header-path mt-0.5 text-[11px] text-[var(--nim-text-muted)] overflow-hidden text-ellipsis whitespace-nowrap opacity-75 font-normal" title={scopeKey}>{scopePath ?? scopeKey}</div>
       </div>
     </>
   );

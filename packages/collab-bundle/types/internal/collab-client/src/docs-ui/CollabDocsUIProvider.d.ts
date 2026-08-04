@@ -50,3 +50,12 @@ export declare function useCollabDocsUI(): CollabDocsUIContextValue;
  * route that will not render at all.
  */
 export declare function useSharedDocumentTitles(): Map<string, string>;
+export interface SharedDocumentBreadcrumb {
+    documentTitle: string | null;
+    folders: Array<{
+        folderId: string;
+        name: string;
+    }>;
+}
+/** Resolved first-class folder ancestry for browser/native breadcrumb chrome. */
+export declare function useSharedDocumentBreadcrumb(documentId?: string | null, folderId?: string | null): SharedDocumentBreadcrumb;
