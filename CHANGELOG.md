@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - Shared documents and team collaboration connect again, instead of failing to sync after the collaboration server began rejecting the desktop app's connections.
+- Shared documents now keep retrying when a sign-in token could not be refreshed, instead of silently giving up and sitting on a connection that would never come back.
+- SSE-transport MCP servers that use OAuth now reach your sessions instead of being dropped without explanation, so servers you authorized elsewhere no longer go missing with none of their tools available.
 - MCP servers whose provider does not support dynamic client registration can now be authorized by entering the client ID the provider issued you; when authorization fails for that reason, the error says so and takes you straight to the field, instead of reporting a generic helper exit and suggesting remedies that could never work.
 - Tracker items in list and table views now expose their action menu without requiring a right-click.
 - Tracker date fields now show the day you entered, instead of the day before if your time zone is behind UTC.

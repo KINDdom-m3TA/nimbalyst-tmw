@@ -95,6 +95,21 @@ describe('MCPConfigService.isOAuthAuthorized', () => {
     expect(checkMcpRemoteAuthStatus).toHaveBeenCalled();
   });
 
+  it('keeps an sse OAuth server that will never be wrapped in the first place', async () => {
+    // nimbalyst#1057. requiresMcpRemote refuses to wrap anything that is not
+    // `http`, so an sse server goes to the CLI directly and no token is ever
+    // written to ~/.mcp-auth. Gating it on that token dropped every sse OAuth
+    // server from the session with only an info log -- while the same config
+    // worked in the Claude CLI, which uses its own keychain token.
+    checkMcpRemoteAuthStatus.mockClear();
+
+    const config = { type: 'sse', url: 'https://mcp.atlassian.com/v1/sse' } as MCPServerConfig;
+    await expect(
+      service.isOAuthAuthorized(config, { nativeHttpSupported: true })
+    ).resolves.toBe(true);
+    expect(checkMcpRemoteAuthStatus).not.toHaveBeenCalled();
+  });
+
   it('skips the probe for a static-key server on a native-HTTP CLI', async () => {
     // The case the short-circuit exists for: no OAuth of any kind, so a 401 from
     // the probe must not get it classified as an unauthorized OAuth server.
