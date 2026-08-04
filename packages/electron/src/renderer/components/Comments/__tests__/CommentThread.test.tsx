@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createStore } from 'jotai';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CommentThread } from '../CommentThread';
 import { suppressDuplicateActivity } from '../ActivityRow';
@@ -345,5 +345,96 @@ describe('activity composition', () => {
       'comment',
       'a-2',
     ]);
+  });
+});
+
+/**
+ * jsdom has no layout, so scroll geometry has to be supplied. Rows are a fixed
+ * height and the viewport holds two of them, which is enough to tell "pinned to
+ * the newest message" apart from "left where the reader put it".
+ */
+const ROW_HEIGHT_PX = 100;
+const VIEWPORT_PX = 200;
+
+function stubScrollGeometry(): () => void {
+  const proto = Element.prototype;
+  const names = ['scrollTop', 'scrollHeight', 'clientHeight'] as const;
+  const original = names.map(
+    (name) => [name, Object.getOwnPropertyDescriptor(proto, name)] as const,
+  );
+  const offsets = new WeakMap<Element, number>();
+  Object.defineProperty(proto, 'scrollTop', {
+    configurable: true,
+    get(this: Element) {
+      return offsets.get(this) ?? 0;
+    },
+    set(this: Element, value: number) {
+      offsets.set(this, value);
+    },
+  });
+  Object.defineProperty(proto, 'scrollHeight', {
+    configurable: true,
+    get(this: Element) {
+      return this.querySelectorAll('[data-testid^="comment-row-"]').length * ROW_HEIGHT_PX;
+    },
+  });
+  Object.defineProperty(proto, 'clientHeight', {
+    configurable: true,
+    get: () => VIEWPORT_PX,
+  });
+  return () => {
+    for (const [name, descriptor] of original) {
+      if (descriptor) Object.defineProperty(proto, name, descriptor);
+    }
+  };
+}
+
+describe('CommentThread scroll position', () => {
+  let restoreGeometry: () => void;
+
+  beforeEach(() => {
+    restoreGeometry = stubScrollGeometry();
+  });
+  afterEach(() => {
+    cleanup();
+    restoreGeometry();
+  });
+
+  it('opens on the newest message and follows a message the viewer sends', async () => {
+    renderThread();
+    await waitFor(() => screen.getByTestId('comment-row-msg-001'));
+
+    const list = screen.getByTestId('comment-thread-list');
+    expect(list.scrollTop).toBe(list.scrollHeight);
+
+    // Reading history and then posting: sending is an unconditional jump back
+    // to the end, or the message you just wrote is off screen.
+    list.scrollTop = 0;
+    fireEvent.scroll(list);
+    typeIntoComposer('ack');
+    fireEvent.click(screen.getByTestId('comment-composer-send'));
+
+    await waitFor(() => screen.getByTestId('comment-row-msg-local-1'));
+    expect(list.scrollTop).toBe(list.scrollHeight);
+  });
+
+  it('leaves a reader who scrolled up where they are when a message arrives', async () => {
+    const { fixtureAdapter } = renderThread();
+    await waitFor(() => screen.getByTestId('comment-row-msg-001'));
+
+    const list = screen.getByTestId('comment-thread-list');
+    list.scrollTop = 0;
+    fireEvent.scroll(list);
+
+    await act(async () => {
+      await fixtureAdapter.create({
+        actor: { kind: 'user', userId: 'user-dana', onBehalfOfUserId: 'user-dana' },
+        body: { version: 1, format: 'plainText', text: 'from someone else' },
+        clientMutationId: 'remote-1',
+      });
+    });
+
+    await waitFor(() => screen.getByTestId('comment-row-msg-local-1'));
+    expect(list.scrollTop).toBe(0);
   });
 });

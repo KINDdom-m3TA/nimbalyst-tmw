@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 
 import { ActivityRow, shouldGroupWithPrevious, suppressDuplicateActivity } from './ActivityRow';
@@ -31,6 +38,13 @@ import type {
 
 /** Stable identity, so an absent `activity` prop does not churn the timeline memo. */
 const NO_ACTIVITY: ActivityView[] = [];
+
+/**
+ * How far off the bottom still counts as "following the conversation". A couple
+ * of rows of slack, so a reader who nudged the wheel one notch keeps getting new
+ * messages rather than silently falling out of the live view.
+ */
+const FOLLOW_THRESHOLD_PX = 64;
 
 type PendingSend = {
   tempId: string;
@@ -126,6 +140,33 @@ export function CommentThread({
   // them -- tracker comments and inline document comments in V1.
   const reactionsSupported = typeof adapter.react === 'function';
 
+  const listRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * Whether the reader is following the live end of the conversation. The
+   * timeline is bottom-anchored -- newest last -- so this is what decides
+   * between pinning the view to a new message and leaving someone reading
+   * history exactly where they are.
+   */
+  const followingRef = useRef(true);
+  /**
+   * The scroll height captured just before "Load earlier messages" prepends a
+   * page, used to hold the reader on the message they were looking at.
+   */
+  const prependAnchorRef = useRef<number | null>(null);
+
+  const handleListScroll = useCallback(() => {
+    const list = listRef.current;
+    if (!list) return;
+    followingRef.current =
+      list.scrollHeight - list.scrollTop - list.clientHeight <= FOLLOW_THRESHOLD_PX;
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    const list = listRef.current;
+    if (!list) return;
+    list.scrollTop = list.scrollHeight;
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     const cached = adapter.snapshot?.() ?? [];
@@ -217,6 +258,45 @@ export function CommentThread({
       entry.kind === 'activity' ? [entry.activity] : [],
     );
   }, [activity, views]);
+
+  const lastCommentKey = views[views.length - 1]?.key ?? '';
+
+  /**
+   * The one place the timeline's scroll position is decided. Runs before paint
+   * so the first frame of a room is already at the newest message rather than
+   * at the oldest one it happened to load.
+   */
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const anchor = prependAnchorRef.current;
+    if (anchor !== null) {
+      prependAnchorRef.current = null;
+      // A prepended page pushes everything down by exactly the height it added.
+      // Give that back, or "Load earlier" throws the reader forward in time.
+      list.scrollTop += list.scrollHeight - anchor;
+      return;
+    }
+    if (!followingRef.current) return;
+    list.scrollTop = list.scrollHeight;
+  }, [lastCommentKey, views.length, visibleActivity.length, loading]);
+
+  /**
+   * Rows grow after they first paint -- an attachment thumbnail decodes, a
+   * resource pill resolves its preview. While the reader is following, that
+   * growth has to keep the newest message on screen instead of pushing it under
+   * the composer.
+   */
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (followingRef.current) scrollToBottom();
+    });
+    observer.observe(list);
+    for (const child of Array.from(list.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [lastCommentKey, scrollToBottom]);
 
   const copyLink = useCallback(
     (urn: string) => {
@@ -334,6 +414,10 @@ export function CommentThread({
         capabilities,
         deliveryHints: input.deliveryHints,
       };
+      // Posting is an unconditional jump to the end: you always get to see the
+      // message you just sent, even if you were reading history when you wrote
+      // it.
+      followingRef.current = true;
       setComments((current) => mergeComments(current, [optimistic]));
       setPendingSends((current) => new Map(current).set(tempId, pending));
       setReplyTo(null);
@@ -356,12 +440,16 @@ export function CommentThread({
   const loadEarlier = useCallback(async () => {
     if (!nextCursor || loadingEarlier) return;
     setLoadingEarlier(true);
+    prependAnchorRef.current = listRef.current?.scrollHeight ?? null;
     try {
       const page = await adapter.list(nextCursor);
       setComments((current) => mergeComments(current, page.comments));
       setNextCursor(page.nextCursor);
       setLoadFailed(false);
     } catch {
+      // Nothing was prepended, so a stale anchor would only misplace the next
+      // message that does arrive.
+      prependAnchorRef.current = null;
       setLoadFailed(true);
     } finally {
       setLoadingEarlier(false);
@@ -373,7 +461,13 @@ export function CommentThread({
 
   return (
     <div className="comment-thread [container-type:inline-size] [container-name:comment-surface] flex h-full min-h-0 flex-col" data-testid="comment-thread">
-      <div className="comment-thread-list min-h-0 flex-1 overflow-y-auto py-2" role="list" data-testid="comment-thread-list">
+      <div
+        ref={listRef}
+        className="comment-thread-list min-h-0 flex-1 overflow-y-auto py-2"
+        role="list"
+        data-testid="comment-thread-list"
+        onScroll={handleListScroll}
+      >
         {loading && (
           <p className="m-0 px-3 py-4 text-[13px] text-[var(--nim-text-faint)]" data-testid="comment-thread-loading">
             Loading conversation…
