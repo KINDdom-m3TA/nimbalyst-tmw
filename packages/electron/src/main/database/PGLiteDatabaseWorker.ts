@@ -51,6 +51,41 @@ export function raceWithTimeout<T>(work: Promise<T>, timeoutMs: number): Promise
 }
 
 /**
+ * Rate limiter for repeated, identical database failures.
+ *
+ * A wedged database does not fail once -- it fails on every query the app
+ * attempts, for as long as it stays wedged. On 2026-08-03 that produced ~1,000
+ * analytics events per MINUTE from a single session (~62,000 events in two
+ * hours) and told us nothing the first event hadn't. This caps each distinct
+ * failure signature to one event per window and stamps the suppressed count on
+ * the next one that gets through, so the volume stays visible without paying
+ * per occurrence.
+ */
+export class DatabaseErrorRateLimiter {
+  private readonly seen = new Map<string, { windowStart: number; suppressed: number }>();
+
+  constructor(
+    private readonly windowMs: number = 60_000,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /**
+   * Returns the number of events suppressed since this signature last reported,
+   * or `null` when this occurrence should itself be suppressed.
+   */
+  admit(signature: string): number | null {
+    const timestamp = this.now();
+    const entry = this.seen.get(signature);
+    if (!entry || timestamp - entry.windowStart >= this.windowMs) {
+      this.seen.set(signature, { windowStart: timestamp, suppressed: 0 });
+      return entry ? entry.suppressed : 0;
+    }
+    entry.suppressed += 1;
+    return null;
+  }
+}
+
+/**
  * Extended timeout for the worker `init` message. The init path runs
  * PGLite WAL recovery after an unclean shutdown plus schema migration
  * and, if corruption is detected, the auto-recovery flow. The default
@@ -65,15 +100,59 @@ export function raceWithTimeout<T>(work: Promise<T>, timeoutMs: number): Promise
  */
 export const INIT_TIMEOUT_MS = 120_000;
 
-// Helper to categorize database errors
-function categorizeDBError(error: any): string {
+/**
+ * Bucket a database failure into a category we can chart.
+ *
+ * The categories below are keyword matches, so they only ever recognize errors
+ * whose wording we anticipated. Every category that this function CANNOT name
+ * still has to be diagnosable, which is what `describeDBError` is for -- on
+ * 2026-08-03 a user generated ~55,000 `database_error` events that were all
+ * `errorType: 'unknown'` with no message attached, and the actual exception
+ * that wedged their database is now unrecoverable. Add categories here when a
+ * new failure mode earns one; never let that be the only thing we record.
+ */
+export function categorizeDBError(error: any): string {
   const message = error?.message?.toLowerCase() || String(error).toLowerCase();
   if (message.includes('permission') || message.includes('eacces')) return 'permission';
+  // Corruption is checked before disk: SQLite's corruption error is literally
+  // "database disk image is malformed", which the `disk` test below would
+  // otherwise mislabel as a full volume.
+  if (message.includes('corrupt') || message.includes('malformed')) return 'corruption';
   if (message.includes('disk') || message.includes('enospc')) return 'disk_full';
   if (message.includes('lock') || message.includes('busy')) return 'lock';
-  if (message.includes('corrupt')) return 'corruption';
   if (message.includes('syntax')) return 'syntax';
+  // These three are produced by this file and by worker teardown, and every one
+  // of them used to land in 'unknown'.
+  if (message.includes('statement timeout') || message.includes('timed out')) return 'timeout';
+  if (message.includes('worker') || message.includes('not initialized')) return 'worker_unavailable';
+  if (message.includes('closed') || message.includes('shutting down')) return 'closed';
   return 'unknown';
+}
+
+/** Upper bound on the error text attached to telemetry. */
+const MAX_ERROR_MESSAGE_LENGTH = 300;
+
+/**
+ * Content-free description of a database failure, safe to send to analytics.
+ *
+ * Database errors can quote row values (a unique-violation names the
+ * conflicting key, a type error quotes the offending literal), and rows here
+ * hold user prose. Digits are masked and quoted literals are elided so the
+ * shape of the error survives without carrying the user's content with it.
+ */
+export function describeDBError(error: any): { errorName: string; errorMessage: string; sqlState: string } {
+  const raw = typeof error?.message === 'string' ? error.message : String(error ?? '');
+  const redacted = raw
+    .replace(/'[^']*'/g, "'?'")
+    .replace(/"[^"]*"/g, '"?"')
+    .replace(/\d/g, '#')
+    .slice(0, MAX_ERROR_MESSAGE_LENGTH);
+  return {
+    errorName: typeof error?.name === 'string' && error.name ? error.name : 'Error',
+    errorMessage: redacted,
+    // PGLite surfaces Postgres SQLSTATE codes; better-sqlite3 surfaces `code`.
+    sqlState: typeof error?.code === 'string' ? error.code : 'none',
+  };
 }
 
 interface PendingRequest {
@@ -226,6 +305,7 @@ export class PGLiteDatabaseWorker {
   private initialized = false;
   private initPromise: Promise<void> | null = null;
   private analytics = AnalyticsService.getInstance();
+  private databaseErrorLimiter = new DatabaseErrorRateLimiter();
   private backupService: DatabaseBackupService | null = null;
   private stats = new DatabaseStats();
   private statsInterval: ReturnType<typeof setInterval> | null = null;
@@ -834,11 +914,7 @@ export class PGLiteDatabaseWorker {
       // Record stats even for failures
       this.stats.record(tableName, operation, duration, execMs);
       // Track database error
-      this.analytics.sendEvent('database_error', {
-        operation,
-        errorType: categorizeDBError(error),
-        tableName
-      });
+      this.reportDatabaseError(error, operation, tableName);
       // Also log slow failed queries
       if (duration >= PGLiteDatabaseWorker.SLOW_QUERY_THRESHOLD_MS) {
         logger.main.warn(`[PGLite] Slow query failed (${duration.toFixed(0)}ms): table=${tableName}`);
@@ -935,11 +1011,7 @@ export class PGLiteDatabaseWorker {
       // Record stats even for failures
       this.stats.record(tableName, 'write', duration, execMs);
       // Track database error
-      this.analytics.sendEvent('database_error', {
-        operation: 'write',
-        errorType: categorizeDBError(error),
-        tableName
-      });
+      this.reportDatabaseError(error, 'write', tableName);
       // Also log slow failed exec operations
       if (duration >= PGLiteDatabaseWorker.SLOW_QUERY_THRESHOLD_MS) {
         logger.main.warn(`[PGLite] Slow exec failed (${duration.toFixed(0)}ms): table=${tableName}`);
@@ -958,9 +1030,42 @@ export class PGLiteDatabaseWorker {
   /**
    * Extract table name from SQL query (simple heuristic)
    */
+  /**
+   * Emit a rate-limited `database_error` carrying enough detail to diagnose it.
+   *
+   * Everything here past `operation`/`tableName` exists because the 2026-08-03
+   * spike arrived with `errorType: 'unknown'` and nothing else -- 55,000 events
+   * that could not identify their own cause.
+   */
+  private reportDatabaseError(
+    error: unknown,
+    operation: 'read' | 'write',
+    tableName: string,
+  ): void {
+    const errorType = categorizeDBError(error);
+    const details = describeDBError(error);
+    const suppressed = this.databaseErrorLimiter.admit(
+      `${operation}|${tableName}|${errorType}|${details.errorMessage}`,
+    );
+    if (suppressed === null) return;
+    this.analytics.sendEvent('database_error', {
+      operation,
+      errorType,
+      tableName,
+      ...details,
+      suppressedSinceLastReport: suppressed,
+    });
+  }
+
   private extractTableName(sql: string): string {
     // Normalize whitespace for easier matching
     const normalized = sql.replace(/\s+/g, ' ').trim();
+    // Transaction control names no table. Reporting these as 'unknown' made the
+    // 2026-08-03 spike unreadable: ~28,000 events pointed at an "unresolved
+    // table" that was really BEGIN/COMMIT/ROLLBACK failing on a dead database.
+    if (/^(BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION|SAVEPOINT|RELEASE)\b/i.test(normalized)) {
+      return 'transaction';
+    }
     // Try specific DML patterns in priority order
     const patterns = [
       /^SELECT\b.+?\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*)/i,    // SELECT ... FROM table
