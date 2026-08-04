@@ -10,27 +10,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
-- The organization inbox is reachable from any project in that organization — a title-bar button badges unread messages, and the account menu gains a Messages entry.
+
+### Changed
+<!-- Changes to existing functionality go here -->
+
+### Fixed
+<!-- Bug fixes go here -->
+
+### Removed
+<!-- Removed features go here -->
+
+## [0.72.1] - 2026-08-04
+
+
+### Added
+<!-- New features go here -->
+- The organization inbox is reachable from any project: a title-bar button badges unread messages, and the account menu gains a Messages entry.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
 - Double-clicking a cell in the tracker table now edits it in place; the key, type and date columns still open the item.
-- The organization Inbox is easier to triage: shorter rows that lead with what each delivery points at — a bug, a decision, the document's own icon — clearer unread state, unread and source-type filters that combine with mentions and assignments, and a click that previews a delivery instead of navigating away from the list.
+- Inbox rows are shorter and lead with what each delivery points at, with unread and source-type filters and a click that previews instead of navigating away.
 
 ### Fixed
 <!-- Bug fixes go here -->
-- Team messages sent to you now raise a desktop notification, and a direct message is titled after the other person, when more than one account is signed in.
-- Shared documents and team collaboration connect again, instead of failing to sync after the collaboration server began rejecting the desktop app's connections.
-- Shared documents now keep retrying when a sign-in token could not be refreshed, instead of silently giving up and sitting on a connection that would never come back.
-- Sessions no longer sit showing as running after their work has finished, whether you interrupt a stuck one or interrupt an agent with background work still in flight, so prompts queued behind them send instead of waiting.
-- SSE-transport MCP servers that use OAuth now reach your sessions instead of going missing with none of their tools available, and a server genuinely left out because it needs authorizing is now listed as such in the session's MCP server status rather than disappearing silently.
-- MCP servers whose provider does not support dynamic client registration can now be authorized by entering the client ID the provider issued you; when authorization fails for that reason, the error says so and takes you straight to the field, instead of reporting a generic helper exit and suggesting remedies that could never work.
+- Shared documents and team collaboration connect again after the sync server started rejecting the desktop app's connections.
+- Shared documents retry sync after a sign-in token refresh fails, instead of sitting on a connection that never comes back.
+- Team messages raise a desktop notification, and a direct message is titled after the other person, when more than one account is signed in.
+- Sessions no longer show as running after their work finished, so prompts queued behind an interrupted or background-task session send.
+- SSE-transport MCP servers that use OAuth reach your sessions again, and a server left out because it needs authorizing is now listed as such.
+- MCP servers whose provider refuses dynamic client registration can be authorized with a client ID you enter, and the error names that cause.
 - Tracker items in list and table views now expose their action menu without requiring a right-click.
 - Tracker date fields now show the day you entered, instead of the day before if your time zone is behind UTC.
-- Committing an agent's work now closes the tracker item it fixed and marks the session complete, instead of leaving finished work sitting in review for you to clear by hand.
-- Changing a project's permission mode now applies to agent sessions that are already running, instead of taking effect only after they finish.
-- Prompts you queue from the phone now disappear from the queued list once the agent picks them up, instead of staying there for the rest of the session.
-- Tables exported to PDF now span the full page width with content-sized columns, instead of collapsing into a narrow strip; columns you sized with the resizer are still honoured.
+- Committing an agent's work now closes the tracker item it fixed and marks the session complete.
+- Changing a project's permission mode now applies to agent sessions that are already running.
+- Prompts you queue from the phone leave the queued list once the agent picks them up.
+- Tables exported to PDF now span the full page width with content-sized columns, instead of collapsing into a narrow strip.
 
 ### Removed
 <!-- Removed features go here -->
