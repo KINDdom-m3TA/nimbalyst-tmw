@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Bug fixes go here -->
 - Shared documents and team collaboration connect again, instead of failing to sync after the collaboration server began rejecting the desktop app's connections.
 - Shared documents now keep retrying when a sign-in token could not be refreshed, instead of silently giving up and sitting on a connection that would never come back.
-- Interrupting a session that was stuck showing as running now settles it, so prompts queued behind it send instead of waiting for a completion that was never coming.
+- Sessions no longer sit showing as running after their work has finished, whether you interrupt a stuck one or interrupt an agent with background work still in flight, so prompts queued behind them send instead of waiting.
 - SSE-transport MCP servers that use OAuth now reach your sessions instead of going missing with none of their tools available, and a server genuinely left out because it needs authorizing is now listed as such in the session's MCP server status rather than disappearing silently.
 - MCP servers whose provider does not support dynamic client registration can now be authorized by entering the client ID the provider issued you; when authorization fails for that reason, the error says so and takes you straight to the field, instead of reporting a generic helper exit and suggesting remedies that could never work.
 - Tracker items in list and table views now expose their action menu without requiring a right-click.

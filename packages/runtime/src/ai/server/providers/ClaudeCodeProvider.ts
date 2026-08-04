@@ -108,6 +108,8 @@ import { resolveEffectiveSessionMode } from './claudeCode/resolveEffectiveSessio
 import { resolveClaudeConfigDir } from './claudeCode/claudeConfigDir';
 import {
   hasRunningTasks as computeHasRunningTasks,
+  countRunningTasks,
+  reapRunningTasks,
   shouldDeferTeardownForSubagents,
   shouldExitDrain,
   classifyDrainOutcome,
@@ -1681,7 +1683,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
             // Keep draining until every task reports a terminal status (or the
             // loop exits for another reason, handled by finalizeBackgroundDrain).
             if (willDrainSubagents) {
-              console.log(`[CLAUDE-CODE] SUBAGENT_DRAIN: lead turn complete but ${this.activeTasks.size} sub-agent task(s) still running; deferring teardown to drain`);
+              console.log(`[CLAUDE-CODE] SUBAGENT_DRAIN: lead turn complete but ${countRunningTasks(this.activeTasks.values())} sub-agent task(s) still running; deferring teardown to drain`);
               continue;
             }
             break;
@@ -2089,6 +2091,17 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
 
     // Abort all managed teammates
     this.teammateManager.killAll();
+
+    // Background sub-agent tasks run inside the subprocess we just killed, so
+    // their terminal task_notification can never arrive. Left 'running', they
+    // make the NEXT turn's `result` defer teardown and burn the whole drain
+    // grace on work nobody is waiting for -- the session sits 'running' and
+    // its queued prompts stall behind it. NIM-2458.
+    const orphanedTasks = reapRunningTasks(this.activeTasks.values());
+    if (orphanedTasks.length > 0) {
+      console.warn(`[CLAUDE-CODE] SUBAGENT_TASK: abort orphaned ${orphanedTasks.length} running task(s); marking stopped. tasks=[${orphanedTasks.join(', ')}]`);
+      this.emitTaskUpdate(this.currentSessionId).catch(() => {});
+    }
 
     // Clean up MCP health checks and persistent query reference
     this.stopMcpHealthChecks();
@@ -2661,13 +2674,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
     });
 
     if (outcome.markStopped) {
-      const stranded: string[] = [];
-      for (const task of this.activeTasks.values()) {
-        if (task.status === 'running') {
-          task.status = 'stopped';
-          stranded.push(task.description || task.taskId);
-        }
-      }
+      const stranded = reapRunningTasks(this.activeTasks.values());
       console.warn(`[CLAUDE-CODE] SUBAGENT_DRAIN: loop exited (cause=${this.drainExitCause}) with ${stranded.length} unresolved sub-agent task(s); marking stopped. autoContinue=${outcome.autoContinue}. tasks=[${stranded.join(', ')}]`);
       this.emitTaskUpdate(sessionId).catch(() => {});
     }
