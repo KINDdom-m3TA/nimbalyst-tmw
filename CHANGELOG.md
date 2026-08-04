@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- Spreadsheets can freeze columns and header rows again, and a selection now spans the frozen edge whether you drag it, select all, or copy it.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
