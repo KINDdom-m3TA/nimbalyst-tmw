@@ -364,6 +364,13 @@ export class DocumentSyncProvider {
       console.error('[DocumentSync] Failed to build URL:', err);
       this.connecting = false;
       this.setStatus(this.hasPendingLocalUpdates() ? 'offline-unsynced' : 'disconnected');
+      // No socket was created, so no 'close' event will ever arrive to drive
+      // handleDisconnect() -- this is the one failure path that has to schedule
+      // its own retry. Without it a single transient token-exchange failure
+      // (network blip, 5xx from the session service) strands the provider at
+      // 'disconnected' forever, and hosts that present "never live" as
+      // "Connecting" show a spinner that will never resolve.
+      this.scheduleReconnect();
       return;
     }
 
