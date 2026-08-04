@@ -206,6 +206,7 @@ import { gitRefWatcher } from './file/GitRefWatcher';
 import { autoUpdaterService, AutoUpdaterService } from './services/autoUpdater';
 import { initializeDatabase } from './database/initialize';
 import { database, HandledError } from './database/PGLiteDatabaseWorker';
+import { buildDatabaseInitializationErrorProperties } from './database/DatabaseErrorTelemetry';
 import { resolveTrackerDeepLinkId } from './services/tracker/resolveTrackerDeepLinkId';
 import { AnalyticsService } from "./services/analytics/AnalyticsService.ts";
 import { registerAnalyticsHandlers } from "./ipc/AnalyticsHandlers.ts";
@@ -1568,23 +1569,22 @@ app.whenReady().then(async () => {
                                    errorMessage.includes('Aborted') ||
                                    errorMessage.includes('DATABASE_INIT_FAILED');
 
-        // Send analytics about the failure
+        // Send analytics about the failure. The detailed engine text stays in
+        // the local log above -- init failures name the database path, which
+        // carries the user's account name. PostHog gets fixed codes instead.
         try {
             const analytics = AnalyticsService.getInstance();
-            if (isWasmRuntimeCrash) {
-                // Track as a known error for monitoring specific failure patterns
-                analytics.sendEvent('known_error', {
-                    errorId: 'pglite_wasm_runtime_crash',
-                    context: 'database_initialization'
-                });
-            } else {
-                // Track generic database initialization failure
-                analytics.sendEvent('known_error', {
-                    errorId: 'database_initialization_failed',
-                    context: 'database_initialization',
-                    errorMessage: errorMessage.slice(0, 200) // Truncate for privacy
-                });
-            }
+            const initializationError = buildDatabaseInitializationErrorProperties(
+                error,
+                database.getEngine(),
+            );
+            analytics.sendEvent('known_error', {
+                errorId: isWasmRuntimeCrash
+                    ? 'pglite_wasm_runtime_crash'
+                    : 'database_initialization_failed',
+                context: 'database_initialization',
+                ...initializationError,
+            });
         } catch {
             // Analytics failure shouldn't block error handling
         }

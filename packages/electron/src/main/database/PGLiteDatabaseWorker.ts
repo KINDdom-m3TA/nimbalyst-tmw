@@ -14,6 +14,13 @@ import { AnalyticsService } from '../services/analytics/AnalyticsService';
 import type { SQLiteDatabase } from './sqlite/SQLiteDatabase';
 import { DatabaseBackupService } from '../services/database/DatabaseBackupService';
 import { deserializeWorkerError } from './workerErrorSerialization';
+import {
+  buildDatabaseOperationErrorProperties,
+  classifyDatabaseOperation,
+  DatabaseErrorTelemetryLimiter,
+  extractDatabaseTableName,
+  type DatabaseTelemetryOperation,
+} from './DatabaseErrorTelemetry';
 
 /**
  * Error that has already been shown to the user via a dialog.
@@ -51,41 +58,6 @@ export function raceWithTimeout<T>(work: Promise<T>, timeoutMs: number): Promise
 }
 
 /**
- * Rate limiter for repeated, identical database failures.
- *
- * A wedged database does not fail once -- it fails on every query the app
- * attempts, for as long as it stays wedged. On 2026-08-03 that produced ~1,000
- * analytics events per MINUTE from a single session (~62,000 events in two
- * hours) and told us nothing the first event hadn't. This caps each distinct
- * failure signature to one event per window and stamps the suppressed count on
- * the next one that gets through, so the volume stays visible without paying
- * per occurrence.
- */
-export class DatabaseErrorRateLimiter {
-  private readonly seen = new Map<string, { windowStart: number; suppressed: number }>();
-
-  constructor(
-    private readonly windowMs: number = 60_000,
-    private readonly now: () => number = Date.now,
-  ) {}
-
-  /**
-   * Returns the number of events suppressed since this signature last reported,
-   * or `null` when this occurrence should itself be suppressed.
-   */
-  admit(signature: string): number | null {
-    const timestamp = this.now();
-    const entry = this.seen.get(signature);
-    if (!entry || timestamp - entry.windowStart >= this.windowMs) {
-      this.seen.set(signature, { windowStart: timestamp, suppressed: 0 });
-      return entry ? entry.suppressed : 0;
-    }
-    entry.suppressed += 1;
-    return null;
-  }
-}
-
-/**
  * Extended timeout for the worker `init` message. The init path runs
  * PGLite WAL recovery after an unclean shutdown plus schema migration
  * and, if corruption is detected, the auto-recovery flow. The default
@@ -99,61 +71,6 @@ export class DatabaseErrorRateLimiter {
  * Exported so unit tests can pin the value if reasoning ever shifts.
  */
 export const INIT_TIMEOUT_MS = 120_000;
-
-/**
- * Bucket a database failure into a category we can chart.
- *
- * The categories below are keyword matches, so they only ever recognize errors
- * whose wording we anticipated. Every category that this function CANNOT name
- * still has to be diagnosable, which is what `describeDBError` is for -- on
- * 2026-08-03 a user generated ~55,000 `database_error` events that were all
- * `errorType: 'unknown'` with no message attached, and the actual exception
- * that wedged their database is now unrecoverable. Add categories here when a
- * new failure mode earns one; never let that be the only thing we record.
- */
-export function categorizeDBError(error: any): string {
-  const message = error?.message?.toLowerCase() || String(error).toLowerCase();
-  if (message.includes('permission') || message.includes('eacces')) return 'permission';
-  // Corruption is checked before disk: SQLite's corruption error is literally
-  // "database disk image is malformed", which the `disk` test below would
-  // otherwise mislabel as a full volume.
-  if (message.includes('corrupt') || message.includes('malformed')) return 'corruption';
-  if (message.includes('disk') || message.includes('enospc')) return 'disk_full';
-  if (message.includes('lock') || message.includes('busy')) return 'lock';
-  if (message.includes('syntax')) return 'syntax';
-  // These three are produced by this file and by worker teardown, and every one
-  // of them used to land in 'unknown'.
-  if (message.includes('statement timeout') || message.includes('timed out')) return 'timeout';
-  if (message.includes('worker') || message.includes('not initialized')) return 'worker_unavailable';
-  if (message.includes('closed') || message.includes('shutting down')) return 'closed';
-  return 'unknown';
-}
-
-/** Upper bound on the error text attached to telemetry. */
-const MAX_ERROR_MESSAGE_LENGTH = 300;
-
-/**
- * Content-free description of a database failure, safe to send to analytics.
- *
- * Database errors can quote row values (a unique-violation names the
- * conflicting key, a type error quotes the offending literal), and rows here
- * hold user prose. Digits are masked and quoted literals are elided so the
- * shape of the error survives without carrying the user's content with it.
- */
-export function describeDBError(error: any): { errorName: string; errorMessage: string; sqlState: string } {
-  const raw = typeof error?.message === 'string' ? error.message : String(error ?? '');
-  const redacted = raw
-    .replace(/'[^']*'/g, "'?'")
-    .replace(/"[^"]*"/g, '"?"')
-    .replace(/\d/g, '#')
-    .slice(0, MAX_ERROR_MESSAGE_LENGTH);
-  return {
-    errorName: typeof error?.name === 'string' && error.name ? error.name : 'Error',
-    errorMessage: redacted,
-    // PGLite surfaces Postgres SQLSTATE codes; better-sqlite3 surfaces `code`.
-    sqlState: typeof error?.code === 'string' ? error.code : 'none',
-  };
-}
 
 interface PendingRequest {
   resolve: (value: any) => void;
@@ -305,7 +222,6 @@ export class PGLiteDatabaseWorker {
   private initialized = false;
   private initPromise: Promise<void> | null = null;
   private analytics = AnalyticsService.getInstance();
-  private databaseErrorLimiter = new DatabaseErrorRateLimiter();
   private backupService: DatabaseBackupService | null = null;
   private stats = new DatabaseStats();
   private statsInterval: ReturnType<typeof setInterval> | null = null;
@@ -913,8 +829,8 @@ export class PGLiteDatabaseWorker {
       this.lastExecMs = undefined;
       // Record stats even for failures
       this.stats.record(tableName, operation, duration, execMs);
-      // Track database error
-      this.reportDatabaseError(error, operation, tableName);
+      // `database_error` is emitted once, in ActiveDatabaseFacade, so the
+      // SQLite backend reports the same failures this one does.
       // Also log slow failed queries
       if (duration >= PGLiteDatabaseWorker.SLOW_QUERY_THRESHOLD_MS) {
         logger.main.warn(`[PGLite] Slow query failed (${duration.toFixed(0)}ms): table=${tableName}`);
@@ -1010,8 +926,7 @@ export class PGLiteDatabaseWorker {
       this.lastExecMs = undefined;
       // Record stats even for failures
       this.stats.record(tableName, 'write', duration, execMs);
-      // Track database error
-      this.reportDatabaseError(error, 'write', tableName);
+      // Emitted once in ActiveDatabaseFacade -- see the note in query().
       // Also log slow failed exec operations
       if (duration >= PGLiteDatabaseWorker.SLOW_QUERY_THRESHOLD_MS) {
         logger.main.warn(`[PGLite] Slow exec failed (${duration.toFixed(0)}ms): table=${tableName}`);
@@ -1028,60 +943,11 @@ export class PGLiteDatabaseWorker {
   }
 
   /**
-   * Extract table name from SQL query (simple heuristic)
+   * Extract a table name for local performance stats. Attribution is
+   * deliberately narrow -- see `extractDatabaseTableName`.
    */
-  /**
-   * Emit a rate-limited `database_error` carrying enough detail to diagnose it.
-   *
-   * Everything here past `operation`/`tableName` exists because the 2026-08-03
-   * spike arrived with `errorType: 'unknown'` and nothing else -- 55,000 events
-   * that could not identify their own cause.
-   */
-  private reportDatabaseError(
-    error: unknown,
-    operation: 'read' | 'write',
-    tableName: string,
-  ): void {
-    const errorType = categorizeDBError(error);
-    const details = describeDBError(error);
-    const suppressed = this.databaseErrorLimiter.admit(
-      `${operation}|${tableName}|${errorType}|${details.errorMessage}`,
-    );
-    if (suppressed === null) return;
-    this.analytics.sendEvent('database_error', {
-      operation,
-      errorType,
-      tableName,
-      ...details,
-      suppressedSinceLastReport: suppressed,
-    });
-  }
-
   private extractTableName(sql: string): string {
-    // Normalize whitespace for easier matching
-    const normalized = sql.replace(/\s+/g, ' ').trim();
-    // Transaction control names no table. Reporting these as 'unknown' made the
-    // 2026-08-03 spike unreadable: ~28,000 events pointed at an "unresolved
-    // table" that was really BEGIN/COMMIT/ROLLBACK failing on a dead database.
-    if (/^(BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION|SAVEPOINT|RELEASE)\b/i.test(normalized)) {
-      return 'transaction';
-    }
-    // Try specific DML patterns in priority order
-    const patterns = [
-      /^SELECT\b.+?\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*)/i,    // SELECT ... FROM table
-      /^INSERT\s+INTO\s+([a-zA-Z_][a-zA-Z0-9_]*)/i,          // INSERT INTO table
-      /^UPDATE\s+([a-zA-Z_][a-zA-Z0-9_]*)/i,                  // UPDATE table
-      /^DELETE\s+FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)/i,           // DELETE FROM table
-      /^CREATE\s+(?:TABLE|INDEX)\b.*?\bON\s+([a-zA-Z_][a-zA-Z0-9_]*)/i, // CREATE INDEX ... ON table
-      /^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-zA-Z_][a-zA-Z0-9_]*)/i, // CREATE TABLE table
-      /^ALTER\s+TABLE\s+([a-zA-Z_][a-zA-Z0-9_]*)/i,           // ALTER TABLE table
-      /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?([a-zA-Z_][a-zA-Z0-9_]*)/i, // DROP TABLE table
-    ];
-    for (const pattern of patterns) {
-      const match = normalized.match(pattern);
-      if (match) return match[1];
-    }
-    return 'unknown';
+    return extractDatabaseTableName(sql);
   }
 
   /**
@@ -1089,11 +955,7 @@ export class PGLiteDatabaseWorker {
    * Parameterized DML goes through query(), so infer from the leading verb.
    */
   private classifySqlOperation(sql: string): 'read' | 'write' {
-    const normalized = sql.replace(/^\s+/, '');
-    if (/^(INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|TRUNCATE|BEGIN|COMMIT|ROLLBACK)\b/i.test(normalized)) {
-      return 'write';
-    }
-    return 'read';
+    return classifyDatabaseOperation(sql);
   }
 
   /**
@@ -1296,6 +1158,7 @@ export interface AppDatabase {
 class ActiveDatabaseFacade implements AppDatabase {
   private active: AppDatabase;
   private engine: DatabaseEngine;
+  private errorTelemetryLimiter = new DatabaseErrorTelemetryLimiter();
 
   constructor(initial: AppDatabase, engine: DatabaseEngine) {
     this.active = initial;
@@ -1339,20 +1202,40 @@ class ActiveDatabaseFacade implements AppDatabase {
     return this.active.isInitialized();
   }
 
-  query<T = any>(sql: string, params?: any[]): Promise<{ rows: T[] }> {
-    return this.active.query<T>(sql, params);
+  async query<T = any>(sql: string, params?: any[]): Promise<{ rows: T[] }> {
+    try {
+      return await this.active.query<T>(sql, params);
+    } catch (error) {
+      this.reportOperationError(error, sql);
+      throw error;
+    }
   }
 
-  queryReadOnly<T = any>(sql: string, params?: any[], timeoutMs?: number): Promise<{ rows: T[] }> {
-    return this.active.queryReadOnly<T>(sql, params, timeoutMs);
+  async queryReadOnly<T = any>(sql: string, params?: any[], timeoutMs?: number): Promise<{ rows: T[] }> {
+    try {
+      return await this.active.queryReadOnly<T>(sql, params, timeoutMs);
+    } catch (error) {
+      this.reportOperationError(error, sql, 'read');
+      throw error;
+    }
   }
 
-  exec(sql: string, timeoutMs?: number): Promise<void> {
-    return this.active.exec(sql, timeoutMs);
+  async exec(sql: string, timeoutMs?: number): Promise<void> {
+    try {
+      await this.active.exec(sql, timeoutMs);
+    } catch (error) {
+      this.reportOperationError(error, sql);
+      throw error;
+    }
   }
 
-  runTransaction(statements: Array<{ sql: string; params?: any[] }>): Promise<void> {
-    return this.active.runTransaction(statements);
+  async runTransaction(statements: Array<{ sql: string; params?: any[] }>): Promise<void> {
+    try {
+      await this.active.runTransaction(statements);
+    } catch (error) {
+      this.reportOperationError(error, statements[0]?.sql ?? '', 'write');
+      throw error;
+    }
   }
 
   close(): Promise<void> {
@@ -1392,6 +1275,42 @@ class ActiveDatabaseFacade implements AppDatabase {
   async showRecoveryDialog(): Promise<void> {
     if (typeof this.active.showRecoveryDialog === 'function') {
       await this.active.showRecoveryDialog();
+    }
+  }
+
+  /**
+   * The single `database_error` emit site, for whichever backend is live.
+   *
+   * Two things are deliberate here. The raw error and SQL go to the local log
+   * only -- they can quote row values, and rows here hold the user's prose --
+   * so PostHog receives just the fixed category/code taxonomy. And the emit is
+   * rate limited: on 2026-08-03 a wedged database produced ~62,000 events in
+   * two hours, none of which said more than the first one did.
+   */
+  private reportOperationError(
+    error: unknown,
+    sql: string,
+    operation?: DatabaseTelemetryOperation,
+  ): void {
+    const properties = buildDatabaseOperationErrorProperties({
+      backend: this.engine,
+      error,
+      sql,
+      operation,
+    });
+
+    logger.main.error('[Database] operation failed', { ...properties, sql, error });
+
+    const suppressedSinceLastReport = this.errorTelemetryLimiter.admit(properties);
+    if (suppressedSinceLastReport === null) return;
+    try {
+      AnalyticsService.getInstance().sendEvent('database_error', {
+        ...properties,
+        suppressedSinceLastReport,
+      });
+    } catch (analyticsError) {
+      // Telemetry must never turn a database failure into a second one.
+      logger.main.warn('[Database] failed to report database_error', analyticsError);
     }
   }
 }
