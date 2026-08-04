@@ -16,10 +16,19 @@ export interface MCPServerEnv {
 /**
  * Optional OAuth settings for remote MCP servers.
  *
- * These map to mcp-remote flags so Nimbalyst can support servers that:
- * - require OAuth instead of API keys
- * - require a fixed callback port
- * - require pre-registered/static OAuth client information
+ * Two fields here look interchangeable and are not. They select WHO performs
+ * the authorization, which is the difference that matters:
+ *
+ * - `staticClientInfo` -> Nimbalyst authorizes, via its own `mcp-remote` child
+ *   process. The Authorize button works and tokens land in `~/.mcp-auth`.
+ * - `clientId` / `clientSecret` -> the downstream CLI owns this server's auth
+ *   and Nimbalyst stays out of it. `usesNativeRemoteOAuth` reads these two, and
+ *   it also suppresses the `mcp-remote` wrapper and the OAuth probe, so setting
+ *   them replaces the Authorize button with "authorize from a Claude or Codex
+ *   session".
+ *
+ * Everything else maps to `mcp-remote` flags for servers that need OAuth
+ * instead of an API key, a fixed callback port, or explicit client metadata.
  */
 export interface MCPServerOAuthConfig {
   /** Fixed local callback port for OAuth redirects. */
@@ -38,15 +47,33 @@ export interface MCPServerOAuthConfig {
   authTimeoutSeconds?: number;
 
   /**
-   * Static OAuth client information for servers that do not support dynamic client registration.
-   * Example: { client_id: 'abc', client_secret: 'def' }
+   * Pre-registered OAuth client that NIMBALYST authorizes with, passed to
+   * `mcp-remote` as `--static-oauth-client-info`. Use this for providers that
+   * refuse RFC 7591 dynamic client registration -- without it `mcp-remote`
+   * attempts registration, the provider rejects it, and the helper dies before
+   * a browser opens (`dynamic_registration_unsupported`).
+   *
+   * Example: { client_id: 'abc' }
+   *
+   * Prefer a public client: `mcp-remote` already uses PKCE, and a `client_secret`
+   * here lands in the MCP config JSON and on the helper's argv. If a confidential
+   * client is unavoidable, `mcp-remote` also accepts `@/path/to/file.json` to read
+   * the value off disk instead -- but note `safeJsonParse` in MCPRemoteOAuth.ts
+   * deliberately ignores `@`-prefixed values when parsing a command line back
+   * into a descriptor, so that form does not round-trip today.
    */
   staticClientInfo?: Record<string, string>;
 
-  /** Native MCP OAuth client ID for clients that support remote OAuth directly. */
+  /**
+   * Pre-registered OAuth client that THE DOWNSTREAM CLI authorizes with. Setting
+   * this hands the server's auth to Claude/Codex entirely: Nimbalyst stops
+   * wrapping it in `mcp-remote`, stops probing it for OAuth, and hides its own
+   * Authorize button. This is not the field for making the Authorize button work
+   * against a no-DCR provider -- that is `staticClientInfo`.
+   */
   clientId?: string;
 
-  /** Optional native MCP OAuth client secret for pre-registered confidential clients. */
+  /** Native MCP OAuth client secret, for a confidential client the CLI authorizes. */
   clientSecret?: string;
 
   /**

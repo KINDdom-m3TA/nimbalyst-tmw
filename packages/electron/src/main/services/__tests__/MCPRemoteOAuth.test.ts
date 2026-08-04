@@ -212,6 +212,25 @@ describe('MCPRemoteOAuth', () => {
     ]);
   });
 
+  // The settings panel writes a user-entered client id to `staticClientInfo`.
+  // Writing it to `clientId` instead would route the server to the CLI-owned
+  // native path and silently hide the Authorize button the user just used.
+  it('keeps a pre-registered client id on the mcp-remote path, not the native one', () => {
+    const staticClientInfo = extractMcpRemoteConfig({
+      type: 'http',
+      url: 'https://mcp.example/mcp',
+      oauth: { staticClientInfo: { client_id: 'abc' } },
+    });
+
+    expect(buildMcpRemoteArgs(staticClientInfo!)).toContain('--static-oauth-client-info');
+
+    expect(extractMcpRemoteConfig({
+      type: 'http',
+      url: 'https://mcp.example/mcp',
+      oauth: { clientId: 'abc' },
+    })).toBeNull();
+  });
+
   it.each([
     ['Error: access_denied', {}, { outcome: 'rejected', errorType: 'provider_rejected' }],
     ['OAuth state mismatch', {}, { outcome: 'failed', errorType: 'callback_validation' }],

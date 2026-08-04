@@ -49,6 +49,16 @@ describe('requiresMcpRemote', () => {
     expect(requiresMcpRemote(config, { nativeHttpSupported: true })).toBe(false);
   });
 
+  it('DOES require the wrapper for a pre-registered client Nimbalyst authorizes with', () => {
+    // staticClientInfo is the no-DCR remedy the Authorize button offers, and it
+    // only works through mcp-remote. It must NOT be mistaken for the
+    // clientId/clientSecret escape hatch above, which hands auth to the CLI.
+    const config = http({
+      oauth: { staticClientInfo: { client_id: 'abc' } },
+    } as Partial<MCPServerConfig>);
+    expect(requiresMcpRemote(config, { nativeHttpSupported: true })).toBe(true);
+  });
+
   it('never applies to stdio servers', () => {
     const config = { type: 'stdio', command: 'node', args: ['x.js'] } as MCPServerConfig;
     expect(requiresMcpRemote(config, { nativeHttpSupported: true })).toBe(false);
