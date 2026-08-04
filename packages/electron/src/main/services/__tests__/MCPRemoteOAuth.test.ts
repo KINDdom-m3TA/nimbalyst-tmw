@@ -229,6 +229,25 @@ describe('MCPRemoteOAuth', () => {
     expect(classifyMcpRemoteOAuthFailure(diagnostic, context)).toEqual(expected);
   });
 
+  // Real mcp-remote 0.1.37 stderr. Both providers reject RFC 7591 registration and
+  // kill the helper before a browser opens, which used to surface as `process_exit`
+  // with a cache-clearing remedy that could never work (GitHub #1124, #1105).
+  it.each([
+    [
+      'facebook',
+      'Fatal error: InvalidClientMetadataError: Dynamic registration is not available for this client.',
+    ],
+    [
+      'lovable',
+      'Fatal error: InvalidClientMetadataError: Dynamic client registration is restricted to approved partners. To integrate with Lovable, contact us at https://lovable.dev/support or use the client_id_metadata_document discovery flow instead.',
+    ],
+  ])('reports a provider without dynamic client registration distinctly (%s)', (_provider, diagnostic) => {
+    expect(classifyMcpRemoteOAuthFailure(diagnostic, { exited: true })).toEqual({
+      outcome: 'failed',
+      errorType: 'dynamic_registration_unsupported',
+    });
+  });
+
   it('distinguishes an abandoned shared auth process from a generic timeout', () => {
     expect(classifyMcpRemoteOAuthFailure(
       'Another instance is handling authentication. Waiting for authentication from the server.',
