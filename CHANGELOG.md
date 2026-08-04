@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shared documents and team collaboration connect again, instead of failing to sync after the collaboration server began rejecting the desktop app's connections.
 - Authorizing an MCP server whose provider does not support dynamic client registration now says so and points at the fix, instead of reporting a generic helper exit and suggesting remedies that could never work.
 - Tracker items in list and table views now expose their action menu without requiring a right-click.
+- Tracker date fields now show the day you entered, instead of the day before if your time zone is behind UTC.
 - Committing an agent's work now closes the tracker item it fixed and marks the session complete, instead of leaving finished work sitting in review for you to clear by hand.
 - Changing a project's permission mode now applies to agent sessions that are already running, instead of taking effect only after they finish.
 - Prompts you queue from the phone now disappear from the queued list once the agent picks them up, instead of staying there for the rest of the session.

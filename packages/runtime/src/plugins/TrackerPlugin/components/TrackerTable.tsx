@@ -685,8 +685,9 @@ export function renderCell(
         case 'date':
           if (value instanceof Date) return <span className="text-[var(--nim-text-faint)] text-xs">{formatRelativeDate(value)}</span>;
           if (typeof value === 'string') {
-            const d = new Date(value);
-            return <span className="text-[var(--nim-text-faint)] text-xs">{isNaN(d.getTime()) ? value : formatRelativeDate(d)}</span>;
+            // parseDate, not `new Date`: a calendar-day string is local, not UTC midnight (nimbalyst#1135).
+            const d = parseDate(value);
+            return <span className="text-[var(--nim-text-faint)] text-xs">{d ? formatRelativeDate(d) : value}</span>;
           }
           return null;
 

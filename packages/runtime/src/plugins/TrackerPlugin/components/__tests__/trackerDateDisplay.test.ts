@@ -25,4 +25,15 @@ describe('tracker date-only display in a behind-UTC timezone', () => {
     // 2026-07-31T02:00Z is 10pm on Jul 30 in New York.
     expect(formatDateTimeDisplay('2026-07-31T02:00:00.000Z').display).toBe('Jul 30, 2026');
   });
+
+  /**
+   * Both the detail chips and the table's date column now route through
+   * parseDate, so this is the shared contract that keeps them from drifting
+   * back to `new Date` independently.
+   */
+  it('parses a calendar day as local midnight, not UTC midnight', async () => {
+    const { parseDate } = await import('../../models/dateUtils');
+    const parsed = parseDate('2026-07-31')!;
+    expect([parsed.getFullYear(), parsed.getMonth(), parsed.getDate()]).toEqual([2026, 6, 31]);
+  });
 });
