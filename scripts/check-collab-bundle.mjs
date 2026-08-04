@@ -55,8 +55,11 @@ export const COLLAB_BUNDLE_FORBIDDEN_DEPENDENCIES = [
       || /\/(?:kms|keychain|secret-store|credentials)(?:\/|\.)/i.test(id),
   },
   {
+    // DraggableBlockPlugin is intentionally absent: the block handle is a
+    // pointer affordance the browser host shares with desktop, not a
+    // desktop-only surface. See packages/collab-bundle/vite.config.ts.
     name: 'desktop-only editor plugins',
-    test: (id) => /\/runtime\/src\/editor\/plugins\/(?:DiffPlugin\/index\.tsx|SpeechToTextPlugin\/index\.ts|DraggableBlockPlugin\/index\.tsx)$/.test(id),
+    test: (id) => /\/runtime\/src\/editor\/plugins\/(?:DiffPlugin\/index\.tsx|SpeechToTextPlugin\/index\.ts)$/.test(id),
   },
   {
     name: 'extension SDK leakage',

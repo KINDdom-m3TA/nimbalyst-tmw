@@ -16,7 +16,7 @@ test('classifies every forbidden browser-boundary category', () => {
     'node:crypto',
     'path',
     '/repo/packages/runtime/src/ai/server/providers/SecretProvider.ts',
-    '/repo/packages/runtime/src/editor/plugins/DraggableBlockPlugin/index.tsx',
+    '/repo/packages/runtime/src/editor/plugins/SpeechToTextPlugin/index.ts',
     '/repo/packages/extension-sdk/src/index.ts',
   ], COLLAB_BUNDLE_FORBIDDEN_DEPENDENCIES);
 
@@ -31,6 +31,14 @@ test('classifies every forbidden browser-boundary category', () => {
       'extension SDK leakage',
     ],
   );
+});
+
+test('allows the draggable block handle into the browser bundle', () => {
+  const violations = findBrowserDependencyViolations([
+    '/repo/packages/runtime/src/editor/plugins/DraggableBlockPlugin/index.tsx',
+  ], COLLAB_BUNDLE_FORBIDDEN_DEPENDENCIES);
+
+  assert.deepEqual(violations, []);
 });
 
 test('fails loudly when React, Lexical, or Yjs is bundled', () => {

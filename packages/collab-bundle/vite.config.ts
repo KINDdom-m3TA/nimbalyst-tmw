@@ -13,9 +13,16 @@ const excludedDesktopPlugin = '\0nimbalyst-excluded-desktop-plugin';
  * Workarounds inherited from the existing iOS editor build.
  *
  * The agent-toolset is Node-only and cannot enter any browser graph. The
- * SpeechToText and DraggableBlock React surfaces are desktop UI, so this
- * artifact replaces them with null components while retaining the shared
- * editor's headless extensions and markdown behavior.
+ * SpeechToText surface depends on desktop dictation wiring, so this artifact
+ * replaces it with a null component while retaining the shared editor's
+ * headless extensions and markdown behavior.
+ *
+ * DraggableBlockPlugin is deliberately NOT excluded. It was inherited from the
+ * iOS stub list, where a touch host has no hover affordance to hang it on, but
+ * the browser console is a pointer-driven host running the same editor at the
+ * same widths as desktop — dropping it left web users without the block handle
+ * that desktop has. The plugin itself is pure DOM/Lexical, and Editor.tsx
+ * already gates it behind the shared `isSmallWidthViewport` check.
  *
  * The iOS-only IIFE output and crossorigin/module-script rewriting are
  * intentionally absent. They compensate for WKWebView's file:// null origin;
@@ -40,8 +47,7 @@ function browserHostWorkarounds(): Plugin[] {
         if (!importer?.replaceAll('\\', '/').endsWith('/runtime/src/editor/Editor.tsx')) {
           return null;
         }
-        if (source === './plugins/SpeechToTextPlugin'
-          || source === './plugins/DraggableBlockPlugin') {
+        if (source === './plugins/SpeechToTextPlugin') {
           return excludedDesktopPlugin;
         }
         return null;
