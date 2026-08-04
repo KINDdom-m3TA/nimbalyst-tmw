@@ -139,6 +139,7 @@ import {
 } from './QueueDriveService';
 import { createWorkspaceWindowResolver } from './resolveWorkspaceWindow';
 import { runQueueDriveAttempt } from './queueDriveAttempt';
+import { clearStuckRunningState } from './clearStuckRunningState';
 import { publishQueuedPromptsToSync } from './queuedPromptSyncPublisher';
 import { onWorkspaceWindowAvailable } from '../../window/workspaceWindowAvailability';
 import { dispatchQueuedPromptToClaudeCli } from './claudeCliQueueDispatch';
@@ -3175,7 +3176,21 @@ export class AIService {
 
       const result = await provider.interruptCurrentTurn();
       logger.main.info(`[AIService] Interrupted current turn for session ${sessionId} (method=${result.method})`);
-      return { success: true, method: result.method };
+
+      // A session stuck at running/streaming with no turn behind it would
+      // otherwise defer the follow-up queue drive on a `session:completed`
+      // that can never arrive (NIM-2434).
+      const stateManager = getSessionStateManager();
+      const forcedIdle = await clearStuckRunningState(
+        {
+          getSessionState: (id) => stateManager.getSessionState(id),
+          interruptSession: (id) => stateManager.interruptSession(id),
+          logWarn: (message) => logger.main.warn(message),
+        },
+        { sessionId, hadActiveTurn: result.hadActiveTurn },
+      );
+
+      return { success: true, method: result.method, forcedIdle };
     });
 
     // Settings handlers

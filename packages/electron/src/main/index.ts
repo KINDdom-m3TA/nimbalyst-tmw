@@ -1784,6 +1784,13 @@ app.whenReady().then(async () => {
         await mcpConfigService?.projectClaudeCodeDisabledServers(workspacePath, allServers);
     };
 
+    // Servers the loader below withheld on its most recent pass, per workspace.
+    // The session status surface reads these so an unauthorized server shows up
+    // as "needs authorization" instead of vanishing with only a log line
+    // (GH #1057). Keyed by workspace because one main process serves several.
+    const claudeAgentWithheldServerNames = new Map<string, string[]>();
+    const withheldNamesKey = (workspacePath?: string) => workspacePath ?? '';
+
     ClaudeCodeProvider.setMCPConfigLoader(async (workspacePath?: string) => {
         if (!mcpConfigService) {
             throw new Error('MCP config service not initialized');
@@ -1794,6 +1801,7 @@ app.whenReady().then(async () => {
         // Filter to servers enabled for Claude Agent and process for runtime
         // (On Windows, converts npm/npx/etc commands to .cmd equivalents)
         const enabledServers: Record<string, any> = {};
+        const withheldServers: string[] = [];
         for (const [name, config] of Object.entries(allServers)) {
             if (isMCPServerEnabledForProvider(config as MCPServerConfig, MCP_PROVIDER_IDS.CLAUDE_AGENT)) {
                 // Claude Code speaks HTTP natively, so a server with no OAuth is
@@ -1802,14 +1810,20 @@ app.whenReady().then(async () => {
                 const isAuthorized = await mcpConfigService.isOAuthAuthorized(config as MCPServerConfig, claudeHttp);
                 if (!isAuthorized) {
                     logger.mcp.info(`[MCP] Skipping unauthorized OAuth server for Claude Agent: ${name}`);
+                    withheldServers.push(name);
                     continue;
                 }
                 enabledServers[name] = mcpConfigService.processServerConfigForRuntime(config as any, claudeHttp);
             }
         }
+        claudeAgentWithheldServerNames.set(withheldNamesKey(workspacePath), withheldServers);
         await syncClaudeDisabledServers(workspacePath, allServers);
         return enabledServers;
     });
+
+    ClaudeCodeProvider.setMcpWithheldNamesLoader(
+        (workspacePath?: string) => claudeAgentWithheldServerNames.get(withheldNamesKey(workspacePath)) ?? []
+    );
     OpenAICodexProvider.setMCPConfigLoader(async (workspacePath?: string) => {
         if (!mcpConfigService) {
             throw new Error('MCP config service not initialized');

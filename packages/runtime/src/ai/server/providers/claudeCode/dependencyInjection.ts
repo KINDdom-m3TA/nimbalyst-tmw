@@ -57,6 +57,13 @@ export const ClaudeCodeDeps = {
   // Returns merged user + workspace MCP servers
   mcpConfigLoader: null as McpConfigLoader | null,
 
+  // Names `mcpConfigLoader` deliberately withheld from its last result because
+  // they failed the OAuth check. Read straight after that loader resolves, so it
+  // reports the same pass. Kept off `mcpConfigLoader`'s return value because that
+  // value IS the server map handed to the SDK -- a withheld server must not be in
+  // it. See GH #1057: without this the drop is invisible to every surface.
+  mcpWithheldNamesLoader: null as ((workspacePath?: string) => string[]) | null,
+
   // Returns plugin paths from enabled extensions with Claude plugins
   // Accepts optional workspace path to include project-scoped CLI plugins
   extensionPluginsLoader: null as ExtensionPluginsLoader | null,
@@ -125,6 +132,10 @@ export const ClaudeCodeDeps = {
 
   setMCPConfigLoader(loader: McpConfigLoader | null): void {
     this.mcpConfigLoader = loader;
+  },
+
+  setMcpWithheldNamesLoader(loader: ((workspacePath?: string) => string[]) | null): void {
+    this.mcpWithheldNamesLoader = loader;
   },
 
   setExtensionPluginsLoader(loader: ExtensionPluginsLoader | null): void {

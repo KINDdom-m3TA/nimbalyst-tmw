@@ -261,6 +261,11 @@ const KNOWN_STATES: ReadonlySet<string> = new Set([
  *    first poll every configured server is missing from the status list, and
  *    reporting that as "configured but never reached this session" would be a
  *    lie during the session's first seconds.
+ * 3. Withheld servers arrive on their own channel, not via the absent diff. They
+ *    are removed before `configuredNames` is built, so the diff's baseline never
+ *    contained them and could never have surfaced them (GH #1057). They are also
+ *    reported immediately: unlike absence, "we did not pass this server on" is
+ *    known at spawn time and needs no poll to confirm.
  */
 export function buildMcpSessionStatusSnapshot(params: {
   sessionId: string;
@@ -269,9 +274,11 @@ export function buildMcpSessionStatusSnapshot(params: {
   statuses: McpSessionStatusInput[];
   /** Server names from the frozen config snapshot; null when it hasn't settled. */
   configuredNames: string[] | null;
+  /** Configured servers deliberately not passed to the CLI, for failing the OAuth check. */
+  withheldNames?: string[] | null;
   lastCheckedAt: number | null;
 }): McpSessionStatusSnapshot {
-  const { sessionId, supported, active, statuses, configuredNames, lastCheckedAt } = params;
+  const { sessionId, supported, active, statuses, configuredNames, withheldNames, lastCheckedAt } = params;
 
   const reported = new Set<string>();
   const servers: McpSessionServerRow[] = [];
@@ -292,10 +299,21 @@ export function buildMcpSessionStatusSnapshot(params: {
     servers.push(row);
   }
 
+  // Withheld rows come after the reported ones so a real status always wins: the
+  // CLI reads its own config too, so a server we withheld may still have
+  // connected on the CLI's own credentials. Saying "needs authorization" about a
+  // server the user can see working would be worse than saying nothing.
+  const withheld = new Set<string>();
+  for (const name of withheldNames ?? []) {
+    if (reported.has(name) || withheld.has(name)) continue;
+    withheld.add(name);
+    servers.push({ name, state: 'needs-auth' });
+  }
+
   // See rule 2 above: no poll yet means we can't tell absent from not-yet-known.
   if (lastCheckedAt !== null && configuredNames) {
     for (const name of configuredNames) {
-      if (!reported.has(name)) {
+      if (!reported.has(name) && !withheld.has(name)) {
         servers.push({ name, state: 'absent' });
       }
     }

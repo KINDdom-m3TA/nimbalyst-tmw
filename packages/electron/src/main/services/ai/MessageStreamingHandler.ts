@@ -816,6 +816,7 @@ export class MessageStreamingHandler {
       servers?: unknown[];
       lastCheckedAt?: number | null;
       configuredNames?: string[] | null;
+      withheldNames?: string[] | null;
     }) => {
       const mcpSessionId = data?.sessionId || session.id;
       safeSend(event, 'ai:mcp-status:changed', {
@@ -825,6 +826,7 @@ export class MessageStreamingHandler {
           active: true,
           statuses: (data?.servers || []) as McpSessionStatusInput[],
           configuredNames: data?.configuredNames ?? null,
+          withheldNames: data?.withheldNames ?? null,
           lastCheckedAt: data?.lastCheckedAt ?? null,
         }),
         workspacePath: effectiveWorkspacePath,

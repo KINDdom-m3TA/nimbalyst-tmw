@@ -49,6 +49,7 @@ import {
   CLAUDE_CODE_SAFE_FALLBACK_MODEL,
   baseContextWindowForVariant,
 } from '../../modelConstants';
+import type { InterruptTurnResult } from '../AIProvider';
 import { isBedrockToolSearchError } from '../utils/errorDetection';
 import { AgentMessagesRepository } from '../../../storage/repositories/AgentMessagesRepository';
 import { TranscriptMigrationRepository } from '../../../storage/repositories/TranscriptMigrationRepository';
@@ -354,6 +355,8 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
   // NIM-1988 regresses. The snapshot itself holds credentials in server env and
   // headers and must not cross the IPC boundary at all.
   private mcpSnapshotServerNames: string[] | null = null;
+  /** Configured servers withheld from this session for failing the OAuth check. */
+  private mcpWithheldServerNames: string[] | null = null;
 
   // ---- Static dependency forwarding ----
   // All static fields and setters live in ClaudeCodeDeps.
@@ -421,6 +424,10 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
           // Record names for the absent-server diff. Piggybacking on the
           // existing resolution keeps the accessor free of any await.
           this.mcpSnapshotServerNames = Object.keys(mcpServers ?? {});
+          // Read in the same continuation as the loader that produced them, so
+          // the two always describe one pass (GH #1057).
+          this.mcpWithheldServerNames =
+            ClaudeCodeDeps.mcpWithheldNamesLoader?.(options.workspacePath) ?? null;
           return JSON.stringify(mcpServers);
         });
     }
@@ -518,6 +525,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
   // Internal MCP-server ports / kill-switches / loaders / auth token are
   // configured once via `configureMcpServers` (shared registry), not per-provider.
   public static setMCPConfigLoader(loader: ((workspacePath?: string) => Promise<Record<string, any>>) | null): void { ClaudeCodeDeps.setMCPConfigLoader(loader); }
+  public static setMcpWithheldNamesLoader(loader: ((workspacePath?: string) => string[]) | null): void { ClaudeCodeDeps.setMcpWithheldNamesLoader(loader); }
   public static setExtensionPluginsLoader(loader: ((workspacePath?: string) => Promise<Array<{ type: 'local'; path: string }>>) | null): void { ClaudeCodeDeps.setExtensionPluginsLoader(loader); }
   public static setClaudeCodeSettingsLoader(loader: (() => Promise<{ projectCommandsEnabled: boolean; userCommandsEnabled: boolean }>) | null): void { ClaudeCodeDeps.setClaudeCodeSettingsLoader(loader); }
   public static setClaudeSettingsEnvLoader(loader: (() => Promise<Record<string, string>>) | null): void { ClaudeCodeDeps.setClaudeSettingsEnvLoader(loader); }
@@ -2174,12 +2182,16 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
    * This is a graceful stop — unlike abort(), it doesn't kill the SDK subprocess.
    *
    * If there is no active lead query, defer to the BaseAIProvider default
-   * (hard abort) so the caller still gets a sensible signal back.
+   * (hard abort) so the caller still gets a sensible signal back, and report
+   * `hadActiveTurn: false` — with no query and (usually) no abortController
+   * that abort is a no-op, so the caller has to clear the session's live state
+   * itself or a stuck-running session strands its queue forever (NIM-2434).
    */
-  async interruptCurrentTurn(): Promise<{ method: 'interrupt' | 'abort' }> {
+  async interruptCurrentTurn(): Promise<InterruptTurnResult> {
     if (!this.leadQuery) {
       console.log('[CLAUDE-CODE] interruptCurrentTurn: no active lead query, falling back to abort');
-      return super.interruptCurrentTurn();
+      const outcome = await super.interruptCurrentTurn();
+      return { ...outcome, hadActiveTurn: false };
     }
 
     console.log('[CLAUDE-CODE] interruptCurrentTurn: interrupting active lead query');
@@ -3016,6 +3028,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
           changes,
           lastCheckedAt: this.mcpStatusesLastCheckedAt,
           configuredNames: this.mcpSnapshotServerNames,
+          withheldNames: this.mcpWithheldServerNames,
         });
       }
     } catch {
@@ -3059,6 +3072,15 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
     return this.mcpSnapshotServerNames ? [...this.mcpSnapshotServerNames] : null;
   }
 
+  /**
+   * Servers configured for this session but withheld from the CLI for failing
+   * the OAuth check. Names only, same as above — the config values hold
+   * credentials.
+   */
+  getMcpWithheldServerNames(): string[] | null {
+    return this.mcpWithheldServerNames ? [...this.mcpWithheldServerNames] : null;
+  }
+
   /** Epoch ms of the last poll that returned, or null if never polled. */
   getMcpStatusLastCheckedAt(): number | null {
     return this.mcpStatusesLastCheckedAt;
@@ -3071,11 +3093,13 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
   getMcpSessionStatus(): {
     servers: McpServerStatusInfo[];
     configuredNames: string[] | null;
+    withheldNames: string[] | null;
     lastCheckedAt: number | null;
   } {
     return {
       servers: this.getMcpServerStatuses(),
       configuredNames: this.getMcpConfiguredServerNames(),
+      withheldNames: this.getMcpWithheldServerNames(),
       lastCheckedAt: this.mcpStatusesLastCheckedAt,
     };
   }
