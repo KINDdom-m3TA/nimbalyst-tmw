@@ -201,6 +201,39 @@ describe('registerTeamHandlers channel registration', () => {
 });
 
 /**
+ * Org creation was blocked in every non-development build while Teams was being
+ * finished (NIM-2306). That gate is gone; a packaged build must reach the API
+ * instead of short-circuiting with "not available yet".
+ */
+describe('team:create handler', () => {
+  beforeEach(() => {
+    handlers.clear();
+    safeHandleMock.mockClear();
+    fetchMock.mockReset();
+    registerTeamHandlers();
+  });
+
+  it('calls the teams API from a packaged build', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ orgId: 'org-new', name: 'Acme', creatorMemberId: 'member-1' }),
+    });
+
+    const handler = handlers.get('team:create');
+    if (!handler) throw new Error('team:create is not registered');
+    const result = await handler({}, 'Acme');
+
+    expect(fetchMock).toHaveBeenCalled();
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/api/teams');
+    expect(result.error ?? '').not.toContain('not available yet');
+
+    vi.unstubAllEnvs();
+  });
+});
+
+/**
  * The wizard's invitation branch is only as good as the channel behind it, and
  * the matcher above is one of four things the handler does: it also validates
  * the argument, refuses an email the signed-in accounts do not own, and turns a

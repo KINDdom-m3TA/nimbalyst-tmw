@@ -1961,12 +1961,6 @@ export function registerTeamHandlers(): void {
 
   safeHandle('team:create', async (_event, name: string, workspacePath?: string, accountOrgId?: string) => {
     try {
-      // Org creation is disabled while Teams is invite-only alpha. The renderer
-      // hides the affordances too; this is the backstop covering every caller.
-      // Dev builds stay open so the create flow remains testable.
-      if (process.env.NODE_ENV !== 'development') {
-        return { success: false, error: 'Creating organizations is not available yet — Teams is in an invite-only alpha.' };
-      }
       const team = await createTeam(name, workspacePath, accountOrgId);
       return { success: true, team };
     } catch (error) {
