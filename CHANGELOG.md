@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- Double-clicking a cell in the tracker table now edits it in place; the key, type and date columns still open the item.
 - The organization Inbox is easier to triage: shorter rows that lead with what each delivery points at — a bug, a decision, the document's own icon — clearer unread state, unread and source-type filters that combine with mentions and assignments, and a click that previews a delivery instead of navigating away from the list.
 
 ### Fixed
