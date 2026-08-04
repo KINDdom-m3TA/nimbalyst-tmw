@@ -114,13 +114,20 @@ export const HOSTS = [
   {
     id: 'collab-bundle',
     label: 'collab bundle (web console and WebView hosts)',
+    // Registration is an exported function, not a module side effect: this
+    // package marks its own `.ts` files side-effect-free, so a bare import with
+    // no used bindings is legal for the bundler to delete -- and Rolldown did
+    // delete it (d14e218c). The probe has to call it the way the entry does.
     probe: {
       kind: 'extension-store',
-      imports: [{ from: 'packages/collab-bundle/src/editor/referenceNodes.ts' }],
-      calls: [],
+      imports: [{
+        from: 'packages/collab-bundle/src/editor/referenceNodes.ts',
+        names: ['registerBrowserReferenceNodes'],
+      }],
+      calls: ['registerBrowserReferenceNodes'],
     },
     entry: 'packages/collab-bundle/src/editor/mount.tsx',
-    wiring: [{ module: 'packages/collab-bundle/src/editor/referenceNodes.ts' }],
+    wiring: [{ symbol: 'registerBrowserReferenceNodes', call: true }],
     fix: 'packages/collab-bundle/src/editor/referenceNodes.ts',
   },
   {
