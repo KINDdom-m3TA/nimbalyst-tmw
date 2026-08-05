@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- Setting up an organization no longer asks you to pick starter chat rooms, going straight from invites to finished.
 - Dragging a spreadsheet selection past the edge of the view now scrolls the grid.
 - Spreadsheets are read-only while you review AI changes, and the review bar says so, instead of accepting edits that landed on the wrong row and were discarded.
 
