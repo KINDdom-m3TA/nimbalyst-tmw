@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unsent team-message drafts now return when you revisit a conversation and stay cleared after sending.
 - Setting up an organization no longer leaves the account menu showing "No organization" and AI requests failing to authenticate.
 - HTTP MCP servers you authorized with OAuth now connect in Claude Code sessions instead of reporting that they need authorization.
+- Tracker date columns read as "Today", "Tomorrow", or "in 5 days" with the full date on hover, instead of showing today as "Yesterday" and every future date as "Just now".
 
 ### Removed
 <!-- Removed features go here -->
