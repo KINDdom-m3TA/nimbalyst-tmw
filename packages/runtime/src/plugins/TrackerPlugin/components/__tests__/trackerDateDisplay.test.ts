@@ -7,11 +7,16 @@
  * under America/New_York so that shift is observable.
  */
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
 const originalTz = process.env.TZ;
 
-beforeAll(() => { process.env.TZ = 'America/New_York'; });
+// Set at module scope, not in a `beforeAll`: the describe bodies below build
+// Date literals while the file is collected, which is before any hook runs. On
+// a UTC machine that gave the reference date a different offset than the dates
+// built inside the tests.
+process.env.TZ = 'America/New_York';
+
 afterAll(() => { process.env.TZ = originalTz; });
 
 describe('tracker date-only display in a behind-UTC timezone', () => {
