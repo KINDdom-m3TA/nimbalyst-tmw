@@ -155,6 +155,12 @@ export async function refreshSharedFolders(scope: CollabScope): Promise<boolean>
   return getElectronCollabDocsSession(scope).refreshFolders();
 }
 
+/**
+ * Resolves `true` when the server confirmed the index row is committed, so a
+ * caller that is about to seed the document's room knows it is reachable
+ * (NIM-2472). A queued/unacked registration resolves `false` rather than
+ * throwing — the mutation is idempotent and the offline queue still carries it.
+ */
 export async function registerDocumentInIndex(
   scope: CollabScope,
   documentId: string,
@@ -162,9 +168,9 @@ export async function registerDocumentInIndex(
   documentType = 'markdown',
   parentFolderId: string | null = null,
   metadata?: { metadataVersion: 2; fileExtension: string; editorId: string },
-): Promise<void> {
+): Promise<boolean> {
   try {
-    await getElectronCollabDocsSession(scope).registerDocument({
+    return await getElectronCollabDocsSession(scope).registerDocument({
       documentId,
       title,
       documentType,
@@ -180,6 +186,7 @@ export async function registerDocumentInIndex(
       parentFolderId,
       ...metadata,
     });
+    return false;
   }
 }
 

@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Spreadsheet formulas now calculate when you open a file and stay formulas when you save, instead of showing as raw text and being written back as plain numbers.
 - Arrow keys and Home/End move the cursor within a spreadsheet cell you are editing instead of jumping to another cell.
 - Spreadsheets use the app font again, right-align numbers with figures that line up, and have a more compact header row.
+- Sharing a file to your team works again instead of failing after a long pause; a share that does fail no longer leaves an empty document behind.
 - Unsent team-message drafts now return when you revisit a conversation and stay cleared after sending.
 - Setting up an organization no longer leaves the account menu showing "No organization" and AI requests failing to authenticate.
 - HTTP MCP servers you authorized with OAuth now connect in Claude Code sessions instead of reporting that they need authorization.

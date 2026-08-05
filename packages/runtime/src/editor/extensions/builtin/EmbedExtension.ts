@@ -271,8 +271,13 @@ export const EmbedExtension = defineExtension({
       // un-upgraded link before either's write arrives, Yjs keeps both
       // inserts and the paragraph ends up duplicated. The debounce narrows
       // the window but does not close it; converging on a single writer needs
-      // the embed import to happen at seed time (`MarkdownCollabContentAdapter`
-      // runs headless in main, where `EmbeddedFileNode` is not registered).
+      // the embed import to happen at seed time.
+      //
+      // That is now closer than this note used to claim: `HeadlessBodyNodes`
+      // does register `EmbeddedFileNode`, and the renderer-headless seed
+      // preserves the `embedType` hint through the Y.Doc round trip. What is
+      // still missing is a headless editor that runs this transform, so the
+      // link arrives at recipients un-upgraded. See NIM-2473.
       editor.registerUpdateListener(({ tags }) => {
         if (tags.has(COLLABORATION_TAG)) scheduleCollabRescan();
       }),
