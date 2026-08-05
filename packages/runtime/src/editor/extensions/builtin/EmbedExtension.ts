@@ -266,18 +266,22 @@ export const EmbedExtension = defineExtension({
       // `skipTransforms: true`. Reconcile after that transaction so a shared
       // markdown link can still become a block embed on recipients.
       //
+      // This listener is what carries the recipient side: the share-to-team
+      // seed writes a plain hinted `LinkNode` (the headless seeder runs no
+      // node transforms), and a cold open hydrates it through
+      // `syncYjsChangesToLexical`, which tags its update COLLABORATION_TAG.
+      // Verified end-to-end against live shared documents and pinned by
+      // `collabEmbedUpgrade.test.ts` (NIM-2473) -- including the startup
+      // ordering where the doc paints before any embeddable type is
+      // registered, which the `subscribeToEmbeddableExtensionsChanges` rescan
+      // below picks up.
+      //
       // KNOWN LIMITATION: the upgrade replaces the paragraph, and that
       // replacement syncs back to the Y.Doc. If two peers reconcile the same
       // un-upgraded link before either's write arrives, Yjs keeps both
       // inserts and the paragraph ends up duplicated. The debounce narrows
       // the window but does not close it; converging on a single writer needs
       // the embed import to happen at seed time.
-      //
-      // That is now closer than this note used to claim: `HeadlessBodyNodes`
-      // does register `EmbeddedFileNode`, and the renderer-headless seed
-      // preserves the `embedType` hint through the Y.Doc round trip. What is
-      // still missing is a headless editor that runs this transform, so the
-      // link arrives at recipients un-upgraded. See NIM-2473.
       editor.registerUpdateListener(({ tags }) => {
         if (tags.has(COLLABORATION_TAG)) scheduleCollabRescan();
       }),

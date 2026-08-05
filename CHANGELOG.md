@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Spreadsheets use the app font again, right-align numbers with figures that line up, and have a more compact header row.
 - The spreadsheet row-number gutter no longer shows a white block below the last row in dark themes.
 - Sharing a file to your team works again instead of failing after a long pause; a share that does fail no longer leaves an empty document behind.
+- Referencing a shared mockup or diagram with `@` inside a shared document now inserts a live embed, the way it already did in local documents, instead of a plain link.
 - Unsent team-message drafts now return when you revisit a conversation and stay cleared after sending.
 - Setting up an organization no longer leaves the account menu showing "No organization" and AI requests failing to authenticate.
 - HTTP MCP servers you authorized with OAuth now connect in Claude Code sessions instead of reporting that they need authorization.
