@@ -22,6 +22,7 @@
 import { BrowserWindow, net } from 'electron';
 import { createHash } from 'crypto';
 import { existsSync } from 'fs';
+import { basename } from 'path';
 import { safeHandle } from '../utils/ipcRegistry';
 import { logger } from '../utils/logger';
 import { getNormalizedGitRemote } from '../utils/gitUtils';
@@ -1132,19 +1133,59 @@ async function getTeamByOrgId(orgId: string): Promise<TeamDetails | null> {
  * The org recorded against a workspace that cannot be identified by git remote.
  * See `WorkspaceState.localOrgBinding`.
  */
-function getLocalOrgBinding(workspacePath: string): string | null {
+function getLocalOrgBinding(workspacePath: string): { orgId: string; teamProjectId?: string } | null {
   try {
-    return getWorkspaceState(workspacePath).localOrgBinding?.orgId ?? null;
+    return getWorkspaceState(workspacePath).localOrgBinding ?? null;
   } catch (err) {
     logger.main.warn('[TeamService] Could not read the local org binding:', err);
     return null;
   }
 }
 
-function setLocalOrgBinding(workspacePath: string, orgId: string): void {
+function setLocalOrgBinding(workspacePath: string, orgId: string, teamProjectId?: string): void {
   updateWorkspaceState(workspacePath, (state) => {
-    state.localOrgBinding = { orgId };
+    state.localOrgBinding = teamProjectId ? { orgId, teamProjectId } : { orgId };
   });
+}
+
+/**
+ * Point a bound team at the project the workspace was actually added as.
+ *
+ * Mirrors the secondary-project branch of `resolveTeamForRemoteHash`: the team
+ * carries its PRIMARY project's routing key, so a workspace that joined as a
+ * secondary project has to override it or its tracker items land in another
+ * project's room. A binding whose project has since left the registry resolves
+ * to nothing rather than silently falling back to the primary.
+ */
+function pinBoundProject(team: TeamDetails, teamProjectId?: string): TeamDetails | null {
+  if (!teamProjectId || teamProjectId === team.teamProjectId) return team;
+  const project = team.projects?.find(p => p.teamProjectId === teamProjectId);
+  if (!project) {
+    if (!team.projects) return { ...team, teamProjectId };
+    logger.main.warn('[TeamService] Bound project is no longer in the org registry', {
+      orgId: team.orgId,
+      teamProjectId,
+    });
+    return null;
+  }
+  return {
+    ...team,
+    name: project.name || project.slug || team.name,
+    teamProjectId,
+  };
+}
+
+/**
+ * Tell every window that a workspace's organization may have changed.
+ *
+ * The surfaces that show it resolve once per workspace, so without this only
+ * the window that ran the creation wizard learns about the new org -- any other
+ * project window keeps offering "Set up" for an org that already exists.
+ */
+function broadcastWorkspaceOrgChanged(payload: { orgId: string; workspacePath?: string }): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('team:workspace-org-changed', payload);
+  }
 }
 
 /**
@@ -1159,8 +1200,8 @@ export async function findTeamForWorkspace(workspacePath: string, precomputedRem
   }
 
   const remote = precomputedRemote ?? await getNormalizedGitRemote(workspacePath);
-  const boundOrgId = getLocalOrgBinding(workspacePath);
-  if (!remote && !boundOrgId) {
+  const binding = getLocalOrgBinding(workspacePath);
+  if (!remote && !binding) {
     // logger.main.info('[TeamService] findTeamForWorkspace: no git remote for', workspacePath);
     return null;
   }
@@ -1182,12 +1223,12 @@ export async function findTeamForWorkspace(workspacePath: string, precomputedRem
     // The remote is the shared identifier and always wins. Fall back to the
     // local binding only once it has failed to match -- membership still gates
     // the result, so leaving the org drops the binding's resolution with it.
-    if (boundOrgId) {
+    if (binding) {
       const bound = teams.find(t => (
-        t.orgId === boundOrgId
+        t.orgId === binding.orgId
         && (!t.membershipType || t.membershipType === 'active_member')
       ));
-      if (bound) return bound;
+      if (bound) return pinBoundProject(bound, binding.teamProjectId);
     }
 
     if (teams.length > 0) {
@@ -1421,12 +1462,24 @@ async function addProjectToOrg(
     }
   }
 
+  // With no remote the name is the only thing that identifies the project in
+  // the org's registry, so fall back to the folder name rather than minting a
+  // nameless row.
+  const projectName = name
+    ?? (!gitRemoteHash && workspacePath ? basename(workspacePath) || null : null);
+
   const result = await fetchTeamApi(`/api/teams/${orgId}/projects`, 'POST', {
-    name: name ?? null,
+    name: projectName,
     gitRemoteHash,
   }, orgId) as { projectId: string; teamProjectId: string };
 
   logger.main.info('[TeamService] Project added to org:', orgId, 'project:', result.projectId);
+
+  // Nothing can match a remote-less workspace back to the project the server
+  // just minted; record which project it is so this machine still routes there.
+  if (workspacePath && !gitRemoteHash) {
+    setLocalOrgBinding(workspacePath, orgId, result.teamProjectId);
+  }
 
   // Mirror into the local projection so canAccess + UI see the new project
   // without waiting for a full re-sync. Best-effort (server is authoritative).
@@ -2056,6 +2109,7 @@ export function registerTeamHandlers(): void {
   safeHandle('team:create', async (_event, name: string, workspacePath?: string, accountOrgId?: string) => {
     try {
       const team = await createTeam(name, workspacePath, accountOrgId);
+      broadcastWorkspaceOrgChanged({ orgId: team.orgId, workspacePath });
       return { success: true, team };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -2068,6 +2122,7 @@ export function registerTeamHandlers(): void {
       // The new project changes the org's registry; drop the listTeams cache so
       // findTeamForWorkspace can resolve the new project's room on the next open.
       invalidateListTeamsCache();
+      broadcastWorkspaceOrgChanged({ orgId, workspacePath });
       return { success: true, project };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -2122,6 +2177,7 @@ export function registerTeamHandlers(): void {
   safeHandle('team:accept-invite', async (_event, orgId: string) => {
     try {
       const team = await acceptInvite(orgId);
+      broadcastWorkspaceOrgChanged({ orgId });
       return { success: true, team };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };

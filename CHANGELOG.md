@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
-- An organization created from a project folder now appears in the profile menu right away, including for projects that are not git repositories.
+- An organization created from a project folder now appears in the profile menu of every open window right away, including for projects that are not git repositories.
+- A project with no git remote can now be added to an organization you already administer.
 
 ### Removed
 <!-- Removed features go here -->

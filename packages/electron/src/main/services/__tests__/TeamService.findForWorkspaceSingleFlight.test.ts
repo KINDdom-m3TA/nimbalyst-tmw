@@ -186,7 +186,18 @@ describe('workspace org resolution without a git remote', () => {
       json: async () => ({
         teams: [
           { orgId: 'org-1', name: 'Widgets Team', gitRemoteHash: REMOTE_HASH, createdAt: new Date().toISOString(), role: 'admin' },
-          { orgId: 'org-2', name: 'Other Team', gitRemoteHash: OTHER_REMOTE_HASH, createdAt: new Date().toISOString(), role: 'admin' },
+          {
+            orgId: 'org-2',
+            name: 'Other Team',
+            gitRemoteHash: OTHER_REMOTE_HASH,
+            teamProjectId: 'tp-primary',
+            projects: [
+              { projectId: 'p-1', teamProjectId: 'tp-primary', gitRemoteHash: OTHER_REMOTE_HASH, slug: null, name: 'Other Team' },
+              { projectId: 'p-2', teamProjectId: 'tp-notes', gitRemoteHash: null, slug: 'notes', name: 'Notes' },
+            ],
+            createdAt: new Date().toISOString(),
+            role: 'admin',
+          },
           { orgId: 'org-invited', name: 'Not Joined', gitRemoteHash: null, membershipType: 'invited', createdAt: new Date().toISOString(), role: 'member' },
         ],
       }),
@@ -215,6 +226,29 @@ describe('workspace org resolution without a git remote', () => {
     workspaceStates.set('/projects/plain-folder', { localOrgBinding: { orgId: 'org-invited' } });
 
     await expect(findTeamForWorkspace('/projects/plain-folder')).resolves.toBeNull();
+  });
+
+  // A remote-less workspace added to an existing org belongs to the project it
+  // was added as, not to the org's primary project -- routing it to the primary
+  // would put its tracker items in another project's room.
+  it('routes a remote-less workspace to the project it was added as', async () => {
+    gitRemoteMock.mockResolvedValue(null);
+    workspaceStates.set('/projects/notes', {
+      localOrgBinding: { orgId: 'org-2', teamProjectId: 'tp-notes' },
+    });
+
+    await expect(findTeamForWorkspace('/projects/notes')).resolves.toEqual(
+      expect.objectContaining({ orgId: 'org-2', teamProjectId: 'tp-notes', name: 'Notes' }),
+    );
+  });
+
+  it('reports no org when the bound project is gone from the org registry', async () => {
+    gitRemoteMock.mockResolvedValue(null);
+    workspaceStates.set('/projects/deleted', {
+      localOrgBinding: { orgId: 'org-2', teamProjectId: 'tp-removed' },
+    });
+
+    await expect(findTeamForWorkspace('/projects/deleted')).resolves.toBeNull();
   });
 
   it('lets a matching git remote win over a stale local binding', async () => {

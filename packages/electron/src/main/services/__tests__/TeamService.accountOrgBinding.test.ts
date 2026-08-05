@@ -11,12 +11,14 @@ const {
   authState,
   databaseState,
   workspaceStates,
+  windowSendMock,
 } = vi.hoisted(() => ({
   queryMock: vi.fn(),
   fetchMock: vi.fn(),
   files: new Map<string, Buffer>(),
   handlers: new Map<string, (...args: any[]) => any>(),
   workspaceStates: new Map<string, any>(),
+  windowSendMock: vi.fn(),
   authState: {
     syncPersonalOrgId: 'personal-bound',
     accounts: [] as Array<{ personalOrgId: string; personalUserId: string; email: string }>,
@@ -39,7 +41,9 @@ const {
 
 vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => '/mock/user-data') },
-  BrowserWindow: class {},
+  BrowserWindow: class {
+    static getAllWindows() { return [{ webContents: { send: windowSendMock } }]; }
+  },
   net: { fetch: fetchMock },
   safeStorage: { isEncryptionAvailable: vi.fn(() => false) },
   shell: { openExternal: vi.fn() },
@@ -382,6 +386,60 @@ describe('TeamService account-to-org viewer binding', () => {
     await handlers.get('team:create')!({}, 'Acme', '/projects/plain-folder', 'personal-bound');
 
     expect(workspaceStates.get('/projects/plain-folder')?.localOrgBinding).toEqual({ orgId: 'org-new' });
+  });
+
+  /**
+   * Adding a remote-less project to an org used to be blocked outright, because
+   * nothing could match the workspace back to the project the server minted.
+   * The binding names the project, not just the org, so the workspace routes to
+   * the room it was actually added as.
+   */
+  it('records the project a remote-less workspace was added to', async () => {
+    workspaceStates.clear();
+    vi.mocked(getNormalizedGitRemote).mockResolvedValue(null as never);
+    fetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => (url.endsWith('/projects')
+        ? { projectId: 'proj-1', teamProjectId: 'tp-1' }
+        : { sessionJwt: 'team-jwt', sessionToken: 'next-session-token', bindingRecorded: false }),
+    }));
+
+    const result = await handlers.get('team:add-project')!({}, 'team-org', '/projects/plain-folder');
+    expect(result.success).toBe(true);
+
+    expect(workspaceStates.get('/projects/plain-folder')?.localOrgBinding).toEqual({
+      orgId: 'team-org',
+      teamProjectId: 'tp-1',
+    });
+  });
+
+  /**
+   * The wizard runs in one window; the org row in every other open project
+   * window resolves once and would keep offering "Set up" for the org that was
+   * just created.
+   */
+  it('tells every window that the workspace organization changed', async () => {
+    fetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => (url.endsWith('/api/teams')
+        ? {
+          orgId: 'org-new',
+          name: 'Acme',
+          creatorMemberId: 'member-new',
+          teamMemberId: 'member-new',
+          owningPersonalOrgId: 'personal-bound',
+        }
+        : { sessionJwt: 'team-jwt', sessionToken: 'next-session-token', bindingRecorded: false }),
+    }));
+
+    await handlers.get('team:create')!({}, 'Acme', '/projects/plain-folder', 'personal-bound');
+
+    expect(windowSendMock).toHaveBeenCalledWith('team:workspace-org-changed', {
+      orgId: 'org-new',
+      workspacePath: '/projects/plain-folder',
+    });
   });
 
   it('leaves the local binding unset when the git remote can carry the association', async () => {

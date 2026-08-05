@@ -122,6 +122,7 @@ import { initTeamInboxListeners } from './store/listeners/teamInboxListeners';
 import { initConversationListeners } from './store/listeners/conversationListeners';
 import { initConversationDirectoryListeners } from './store/listeners/conversationDirectoryListeners';
 import { initOrgSettingsListeners } from './store/listeners/orgSettingsListeners';
+import { initProjectOrgListeners } from './store/listeners/projectOrgListeners';
 import { initCollabReplicaListeners } from './store/listeners/collabReplicaListeners';
 import { initCollabConversionListeners } from './store/listeners/collabConversionListeners';
 import { initNotificationListeners } from './store/listeners/notificationListeners';
@@ -379,6 +380,7 @@ export default function App() {
     const cleanupConversations = initConversationListeners();
     const cleanupConversationDirectory = initConversationDirectoryListeners();
     const cleanupOrgSettings = initOrgSettingsListeners();
+    const cleanupProjectOrg = initProjectOrgListeners();
     const cleanupCollabReplicas = initCollabReplicaListeners();
     const cleanupCollabConversion = initCollabConversionListeners();
     const cleanupWindowMenu = initWindowMenuListener();
@@ -418,6 +420,7 @@ export default function App() {
       cleanupConversations?.();
       cleanupConversationDirectory?.();
       cleanupOrgSettings?.();
+      cleanupProjectOrg?.();
       cleanupCollabReplicas?.();
       cleanupCollabConversion?.();
     };

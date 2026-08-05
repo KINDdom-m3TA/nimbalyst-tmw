@@ -523,8 +523,10 @@ export interface WorkspaceState {
   // machine computes identically; a folder with no remote has no such hash, so
   // the org it was created from is recorded here instead. Local-only by
   // definition -- without a remote there is nothing for a teammate to match.
-  // Read by TeamService.findTeamForWorkspace.
-  localOrgBinding?: { orgId: string };
+  // Read by TeamService.findTeamForWorkspace. `teamProjectId` names the project
+  // within the org when the workspace was added to one that already existed;
+  // absent means the org's primary project.
+  localOrgBinding?: { orgId: string; teamProjectId?: string };
   // Hidden gutter buttons (navigation sidebar)
   hiddenGutterButtons?: string[];
   // Tracker automation override for this project (undefined fields inherit from global)
