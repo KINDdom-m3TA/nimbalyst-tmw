@@ -451,6 +451,24 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
   const diffStateRef = useRef(diffState);
   diffStateRef.current = diffState;
 
+  /**
+   * Editing lock.
+   *
+   * A diff splices phantom rows (the AI's deletions) into the grid source, so
+   * grid row indices no longer line up with the file's. Every mutation path --
+   * formula bar, paste, clear, replace, insert/delete row -- addresses cells by
+   * index, so an edit made mid-review lands on the wrong row, and `toCSV()`
+   * would write the phantom rows back out as real ones. Whatever survived that
+   * is then thrown away: accept/reject reloads from disk. So review is
+   * read-only, and Keep/Revert is the only way out of it.
+   *
+   * The grid's own cell editor is gated by RevoGrid's `readonly` prop; this
+   * covers everything that writes without going through it.
+   */
+  const isDiffActive = diffState?.isActive ?? false;
+  const editingLockedRef = useRef(false);
+  editingLockedRef.current = readOnly || isDiffActive;
+
   // ---- EditorHost lifecycle (loading, echo detection, file changes, save, theme) ----
   const { isLoading, error: loadError, theme, markDirty: _markDirty } = useEditorLifecycle(host, {
     applyContent: (content: string) => {
@@ -489,6 +507,12 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
       }
     },
     onSave: async () => {
+      // Mid-review the grid holds the AI's content plus phantom rows for its
+      // deletions. Writing that back would resurrect every deleted row as a
+      // real one -- and there is nothing to save anyway, since the proposed
+      // content is already the file on disk. Keep/Revert owns this.
+      if (diffStateRef.current?.isActive) return;
+
       const gridOps = gridOpsRef.current;
       if (!gridOps) {
         console.warn('[CSV] Grid operations not available for save');
@@ -738,6 +762,10 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
   useEffect(() => {
     if (!isCollabActive) return;
     const id = setInterval(() => {
+      // Same reason the save path bails: the grid is showing phantom rows, and
+      // syncing them would broadcast the AI's deleted rows to collaborators as
+      // live content.
+      if (diffStateRef.current?.isActive) return;
       collabBindingRef.current?.scheduleSync();
     }, 1000);
     return () => clearInterval(id);
@@ -1232,6 +1260,7 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
   // Handle formula bar input
   const handleFormulaChange = useCallback(
     async (value: string) => {
+      if (editingLockedRef.current) return;
       const cell = selectedCellRef.current;
       const gridOps = gridOpsRef.current;
       if (cell && gridOps) {
@@ -1478,10 +1507,14 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
       const cmdOrCtrl = isMac ? event.metaKey : event.ctrlKey;
       const gridOps = gridOpsRef.current;
       const undoPlugin = undoPluginRef.current;
+      // Selection, copy and find stay live while locked; anything that writes
+      // does not. See the `editingLockedRef` declaration for why.
+      const locked = editingLockedRef.current;
 
       if (cmdOrCtrl && !event.altKey) {
         switch (event.key.toLowerCase()) {
           case 'z':
+            if (locked) return;
             event.preventDefault();
             if (event.shiftKey) {
               undoPlugin?.redo();
@@ -1491,6 +1524,7 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
             return;
           case 'y':
             if (!isMac) {
+              if (locked) return;
               event.preventDefault();
               undoPlugin?.redo();
               return;
@@ -1512,6 +1546,7 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
             }
             return;
           case 'x':
+            if (locked) return;
             if (!event.shiftKey && gridOps) {
               event.preventDefault();
               const range = selectionRangeRef.current;
@@ -1521,6 +1556,7 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
             }
             return;
           case 'v':
+            if (locked) return;
             if (!event.shiftKey && gridOps) {
               event.preventDefault();
               const cell = selectedCellRef.current;
@@ -1546,7 +1582,7 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
       }
 
       // Delete/Backspace clears selection
-      if (event.key === 'Delete' || event.key === 'Backspace') {
+      if (!locked && (event.key === 'Delete' || event.key === 'Backspace')) {
         const activeElement = document.activeElement;
         const isEditing = activeElement?.tagName === 'INPUT' ||
                           activeElement?.getAttribute('contenteditable') === 'true';
@@ -1567,10 +1603,10 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
 
   // Context menu handler
   const handleContextMenu = useCallback((event: React.MouseEvent) => {
-    // In read-only mode the editing context menu (insert / delete row,
-    // format column, etc.) is meaningless -- let the browser's default
-    // selection / copy menu through instead.
-    if (readOnly) return;
+    // While locked the editing context menu (insert / delete row, format
+    // column, etc.) is meaningless -- let the browser's default selection /
+    // copy menu through instead.
+    if (editingLockedRef.current) return;
     event.preventDefault();
     const container = gridContainerRef.current;
     if (!container) return;
@@ -1665,7 +1701,6 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
   }, [
     spreadsheetMeta.metadata.columnCount,
     updateSelection,
-    readOnly,
     translateRowIndex,
     frozenColumnCount,
   ]);
@@ -2130,6 +2165,7 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
           <FormulaBar
             ref={formulaBarRef}
             onChange={handleFormulaChange}
+            readOnly={isDiffActive}
           />
           {host.supportsSourceMode && (
             <button
@@ -2142,7 +2178,7 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
           )}
         </div>
       )}
-      {!readOnly && find.isOpen && <FindBar find={find} />}
+      {!readOnly && find.isOpen && <FindBar find={find} readOnly={isDiffActive} />}
       <div
         ref={gridContainerRef}
         className="flex-1 overflow-hidden relative"

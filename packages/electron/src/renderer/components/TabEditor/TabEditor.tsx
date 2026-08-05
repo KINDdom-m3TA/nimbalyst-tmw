@@ -193,6 +193,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
   // Check if the custom editor supports source mode (from registry)
   const customEditorSupportsSourceMode = customEditorRegistration?.supportsSourceMode || false;
   const customEditorSupportsDiffMode = customEditorRegistration?.supportsDiffMode === true;
+  const customEditorReadOnlyDuringDiff = customEditorRegistration?.readOnlyDuringDiff === true;
   // A host may already present one registered header (Tracker Mode presents the
   // tracker chips). Preserve every other provider rather than hiding the whole
   // document-header region.
@@ -2795,6 +2796,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
                         sessionInfo={diffSessionInfo || undefined}
                         onGoToSession={onOpenSessionInChat ? handleGoToSession : undefined}
                         editorType="custom"
+                        readOnlyWhileReviewing={customEditorReadOnlyDuringDiff}
                       />
                     )}
                     <CustomEditorWrapper
@@ -2834,6 +2836,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
                       sessionInfo={diffSessionInfo || undefined}
                       onGoToSession={onOpenSessionInChat ? handleGoToSession : undefined}
                       editorType="custom"
+                      readOnlyWhileReviewing={customEditorReadOnlyDuringDiff}
                     />
                   )}
                   <CustomEditor

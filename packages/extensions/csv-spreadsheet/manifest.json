@@ -41,6 +41,7 @@
         "displayName": "Spreadsheet Editor",
         "component": "SpreadsheetEditor",
         "supportsDiffMode": true,
+        "readOnlyDuringDiff": true,
         "supportsSourceMode": true,
         "supportsTranscriptEmbed": true,
         "collaboration": {

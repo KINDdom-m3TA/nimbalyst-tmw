@@ -11,6 +11,8 @@ import { shouldIsolateFromGrid } from '../editors/editorKeyActions';
 interface FormulaBarProps {
   /** Called when the value changes */
   onChange: (value: string) => void;
+  /** Show the selected cell's value but refuse edits (diff review, read-only host). */
+  readOnly?: boolean;
 }
 
 export interface FormulaBarHandle {
@@ -19,7 +21,7 @@ export interface FormulaBarHandle {
 }
 
 export const FormulaBar = forwardRef<FormulaBarHandle, FormulaBarProps>(
-  function FormulaBar({ onChange }, ref) {
+  function FormulaBar({ onChange, readOnly = false }, ref) {
     const [cellRef, setCellRef] = useState('');
     const [displayValue, setDisplayValue] = useState('');
     const [localValue, setLocalValue] = useState('');
@@ -41,10 +43,11 @@ export const FormulaBar = forwardRef<FormulaBarHandle, FormulaBarProps>(
     }, []);
 
     const handleBlur = useCallback(() => {
+      if (readOnly) return;
       if (localValue !== displayValue) {
         onChange(localValue);
       }
-    }, [localValue, displayValue, onChange]);
+    }, [readOnly, localValue, displayValue, onChange]);
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -54,7 +57,7 @@ export const FormulaBar = forwardRef<FormulaBarHandle, FormulaBarProps>(
         // Backspace at an empty field clears the selected cells.
         if (shouldIsolateFromGrid(e)) e.stopPropagation();
         if (e.key === 'Enter') {
-          if (localValue !== displayValue) {
+          if (!readOnly && localValue !== displayValue) {
             onChange(localValue);
           }
           inputRef.current?.blur();
@@ -63,7 +66,7 @@ export const FormulaBar = forwardRef<FormulaBarHandle, FormulaBarProps>(
           inputRef.current?.blur();
         }
       },
-      [localValue, displayValue, onChange]
+      [readOnly, localValue, displayValue, onChange]
     );
 
     return (
@@ -80,12 +83,17 @@ export const FormulaBar = forwardRef<FormulaBarHandle, FormulaBarProps>(
         <input
           ref={inputRef}
           type="text"
-          className="flex-1 min-w-0 px-2.5 py-1 font-mono text-[12px] bg-nim border border-nim rounded text-nim outline-none focus:border-[var(--nim-primary)] focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--nim-primary)_20%,transparent)] disabled:bg-nim-secondary disabled:text-nim-faint disabled:cursor-not-allowed placeholder:text-nim-faint"
+          className={`flex-1 min-w-0 px-2.5 py-1 font-mono text-[12px] border border-nim rounded text-nim outline-none focus:border-[var(--nim-primary)] focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--nim-primary)_20%,transparent)] disabled:bg-nim-secondary disabled:text-nim-faint disabled:cursor-not-allowed placeholder:text-nim-faint ${
+            readOnly ? 'bg-nim-secondary cursor-default' : 'bg-nim'
+          }`}
           value={localValue}
           onChange={handleChange}
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
-          placeholder={cellRef ? 'Enter value' : 'Select a cell'}
+          // `readOnly` rather than `disabled`: the value still has to be
+          // selectable and copyable while a diff is being reviewed.
+          readOnly={readOnly}
+          placeholder={cellRef ? (readOnly ? '' : 'Enter value') : 'Select a cell'}
           disabled={!cellRef}
         />
       </div>

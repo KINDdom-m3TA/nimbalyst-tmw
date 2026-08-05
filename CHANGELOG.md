@@ -16,12 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 <!-- Changes to existing functionality go here -->
 - Dragging a spreadsheet selection past the edge of the view now scrolls the grid.
+- Spreadsheets are read-only while you review AI changes, and the review bar says so, instead of accepting edits that landed on the wrong row and were discarded.
 
 ### Fixed
 <!-- Bug fixes go here -->
 - Spreadsheet formulas now calculate when you open a file and stay formulas when you save, instead of showing as raw text and being written back as plain numbers.
 - Arrow keys and Home/End move the cursor within a spreadsheet cell you are editing instead of jumping to another cell.
 - Spreadsheets use the app font again, right-align numbers with figures that line up, and have a more compact header row.
+- The spreadsheet row-number gutter no longer shows a white block below the last row in dark themes.
 - Sharing a file to your team works again instead of failing after a long pause; a share that does fail no longer leaves an empty document behind.
 - Unsent team-message drafts now return when you revisit a conversation and stay cleared after sending.
 - Setting up an organization no longer leaves the account menu showing "No organization" and AI requests failing to authenticate.

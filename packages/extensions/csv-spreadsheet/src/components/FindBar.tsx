@@ -46,7 +46,11 @@ function counterText(count: number, index: number, query: string): string {
   return query ? 'No results' : '';
 }
 
-export function FindBar({ find }: { find: SpreadsheetFind }) {
+/**
+ * `readOnly` keeps find (navigation only) and drops replace. Used during diff
+ * review, where any write would land against phantom-row-shifted indices.
+ */
+export function FindBar({ find, readOnly = false }: { find: SpreadsheetFind; readOnly?: boolean }) {
   const queryInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -75,16 +79,21 @@ export function FindBar({ find }: { find: SpreadsheetFind }) {
     <div className="csv-find-bar flex flex-col gap-2 px-3 py-2 bg-nim-secondary border-b border-nim">
       <div className="csv-find-bar-row flex items-center gap-2">
         {/* Leading chevron expands the replace row, so the only button reading
-            "Replace" is the one that actually replaces. */}
-        <button
-          className={NAV_BUTTON_CLASS}
-          onClick={find.toggleReplace}
-          aria-label="Toggle replace"
-          aria-expanded={find.showReplace}
-          title="Toggle replace"
-        >
-          <Chevron direction={find.showReplace ? 'down' : 'right'} />
-        </button>
+            "Replace" is the one that actually replaces. Read-only keeps the
+            slot so the find input stays aligned with the formula bar above. */}
+        {readOnly ? (
+          <span className={`${NAV_BUTTON_CLASS} invisible`} aria-hidden="true" />
+        ) : (
+          <button
+            className={NAV_BUTTON_CLASS}
+            onClick={find.toggleReplace}
+            aria-label="Toggle replace"
+            aria-expanded={find.showReplace}
+            title="Toggle replace"
+          >
+            <Chevron direction={find.showReplace ? 'down' : 'right'} />
+          </button>
+        )}
         <input
           ref={queryInputRef}
           className={INPUT_CLASS}
@@ -135,7 +144,7 @@ export function FindBar({ find }: { find: SpreadsheetFind }) {
         </button>
       </div>
 
-      {find.showReplace && (
+      {find.showReplace && !readOnly && (
         <div className="csv-find-bar-row csv-find-replace-row flex items-center gap-2">
           {/* Keeps the replace input aligned under the find input. */}
           <span className={`${NAV_BUTTON_CLASS} invisible`} aria-hidden="true" />

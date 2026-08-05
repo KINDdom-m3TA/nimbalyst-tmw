@@ -17,19 +17,35 @@
    RevoGrid Theme Overrides
    ======================================== */
 
-/* Map RevoGrid's internal variables to Nimbalyst theme variables */
+/**
+ * Map RevoGrid's internal variables to Nimbalyst theme variables.
+ *
+ * These must use the `--revo-grid-*` names RevoGrid 4.x actually reads. An
+ * earlier `--revo-bg-color` / `--revo-header-bg-color` naming exists nowhere in
+ * the shipped stylesheet, so those mappings were inert and RevoGrid kept its
+ * light defaults — most visibly `--revo-grid-header-bg: #f8f9fa` painting the
+ * row-header gutter below the last row white in dark themes.
+ */
 .spreadsheet-editor revo-grid {
-  --revo-bg-color: var(--nim-bg);
-  --revo-row-odd-color: var(--nim-bg);
-  --revo-row-even-color: var(--nim-bg);
-  --revo-header-bg-color: var(--nim-bg-secondary);
-  --revo-border-color: var(--nim-border);
-  --revo-text-color: var(--nim-text);
-  --revo-header-text-color: var(--nim-text-muted);
-  --revo-selected-bg-color: var(--nim-bg-selected);
-  --revo-focus-bg-color: var(--nim-bg-active);
+  --revo-grid-primary: var(--nim-primary);
+  --revo-grid-background: var(--nim-bg);
+  --revo-grid-foreground: var(--nim-text);
+  --revo-grid-text: var(--nim-text);
+  --revo-grid-divider: var(--nim-border);
+  --revo-grid-border: var(--nim-border);
   --revo-grid-cell-border: var(--nim-border);
+  --revo-grid-cell-disabled-bg: var(--nim-bg-secondary);
+  --revo-grid-header-bg: var(--nim-bg-secondary);
+  --revo-grid-header-color: var(--nim-text-muted);
   --revo-grid-header-border: var(--nim-border);
+  --revo-grid-row-headers-bg: var(--nim-bg-secondary);
+  --revo-grid-row-headers-color: var(--nim-text-muted);
+  --revo-grid-row-hover: var(--nim-bg-hover);
+  --revo-grid-focused-bg: var(--nim-bg-active);
+  --revo-grid-filter-panel-bg: var(--nim-bg);
+  --revo-grid-filter-panel-border: var(--nim-border);
+  --revo-grid-filter-panel-input-bg: var(--nim-bg-secondary);
+  --revo-grid-filter-panel-divider: var(--nim-border);
 }
 
 /* Disable full row highlighting on selection - only show cell selection border */
