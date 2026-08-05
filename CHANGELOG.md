@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+
+### Changed
+<!-- Changes to existing functionality go here -->
+
+### Fixed
+<!-- Bug fixes go here -->
+
+### Removed
+<!-- Removed features go here -->
+
+## [0.72.3] - 2026-08-05
+
+
+### Added
+<!-- New features go here -->
 - Spreadsheets support find, replace, and per-column filters, opened with Cmd+F.
 - The AI can analyze a spreadsheet's columns for data-quality problems and apply a formula across a range.
 
@@ -17,20 +32,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Changes to existing functionality go here -->
 - Setting up an organization no longer asks you to pick starter chat rooms, going straight from invites to finished.
 - Dragging a spreadsheet selection past the edge of the view now scrolls the grid.
-- Spreadsheets are read-only while you review AI changes, and the review bar says so, instead of accepting edits that landed on the wrong row and were discarded.
+- Spreadsheets are read-only while you review AI changes, and the review bar says so.
 
 ### Fixed
 <!-- Bug fixes go here -->
-- Spreadsheet formulas now calculate when you open a file and stay formulas when you save, instead of showing as raw text and being written back as plain numbers.
+- Spreadsheet formulas now calculate on open and stay formulas on save, instead of showing as raw text and saving as plain numbers.
 - Arrow keys and Home/End move the cursor within a spreadsheet cell you are editing instead of jumping to another cell.
-- Spreadsheets use the app font again, right-align numbers with figures that line up, and have a more compact header row.
-- The spreadsheet row-number gutter no longer shows a white block below the last row in dark themes.
-- Sharing a file to your team works again instead of failing after a long pause; a share that does fail no longer leaves an empty document behind.
-- Referencing a shared mockup or diagram with `@` inside a shared document now inserts a live embed, the way it already did in local documents, instead of a plain link.
+- Spreadsheets use the app font, right-align numbers, have a more compact header, and no longer show a white gutter block in dark themes.
+- Sharing a file to your team works again; a share that does fail no longer leaves an empty document behind.
+- Referencing a shared mockup or diagram with `@` inside a shared document now inserts a live embed instead of a plain link.
 - Unsent team-message drafts now return when you revisit a conversation and stay cleared after sending.
 - Setting up an organization no longer leaves the account menu showing "No organization" and AI requests failing to authenticate.
 - HTTP MCP servers you authorized with OAuth now connect in Claude Code sessions instead of reporting that they need authorization.
-- Tracker date columns read as "Today", "Tomorrow", or "in 5 days" with the full date on hover, instead of showing today as "Yesterday" and every future date as "Just now".
+- Tracker date columns read as "Today", "Tomorrow", or "in 5 days", with the full date on hover.
 - Git command output no longer shows raw terminal color codes around messages from hooks and failed commands.
 
 ### Removed
