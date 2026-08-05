@@ -46,7 +46,7 @@ import { UndoRedoPlugin } from '../plugins/UndoRedoPlugin';
 import { columnIndexToLetter, columnLetterToIndex, generateColumnHeaders, parseCSV } from '../utils/csvParser';
 import { computeDiff, getCellDiffClass, getCellPreviousValue } from '../utils/diffCompute';
 import { isFormula } from '../utils/formulaEngine';
-import { formatCellValue, getColumnTypeName } from '../utils/formatters';
+import { formatCellValue, getColumnTypeName, isNumericCellValue } from '../utils/formatters';
 import { FormulaBar, type FormulaBarHandle } from './FormulaBar';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { ColumnFormatDialog } from './ColumnFormatDialog';
@@ -215,9 +215,23 @@ function generateColumns(
       cellProperties: (cellData: { model: Record<string, unknown>; rowIndex: number }) => {
         const classes: Record<string, boolean> = {};
 
-        // Apply alignment class
+        // Detect if this is a pinned (header) row by checking for header-row class
+        const isPinned = cellData.model._rowClass === 'header-row';
+
+        // Alignment. An explicit column format wins; otherwise fall back to what
+        // every spreadsheet does and right-align values that read as numbers,
+        // leaving text against the left edge. Header rows stay left-aligned even
+        // when their label happens to be numeric -- a header is a label, not a
+        // measurement. The value tested is the *displayed* one, so a formula
+        // aligns by its result rather than by the `=SUM(...)` source text.
         if (alignClass) {
           classes[alignClass] = true;
+        } else if (!isPinned) {
+          const displayed = formulaViewState.getDisplayValue(cellData.model, letter)
+            ?? cellData.model[letter];
+          if (isNumericCellValue(displayed)) {
+            classes['cell-align-right'] = true;
+          }
         }
 
         // Find-match highlight, keyed by row model rather than row index so it
@@ -231,9 +245,6 @@ function generateColumns(
         if (aiFlashRef.current.get(cellData.model)?.has(letter)) {
           classes['csv-ai-cell-flash'] = true;
         }
-
-        // Detect if this is a pinned (header) row by checking for header-row class
-        const isPinned = cellData.model._rowClass === 'header-row';
 
         // Apply diff class if in diff mode
         if (diffState?.isActive) {
@@ -2152,6 +2163,9 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
           }}
           columns={columns}
           rowHeaders={true}
+          // Denser than RevoGrid's 27px default. Its theme hardcodes the
+          // matching `line-height`, so revogrid-theme.css restates this value.
+          rowSize={24}
           resize={true}
           autoSizeColumn={false}
           range={true}

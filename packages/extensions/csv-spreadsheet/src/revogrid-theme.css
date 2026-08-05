@@ -87,18 +87,26 @@
   --csv-selection-edge-left: 0 0 0 transparent;
 }
 
-/* Column header height - slightly taller than data rows (32px + 5px = 37px) */
+/**
+ * Column header strip.
+ *
+ * Kept close to the 27px data-row height: at 37px it read as a separate band
+ * sitting on top of the sheet rather than as the sheet's own header.
+ */
 .spreadsheet-editor revo-grid revogr-header {
-  line-height: 37px;
+  line-height: 28px;
 }
 .spreadsheet-editor revo-grid revogr-header .header-rgRow {
-  height: 37px;
+  height: 28px;
 }
 
 /* Column headers - explicit background color */
 .spreadsheet-editor revo-grid revogr-header .rgHeaderCell {
   cursor: pointer;
   background-color: var(--nim-bg-secondary) !important;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 /**
@@ -109,16 +117,20 @@
  * delegation it already runs.
  */
 .spreadsheet-editor revo-grid .csv-header-cell {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 4px;
+  /* Centred, like the column letters in any spreadsheet. `space-between` used
+     to push the label to the left edge to make room for the funnel; the funnel
+     is out of flow now, so the label can sit where it belongs. */
+  justify-content: center;
   width: 100%;
+  padding: 0 14px;
 }
 
 .spreadsheet-editor revo-grid .csv-filter-affordance {
-  flex: none;
-  padding: 0 2px;
+  position: absolute;
+  right: 3px;
   font-size: 8px;
   line-height: 1;
   color: var(--nim-text-faint);
@@ -208,21 +220,50 @@
   outline: none;
 }
 
-/* Cell content styling - use !important to override RevoGrid defaults */
-.spreadsheet-editor revogr-cell {
+/**
+ * Cell content.
+ *
+ * These have to hang off `.rgCell`, not `revogr-cell`: this version of RevoGrid
+ * renders cells as plain elements carrying `.rgCell`, so the older
+ * `revogr-cell` rules matched nothing and the sheet was quietly falling back to
+ * Helvetica at RevoGrid's own 12px rather than to the app font.
+ *
+ * `tabular-nums` is what makes a column of figures line up digit over digit --
+ * the single biggest reason a grid of numbers reads as a spreadsheet rather
+ * than as a table of strings.
+ */
+.spreadsheet-editor revo-grid .rgCell {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  font-size: 13px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
   color: var(--nim-text) !important;
 }
 
-/* Ensure all cells have correct text color */
-.spreadsheet-editor revo-grid .rgCell {
-  color: var(--nim-text) !important;
+/**
+ * Default alignment. RevoGrid centres every cell (`revogr-data{text-align:center}`),
+ * which no spreadsheet does: text belongs against the left edge and numbers
+ * against the right, so a column of figures can be scanned by magnitude.
+ * `cellProperties` adds `cell-align-right` per cell for values that read as
+ * numbers; this is the text default underneath it.
+ */
+.spreadsheet-editor revo-grid revogr-data {
+  text-align: left;
+}
+
+/**
+ * Row height. RevoGrid hardcodes `.rgRow{line-height:27px}` in its theme rather
+ * than deriving it, so this has to be kept in step with the `rowSize` prop in
+ * SpreadsheetEditor.tsx by hand.
+ */
+.spreadsheet-editor revo-grid revogr-data .rgRow {
+  line-height: 24px;
 }
 
 /* Row headers text color */
 .spreadsheet-editor revo-grid .rowHeaders .rgCell {
   color: var(--nim-text-muted) !important;
+  font-size: 11px;
+  text-align: center;
 }
 
 /* Column headers text color */
@@ -230,9 +271,9 @@
   color: var(--nim-text-muted) !important;
 }
 
-/* Cell padding - add space around content */
+/* Cell padding - enough of a gutter that left-aligned text clears the gridline */
 .spreadsheet-editor revo-grid revogr-data .rgCell {
-  padding: 0 6px;
+  padding: 0 8px;
 }
 
 /* Header row styling (row 0 when hasHeaders is enabled) */

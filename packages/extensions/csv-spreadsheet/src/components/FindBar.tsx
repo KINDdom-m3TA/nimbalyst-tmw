@@ -8,6 +8,7 @@
 
 import { useEffect, useRef } from 'react';
 import type { SpreadsheetFind } from '../hooks/useSpreadsheetFind';
+import { shouldIsolateFromGrid } from '../editors/editorKeyActions';
 
 const INPUT_CLASS =
   'w-full px-2.5 py-1.5 text-[13px] border border-nim rounded bg-nim text-nim outline-none transition-colors duration-150 focus:border-[var(--nim-primary)] placeholder:text-nim-faint';
@@ -54,6 +55,9 @@ export function FindBar({ find }: { find: SpreadsheetFind }) {
 
   /** Escape closes from either input; Enter steps, matching the host's bar. */
   const handleKeyDown = (event: React.KeyboardEvent) => {
+    // Typing a query is not grid input -- see `shouldIsolateFromGrid`. Without
+    // this, Backspace in the find field clears the selected cells.
+    if (shouldIsolateFromGrid(event)) event.stopPropagation();
     if (event.key === 'Escape') {
       event.preventDefault();
       find.close();
