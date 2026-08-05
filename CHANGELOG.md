@@ -10,19 +10,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
-- The tracker table view supports undo and redo with Cmd+Z and Cmd+Shift+Z, covering cell edits, paste, bulk status and priority changes, adding items to a collection, and archiving. A paste across many rows is undone in one step, and an edit someone else changed in the meantime is left alone rather than overwritten.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
 
 ### Fixed
 <!-- Bug fixes go here -->
-- An organization created from a project folder now appears in the profile menu of every open window right away, including for projects that are not git repositories.
+
+### Removed
+<!-- Removed features go here -->
+
+## [0.72.4] - 2026-08-05
+
+
+### Added
+<!-- New features go here -->
+- Undo and redo in the tracker table with Cmd+Z and Cmd+Shift+Z, covering cell edits, paste, bulk status and priority changes, and archiving.
+
+### Changed
+<!-- Changes to existing functionality go here -->
+
+### Fixed
+<!-- Bug fixes go here -->
+- A newly created organization now appears in the profile menu of every open window right away.
 - A project with no git remote can now be added to an organization you already administer.
 
 ### Removed
 <!-- Removed features go here -->
-- The tracker table no longer has the drag-to-clone handle at the corner of a selected cell, which was easy to hit by accident and silently rewrote a whole column. Dragging to select a range and pasting into one both work as before.
+- The tracker table's drag-to-clone handle, which was easy to hit by accident and silently rewrote a whole column.
 
 ## [0.72.3] - 2026-08-05
 
