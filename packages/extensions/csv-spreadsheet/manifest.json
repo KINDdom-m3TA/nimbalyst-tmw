@@ -49,6 +49,10 @@
         }
       }
     ],
+    "aiTools": [
+      "csv-spreadsheet.analyze_data",
+      "csv-spreadsheet.apply_formula"
+    ],
     "fileIcons": {
       "*.csv": "table",
       "*.tsv": "table"

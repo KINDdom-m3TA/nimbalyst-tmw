@@ -42,9 +42,49 @@
   background-color: var(--nim-bg-selected);
 }
 
-/* Selection range background fill */
+/**
+ * Selection range fill, and its border edge by edge.
+ *
+ * RevoGrid paints the range once per viewport section, so a selection crossing
+ * the frozen-column or pinned-row boundary gets a border drawn straight through
+ * its middle. The paint step (selection/crossSectionSelection.ts) marks each
+ * section's overlay on the sides where its range continues into a neighbouring
+ * section; those sides drop their edge, leaving one unbroken rectangle.
+ */
 .spreadsheet-editor revo-grid revogr-overlay-selection .selection-border-range {
+  --csv-selection-edge-top: 0 1px 0 var(--nim-primary) inset;
+  --csv-selection-edge-right: -1px 0 0 var(--nim-primary) inset;
+  --csv-selection-edge-bottom: 0 -1px 0 var(--nim-primary) inset;
+  --csv-selection-edge-left: 1px 0 0 var(--nim-primary) inset;
+
   background-color: var(--nim-bg-selected);
+  box-shadow:
+    var(--csv-selection-edge-top),
+    var(--csv-selection-edge-right),
+    var(--csv-selection-edge-bottom),
+    var(--csv-selection-edge-left);
+}
+
+.spreadsheet-editor revo-grid revogr-overlay-selection[data-csv-open-top] .selection-border-range {
+  --csv-selection-edge-top: 0 0 0 transparent;
+}
+
+.spreadsheet-editor
+  revo-grid
+  revogr-overlay-selection[data-csv-open-right]
+  .selection-border-range {
+  --csv-selection-edge-right: 0 0 0 transparent;
+}
+
+.spreadsheet-editor
+  revo-grid
+  revogr-overlay-selection[data-csv-open-bottom]
+  .selection-border-range {
+  --csv-selection-edge-bottom: 0 0 0 transparent;
+}
+
+.spreadsheet-editor revo-grid revogr-overlay-selection[data-csv-open-left] .selection-border-range {
+  --csv-selection-edge-left: 0 0 0 transparent;
 }
 
 /* Column header height - slightly taller than data rows (32px + 5px = 37px) */
@@ -59,6 +99,86 @@
 .spreadsheet-editor revo-grid revogr-header .rgHeaderCell {
   cursor: pointer;
   background-color: var(--nim-bg-secondary) !important;
+}
+
+/**
+ * Column-header filter affordance.
+ *
+ * Rendered by the column template rather than by React, because RevoGrid owns
+ * the header DOM; the editor picks its clicks up through the header mousedown
+ * delegation it already runs.
+ */
+.spreadsheet-editor revo-grid .csv-header-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  width: 100%;
+}
+
+.spreadsheet-editor revo-grid .csv-filter-affordance {
+  flex: none;
+  padding: 0 2px;
+  font-size: 8px;
+  line-height: 1;
+  color: var(--nim-text-faint);
+  opacity: 0;
+  transition: opacity 150ms;
+}
+
+.spreadsheet-editor revo-grid .rgHeaderCell:hover .csv-filter-affordance,
+.spreadsheet-editor revo-grid .csv-filter-affordance-active {
+  opacity: 1;
+}
+
+.spreadsheet-editor revo-grid .csv-filter-affordance-active {
+  color: var(--nim-primary);
+}
+
+/**
+ * Find matches. The current match is the one the cursor is on, so it gets the
+ * stronger treatment; the rest stay legible under the selection fill.
+ *
+ * `!important` beats the diff tint below, which is also `!important`: while a
+ * search is open the hits are what the user is looking at, so they have to stay
+ * visible in a sheet under diff review rather than disappearing into the green.
+ */
+.spreadsheet-editor revo-grid revogr-data .rgCell.csv-find-match {
+  background-color: color-mix(in srgb, var(--nim-warning) 30%, transparent) !important;
+}
+
+.spreadsheet-editor revo-grid revogr-data .rgCell.csv-find-current {
+  background-color: color-mix(in srgb, var(--nim-warning) 60%, transparent) !important;
+  box-shadow: 0 0 0 1px var(--nim-primary) inset;
+}
+
+.spreadsheet-editor revo-grid revogr-data .rgCell.csv-ai-cell-flash {
+  animation: csv-ai-cell-flash 1.4s ease-out;
+}
+
+@keyframes csv-ai-cell-flash {
+  0%, 35% {
+    background-color: color-mix(in srgb, var(--nim-primary) 55%, transparent);
+    box-shadow: 0 0 0 2px var(--nim-primary) inset;
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+
+/**
+ * Find bar: drop the least essential action first when the editor is narrow
+ * (a spreadsheet in a split pane), rather than letting the row overflow.
+ */
+.spreadsheet-editor .csv-find-bar {
+  container-type: inline-size;
+}
+
+@container (max-width: 560px) {
+  .csv-find-replace-selection {
+    display: none;
+  }
 }
 
 /* Row headers - explicit background color */

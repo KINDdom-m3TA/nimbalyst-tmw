@@ -10,12 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- Spreadsheets support find, replace, and per-column filters, opened with Cmd+F.
+- The AI can analyze a spreadsheet's columns for data-quality problems and apply a formula across a range.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- Dragging a spreadsheet selection past the edge of the view now scrolls the grid.
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Spreadsheet formulas now calculate when you open a file and stay formulas when you save, instead of showing as raw text and being written back as plain numbers.
 - Unsent team-message drafts now return when you revisit a conversation and stay cleared after sending.
 - Setting up an organization no longer leaves the account menu showing "No organization" and AI requests failing to authenticate.
 - HTTP MCP servers you authorized with OAuth now connect in Claude Code sessions instead of reporting that they need authorization.
