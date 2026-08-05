@@ -10,11 +10,13 @@ const {
   handlers,
   authState,
   databaseState,
+  workspaceStates,
 } = vi.hoisted(() => ({
   queryMock: vi.fn(),
   fetchMock: vi.fn(),
   files: new Map<string, Buffer>(),
   handlers: new Map<string, (...args: any[]) => any>(),
+  workspaceStates: new Map<string, any>(),
   authState: {
     syncPersonalOrgId: 'personal-bound',
     accounts: [] as Array<{ personalOrgId: string; personalUserId: string; email: string }>,
@@ -98,6 +100,13 @@ vi.mock('@nimbalyst/runtime', () => ({
 vi.mock('../../utils/store', () => ({
   getSessionSyncConfig: vi.fn(() => ({ serverUrl: 'https://sync.example' })),
   setSessionSyncConfig: vi.fn(),
+  getWorkspaceState: (workspacePath: string) => workspaceStates.get(workspacePath) ?? {},
+  updateWorkspaceState: (workspacePath: string, updater: (state: any) => void) => {
+    const state = workspaceStates.get(workspacePath) ?? {};
+    updater(state);
+    workspaceStates.set(workspacePath, state);
+    return state;
+  },
 }));
 vi.mock('../analytics/AnalyticsService', () => ({
   AnalyticsService: { getInstance: () => ({ sendEvent: vi.fn() }) },
@@ -123,6 +132,7 @@ import {
   signOut,
 } from '../StytchAuthService';
 import { canAccessForCurrentUser, getOrgScopedJwt, registerTeamHandlers } from '../TeamService';
+import { getNormalizedGitRemote } from '../../utils/gitUtils';
 
 describe('TeamService account-to-org viewer binding', () => {
   beforeEach(async () => {
@@ -344,5 +354,55 @@ describe('TeamService account-to-org viewer binding', () => {
       // later roster sync is a no-op rather than a role flip.
       role: 'admin',
     });
+  });
+
+  /**
+   * A workspace resolves to its org by git-remote hash. A folder with no remote
+   * produces no hash, so the org it was just created from could never be matched
+   * back to it -- the profile popover read "No organization" forever, across
+   * restarts. Record the org locally instead.
+   */
+  it('records a local org binding when the creating project has no git remote', async () => {
+    workspaceStates.clear();
+    vi.mocked(getNormalizedGitRemote).mockResolvedValue(null as never);
+    fetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => (url.endsWith('/api/teams')
+        ? {
+          orgId: 'org-new',
+          name: 'Acme',
+          creatorMemberId: 'member-new',
+          teamMemberId: 'member-new',
+          owningPersonalOrgId: 'personal-bound',
+        }
+        : { sessionJwt: 'team-jwt', sessionToken: 'next-session-token', bindingRecorded: false }),
+    }));
+
+    await handlers.get('team:create')!({}, 'Acme', '/projects/plain-folder', 'personal-bound');
+
+    expect(workspaceStates.get('/projects/plain-folder')?.localOrgBinding).toEqual({ orgId: 'org-new' });
+  });
+
+  it('leaves the local binding unset when the git remote can carry the association', async () => {
+    workspaceStates.clear();
+    vi.mocked(getNormalizedGitRemote).mockResolvedValue('github.com/acme/widgets' as never);
+    fetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => (url.endsWith('/api/teams')
+        ? {
+          orgId: 'org-new',
+          name: 'Acme',
+          creatorMemberId: 'member-new',
+          teamMemberId: 'member-new',
+          owningPersonalOrgId: 'personal-bound',
+        }
+        : { sessionJwt: 'team-jwt', sessionToken: 'next-session-token', bindingRecorded: false }),
+    }));
+
+    await handlers.get('team:create')!({}, 'Acme', '/projects/with-remote', 'personal-bound');
+
+    expect(workspaceStates.get('/projects/with-remote')?.localOrgBinding).toBeUndefined();
   });
 });

@@ -518,6 +518,13 @@ export interface WorkspaceState {
   // Set once when the workspace is first synced. Different workspaces can use different accounts.
   // Defaults to the account selected for personal sync if not set.
   accountId?: string;
+  // Organization this project belongs to when its git remote cannot say so.
+  // A project normally resolves to its org by git-remote hash, which every
+  // machine computes identically; a folder with no remote has no such hash, so
+  // the org it was created from is recorded here instead. Local-only by
+  // definition -- without a remote there is nothing for a teammate to match.
+  // Read by TeamService.findTeamForWorkspace.
+  localOrgBinding?: { orgId: string };
   // Hidden gutter buttons (navigation sidebar)
   hiddenGutterButtons?: string[];
   // Tracker automation override for this project (undefined fields inherit from global)
@@ -698,6 +705,7 @@ function createDefaultWorkspaceState(workspacePath: string): WorkspaceState {
       customFolders: [],
     },
     collabPendingUpdates: {},
+    localOrgBinding: undefined,
     issueKeyPrefix: deriveIssueKeyPrefix(workspacePath),
     lastUpdated: Date.now(),
   };

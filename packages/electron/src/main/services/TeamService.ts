@@ -29,6 +29,7 @@ import { resolveTeamForRemoteHash } from './teamProjectResolver';
 import { getCollabSyncHttpUrl } from '../utils/collabSyncUrl';
 import { assertJwtMatchesOrg, getJwtExp, AuthContextMismatchError } from './jwtOrg';
 import { createSingleFlight } from '../utils/asyncCache';
+import { getWorkspaceState, updateWorkspaceState } from '../utils/store';
 import { setHasOrganizationsForMenu } from '../menu/organizationMenuState';
 import {
   getAccounts,
@@ -1128,7 +1129,27 @@ async function getTeamByOrgId(orgId: string): Promise<TeamDetails | null> {
 }
 
 /**
- * Find a team matching a workspace's git remote.
+ * The org recorded against a workspace that cannot be identified by git remote.
+ * See `WorkspaceState.localOrgBinding`.
+ */
+function getLocalOrgBinding(workspacePath: string): string | null {
+  try {
+    return getWorkspaceState(workspacePath).localOrgBinding?.orgId ?? null;
+  } catch (err) {
+    logger.main.warn('[TeamService] Could not read the local org binding:', err);
+    return null;
+  }
+}
+
+function setLocalOrgBinding(workspacePath: string, orgId: string): void {
+  updateWorkspaceState(workspacePath, (state) => {
+    state.localOrgBinding = { orgId };
+  });
+}
+
+/**
+ * Find a team matching a workspace's git remote, or the org recorded locally
+ * when the workspace has no remote to match on.
  * Pass precomputedRemote to skip the git spawn when the caller already has it.
  */
 export async function findTeamForWorkspace(workspacePath: string, precomputedRemote?: string): Promise<TeamDetails | null> {
@@ -1138,12 +1159,13 @@ export async function findTeamForWorkspace(workspacePath: string, precomputedRem
   }
 
   const remote = precomputedRemote ?? await getNormalizedGitRemote(workspacePath);
-  if (!remote) {
+  const boundOrgId = getLocalOrgBinding(workspacePath);
+  if (!remote && !boundOrgId) {
     // logger.main.info('[TeamService] findTeamForWorkspace: no git remote for', workspacePath);
     return null;
   }
 
-  const remoteHash = hashGitRemote(remote);
+  const remoteHash = remote ? hashGitRemote(remote) : null;
 
   try {
     const teams = await listTeams();
@@ -1151,10 +1173,21 @@ export async function findTeamForWorkspace(workspacePath: string, precomputedRem
     // so a workspace whose remote matches a SECONDARY project routes to that
     // project's tracker room. The project registry rides along on listTeams
     // (cached), so this adds no extra fetch. See teamProjectResolver.ts.
-    const match = resolveTeamForRemoteHash(teams, remoteHash);
+    const match = remoteHash ? resolveTeamForRemoteHash(teams, remoteHash) : null;
     if (match) {
       // logger.main.info('[TeamService] findTeamForWorkspace: matched', match.orgId, match.teamProjectId);
       return match;
+    }
+
+    // The remote is the shared identifier and always wins. Fall back to the
+    // local binding only once it has failed to match -- membership still gates
+    // the result, so leaving the org drops the binding's resolution with it.
+    if (boundOrgId) {
+      const bound = teams.find(t => (
+        t.orgId === boundOrgId
+        && (!t.membershipType || t.membershipType === 'active_member')
+      ));
+      if (bound) return bound;
     }
 
     if (teams.length > 0) {
@@ -1333,6 +1366,13 @@ async function createTeam(name: string, workspacePath?: string, accountOrgId?: s
         throw err instanceof Error ? err : new Error(String(err));
       }
     }
+  }
+
+  // A project with no git remote produces no hash for the server to key on, so
+  // nothing would ever match this workspace back to the org it just created.
+  // Record it locally, which is as far as the association can reach anyway.
+  if (workspacePath && !gitRemoteHash) {
+    setLocalOrgBinding(workspacePath, result.orgId);
   }
 
   // Team collaboration is server-managed, and only server-managed. Mark the

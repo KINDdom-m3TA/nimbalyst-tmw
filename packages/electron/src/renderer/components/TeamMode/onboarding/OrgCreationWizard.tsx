@@ -10,7 +10,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
-import { useAtomValue } from 'jotai';
+import { useAtomValue, useSetAtom } from 'jotai';
 
 import { AlphaBadge } from '../../common/AlphaBadge';
 import { TEAM_ALPHA_TOOLTIP, TeamAlphaNotice } from '../../common/TeamAlphaNotice';
@@ -48,6 +48,7 @@ import {
 import { createOrgWizardApi } from './orgWizardApi';
 import { OrgWizardAccountStep } from './OrgWizardAccountStep';
 import { stytchAuthAtom, type StytchAuthSnapshot } from '../../../store/atoms/stytchAuth';
+import { projectOrgRevisionAtom } from '../../../store/atoms/orgScope';
 import {
   runCreateOrganization,
   runSendInvites,
@@ -158,6 +159,7 @@ export function OrgCreationWizard({
   api,
 }: OrgCreationWizardProps) {
   const auth = useAtomValue(stytchAuthAtom);
+  const bumpProjectOrgRevision = useSetAtom(projectOrgRevisionAtom);
   const wizardApi = useMemo(() => api ?? createOrgWizardApi(), [api]);
   const [state, setState] = useState<OrgWizardState>(() => (
     initialState
@@ -432,11 +434,16 @@ export function OrgCreationWizard({
           encryptionMode: 'server_managed',
           memberCountBucket: bucketMemberCount(1),
         });
+        // Every surface that shows "which org does this project belong to"
+        // resolves it once per workspace, so without this the answer they
+        // already computed ("none") outlives the org being created.
+        bumpProjectOrgRevision((revision) => revision + 1);
         onOrganizationCreated?.(next.createdOrgId);
       }
       return advance(next);
     });
   }, [
+    bumpProjectOrgRevision,
     entryPoint,
     onOrganizationCreated,
     runStep,
