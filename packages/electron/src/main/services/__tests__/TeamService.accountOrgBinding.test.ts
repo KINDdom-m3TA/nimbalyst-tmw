@@ -7,12 +7,14 @@ const {
   getPersonalSessionJwtForAccountMock,
   getSessionTokenForAccountMock,
   files,
+  handlers,
   authState,
   databaseState,
 } = vi.hoisted(() => ({
   queryMock: vi.fn(),
   fetchMock: vi.fn(),
   files: new Map<string, Buffer>(),
+  handlers: new Map<string, (...args: any[]) => any>(),
   authState: {
     syncPersonalOrgId: 'personal-bound',
     accounts: [] as Array<{ personalOrgId: string; personalUserId: string; email: string }>,
@@ -20,6 +22,8 @@ const {
   databaseState: {
     bindings: [] as Array<{ personal_org_id: string; team_org_id: string; team_member_id: string }>,
     emailMembers: new Map<string, string[]>(),
+    orgs: [] as Array<{ id: string; flavor: string }>,
+    members: [] as Array<{ org_id: string; user_id: string; email: string | null; role: string }>,
   },
   canAccessMock: vi.fn(async (_db: unknown, viewerUserId: string) => ({
     allowed: viewerUserId === 'team-member-bound',
@@ -46,7 +50,12 @@ vi.mock('fs', () => ({
   }),
   unlinkSync: vi.fn((filePath: string) => files.delete(filePath)),
 }));
-vi.mock('../../utils/ipcRegistry', () => ({ safeHandle: vi.fn() }));
+vi.mock('../../utils/ipcRegistry', () => ({
+  safeHandle: vi.fn((channel: string, handler: (...args: any[]) => any) => {
+    handlers.set(channel, handler);
+  }),
+  safeOn: vi.fn(),
+}));
 vi.mock('../../utils/logger', () => ({
   logger: { main: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
 }));
@@ -96,8 +105,13 @@ vi.mock('../analytics/AnalyticsService', () => ({
 vi.mock('../../database/initialize', () => ({
   getDatabase: () => ({ query: queryMock }),
 }));
-vi.mock('../OrgProjectionService', () => ({}));
+// OrgProjectionService is pure over the ProjectionDb interface, so the real
+// module runs against queryMock and the projection writes stay assertable.
 vi.mock('../OrgAccessResolver', () => ({ canAccess: canAccessMock }));
+vi.mock('../TeamCustodyService', () => ({
+  setTeamServerManagedCustody: vi.fn(async () => {}),
+  registerTeamCustodyHandlers: vi.fn(),
+}));
 vi.mock('../TrackerSyncManager', () => ({}));
 vi.mock('../CollabBackupService', () => ({}));
 vi.mock('../TeamAuthBootstrap', () => ({ createTeamAuthBootstrap: (fn: unknown) => fn }));
@@ -108,7 +122,7 @@ import {
   setSyncAccount,
   signOut,
 } from '../StytchAuthService';
-import { canAccessForCurrentUser, getOrgScopedJwt } from '../TeamService';
+import { canAccessForCurrentUser, getOrgScopedJwt, registerTeamHandlers } from '../TeamService';
 
 describe('TeamService account-to-org viewer binding', () => {
   beforeEach(async () => {
@@ -143,6 +157,10 @@ describe('TeamService account-to-org viewer binding', () => {
       { personal_org_id: 'personal-bound', team_org_id: 'team-org', team_member_id: 'team-member-bound' },
     ];
     databaseState.emailMembers.clear();
+    databaseState.orgs = [];
+    databaseState.members = [];
+    handlers.clear();
+    registerTeamHandlers();
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
@@ -178,6 +196,22 @@ describe('TeamService account-to-org viewer binding', () => {
           team_member_id: params?.[2] as string,
         });
         return { rows: [] };
+      }
+      if (normalized.startsWith('INSERT INTO orgs')) {
+        databaseState.orgs.push({ id: params?.[0] as string, flavor: params?.[3] as string });
+        return { rows: [] };
+      }
+      if (normalized.startsWith('INSERT INTO org_members')) {
+        databaseState.members.push({
+          org_id: params?.[0] as string,
+          user_id: params?.[1] as string,
+          email: (params?.[2] as string) ?? null,
+          role: params?.[3] as string,
+        });
+        return { rows: [] };
+      }
+      if (normalized.startsWith('SELECT id FROM orgs')) {
+        return { rows: databaseState.orgs.filter((org) => org.id === params?.[0]).map((org) => ({ id: org.id })) };
       }
       if (normalized.startsWith('SELECT outcome FROM account_org_binding_repairs')) return { rows: [] };
       if (normalized.startsWith('SELECT user_id FROM org_members')) {
@@ -238,5 +272,77 @@ describe('TeamService account-to-org viewer binding', () => {
     expect(getPersonalSessionJwtForAccountMock).toHaveBeenNthCalledWith(2, 'personal-bound');
     expect(getSessionTokenForAccountMock).toHaveBeenNthCalledWith(1, 'personal-bound');
     expect(getSessionTokenForAccountMock).toHaveBeenNthCalledWith(2, 'personal-bound');
+  });
+
+  /**
+   * NIM-2466. Stytch's `sessions/exchange` REVOKES the session token it consumes,
+   * so the replacement returned by `/switch` is the account's only live token. It
+   * used to be dropped whenever the exchange named an account explicitly -- which
+   * the org-creation wizard always does. Every later call for that account then
+   * 401s: `listTeams` returns nothing, the account menu falls back to
+   * "No organization", and the org projection can never be backfilled.
+   */
+  function storedSessionToken(personalOrgId: string): string | undefined {
+    const raw = files.get('/mock/user-data/stytch-accounts.enc');
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw.toString('utf8')) as {
+      accounts: Array<{ personalOrgId?: string; sessionToken?: string }>;
+    };
+    return parsed.accounts.find((account) => account.personalOrgId === personalOrgId)?.sessionToken;
+  }
+
+  it('persists the exchanged session token for the account that owns the exchange', async () => {
+    // forceRefresh: earlier cases in this file leave 'team-org' cached.
+    await expect(getOrgScopedJwt('team-org', 'personal-bound', true)).resolves.toBe('team-jwt');
+
+    expect(storedSessionToken('personal-bound')).toBe('next-session-token');
+    // The other signed-in account never took part in this exchange.
+    expect(storedSessionToken('personal-sync')).toBe('session-token:personal-sync');
+  });
+
+  it('does not overwrite the sync account token when a secondary account exchanges', async () => {
+    databaseState.bindings = [
+      { personal_org_id: 'personal-sync', team_org_id: 'team-org-secondary', team_member_id: 'team-member-sync' },
+    ];
+
+    await expect(getOrgScopedJwt('team-org-secondary')).resolves.toBe('team-jwt');
+
+    expect(storedSessionToken('personal-sync')).toBe('next-session-token');
+    expect(storedSessionToken('personal-bound')).toBe('session-token:personal-bound');
+  });
+
+  /**
+   * NIM-2466. Org creation used to end at the server round trip, leaving the
+   * local catalog to a later sync. When that sync could not run, nothing ever
+   * wrote the org, so `canAccess` had no membership to resolve against for an
+   * org the user had just created. Mint the projection with the create.
+   */
+  it('mints the local org and creator membership when an organization is created', async () => {
+    fetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => (url.endsWith('/api/teams')
+        ? {
+          orgId: 'org-new',
+          name: 'Acme',
+          creatorMemberId: 'member-new',
+          teamMemberId: 'member-new',
+          owningPersonalOrgId: 'personal-bound',
+        }
+        : { sessionJwt: 'team-jwt', sessionToken: 'next-session-token', bindingRecorded: false }),
+    }));
+
+    const result = await handlers.get('team:create')!({}, 'Acme', undefined, 'personal-bound');
+
+    expect(result.success).toBe(true);
+    expect(databaseState.orgs).toContainEqual({ id: 'org-new', flavor: 'team' });
+    expect(databaseState.members).toContainEqual({
+      org_id: 'org-new',
+      user_id: 'member-new',
+      email: 'bound@example.com',
+      // The server records the creator as 'admin'; the local row must agree so a
+      // later roster sync is a no-op rather than a role flip.
+      role: 'admin',
+    });
   });
 });

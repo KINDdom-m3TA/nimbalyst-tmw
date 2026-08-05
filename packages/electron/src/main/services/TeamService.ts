@@ -41,6 +41,7 @@ import {
   refreshPersonalSessionForAccount,
   onAuthStateChange,
   updateSessionToken,
+  updateSessionTokenForAccount,
   getUserEmail,
   getPersonalOrgId,
   getPersonalUserId,
@@ -69,6 +70,7 @@ import {
   applyProjectGrant,
   applyProjectRevoke,
   upsertProject,
+  upsertOrg,
   type OrgWithRoster,
   type MemberInput,
   type ProjectionDb,
@@ -84,6 +86,7 @@ import { ensureTrackerSyncForWorkspace } from './TrackerSyncManager';
 import { getCollabBackupService } from './CollabBackupService';
 import { createTeamAuthBootstrap } from './TeamAuthBootstrap';
 import {
+  findBindingsWithMissingOrg,
   repairAccountOrgBindingFromEmail,
   resolveTeamOrgAccountBinding,
   upsertAccountOrgBinding,
@@ -458,10 +461,20 @@ async function exchangeOrgScopedJwt(
   // Stytch session exchange replaces the session token -- the old one is now
   // invalid. We MUST persist the new token so that refreshSession() and
   // getSessionToken() continue to work.
-  // Only update the singleton token when operating under the sync account.
-  // Secondary account exchanges must NOT overwrite the primary's token.
-  if (data.sessionToken && !accountOrgId) {
-    updateSessionToken(data.sessionToken);
+  //
+  // NIM-2466: persisting only for the singleton dropped the replacement token
+  // whenever the exchange named an account explicitly, which the org-creation
+  // wizard always does. That account was then holding a revoked token, so
+  // /api/teams 401'd, listTeams returned nothing, the account menu read back
+  // "No organization", and the org projection could never backfill. Route the
+  // token to its owning account instead -- a secondary account's exchange still
+  // never touches the sync account's singleton.
+  if (data.sessionToken) {
+    if (accountOrgId) {
+      updateSessionTokenForAccount(accountOrgId, data.sessionToken);
+    } else {
+      updateSessionToken(data.sessionToken);
+    }
   }
 
   // Derive cache TTL from the actual JWT exp claim (with 60s buffer).
@@ -1248,6 +1261,12 @@ const findForWorkspaceSingleFlight = createSingleFlight<string, FindForWorkspace
  * Create a new team (Stytch org + D1 metadata + encryption key setup).
  * Returns the new team details. Does NOT modify global auth state.
  */
+/** Email of the account performing an org operation, for the local roster row. */
+function creatorEmailForAccount(accountOrgId?: string): string | null {
+  if (!accountOrgId) return getUserEmail();
+  return getAccounts().find((account) => account.personalOrgId === accountOrgId)?.email ?? null;
+}
+
 async function createTeam(name: string, workspacePath?: string, accountOrgId?: string): Promise<TeamDetails> {
   let gitRemoteHash: string | undefined;
   if (workspacePath) {
@@ -1289,6 +1308,31 @@ async function createTeam(name: string, workspacePath?: string, accountOrgId?: s
       orgId: result.orgId,
       sourcePersonalOrgId,
     });
+  }
+
+  // NIM-2466: mint the local catalog rows with the create rather than leaving
+  // them to a later sync. The binding alone is not enough -- `canAccess` and the
+  // org projection resolve through `orgs`/`org_members`, and an install whose
+  // sync could not run was left with a binding pointing at rows that never
+  // existed. 'admin' mirrors the role the server records for a creator, so the
+  // next roster sync is a no-op instead of a role flip.
+  {
+    const db = getDatabase() as ProjectionDb | null;
+    const creatorMemberId = result.teamMemberId ?? result.creatorMemberId;
+    if (db && creatorMemberId) {
+      try {
+        await upsertOrg(db, { orgId: result.orgId, name: result.name, flavor: 'team', gitOriginHash: gitRemoteHash ?? null });
+        await applyMemberUpserted(db, result.orgId, {
+          userId: creatorMemberId,
+          email: creatorEmailForAccount(accountOrgId),
+          role: 'admin',
+        });
+      } catch (err) {
+        // A create that cannot be seen locally is a broken setup, not a success.
+        logger.main.error('[TeamService] Failed to write the local org projection after create:', err);
+        throw err instanceof Error ? err : new Error(String(err));
+      }
+    }
   }
 
   // Team collaboration is server-managed, and only server-managed. Mark the
@@ -1731,6 +1775,16 @@ export async function syncOrgProjectionFromServer(knownTeams?: TeamDetails[]): P
         );
       }
     }
+    // A binding pointing at an org the projection never wrote is the NIM-2466
+    // signature. The sync is the only place that can see it, and it went by in
+    // silence there -- the binding looked healthy, so nothing else ever looked.
+    const dangling = await findBindingsWithMissingOrg(db);
+    if (dangling.length > 0) {
+      logger.main.error('[TeamService] Account/org bindings reference orgs missing from the local projection', {
+        bindings: dangling,
+      });
+    }
+
     // logger.main.info('[TeamService] org projection synced:', counts);
     return { success: true, counts };
   } catch (err) {
