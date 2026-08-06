@@ -58,7 +58,7 @@ describe('OrgWindowSwitcher', () => {
 
     const button = screen.getByTestId('org-window-switcher-button');
     expect(button.textContent).toContain('Acme');
-    // Initials avatar and the alpha chip that used to live in the header band.
+    // Initials avatar and the beta chip that used to live in the header band.
     expect(button.querySelector('.org-window-switcher-avatar')?.textContent).toBe('AC');
     screen.getByTestId('alpha-badge');
 
