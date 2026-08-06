@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- The CSV Spreadsheet extension now computes formulas live and keeps them after a save, and adds find and replace, per-column filters, and AI tools for analyzing data and applying formulas.
 - The Git panel's Changes tab is now one compact, collapsible list with no staging step: tick the files you want and commit them, or hand the selection to AI to write the message.
 
 ### Fixed
@@ -26,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The voice agent no longer sounds like it switches to a different voice partway through an answer.
 - Accepting a team invitation now opens Nimbalyst instead of leaving you in the browser, and tells you how to sign in if you do not have the app yet.
 - When a session edits the same file several times, the red/green diff shows the whole set of changes again instead of only the last one.
+- Everyone on a team now sees the same tracker fields: a schema your team shares wins over an old copy on your machine, instead of silently freezing that type and hiding fields like Collections from you.
+- Customizing a shared tracker type now reaches your teammates, and a second open project no longer swaps another window's tracker types for the built-in ones.
 
 ### Removed
 <!-- Removed features go here -->
