@@ -3,10 +3,6 @@ import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 
-vi.mock('@nimbalyst/runtime', () => ({
-  MaterialSymbol: ({ icon }: { icon: string }) => <span>{icon}</span>,
-}));
-
 import { OrgWindowSwitcher } from '../OrgWindowSwitcher';
 import type { OrgChoice } from '../defaultOrg';
 
