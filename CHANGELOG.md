@@ -10,13 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- Open a shared project that is not a git repository by choosing a folder for it in your organization's project list.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Signing in or creating an organization now turns on Shared Docs right away, instead of staying hidden until you restart or reopen the window.
 - The voice agent no longer sounds like it switches to a different voice partway through an answer.
+- Accepting a team invitation now opens Nimbalyst instead of leaving you in the browser, and tells you how to sign in if you do not have the app yet.
 
 ### Removed
 <!-- Removed features go here -->
