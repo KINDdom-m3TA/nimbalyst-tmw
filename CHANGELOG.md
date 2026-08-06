@@ -10,7 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+
+### Changed
+<!-- Changes to existing functionality go here -->
+
+### Fixed
+<!-- Bug fixes go here -->
+
+### Removed
+<!-- Removed features go here -->
+
+## [0.72.5] - 2026-08-06
+
+
+### Added
+<!-- New features go here -->
 - Open a shared project that is not a git repository by choosing a folder for it in your organization's project list.
+- A Renders tab in the Developer Dashboard that reports which components re-render, how often, and why.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
@@ -21,10 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Bug fixes go here -->
 - Codex sessions using parallel sub-agents now wait for the lead agent's final response instead of ending when the first child finishes.
 - Sending a queued prompt immediately no longer leaves the session stuck as running with the prompt never delivered.
-- Committing from the Git panel's Changes tab works again; it previously failed with an error no matter which files were staged.
+- Committing from the Git panel works again, renamed files show up, and discarding also undoes staged changes without touching files you did not select.
 - The Git panel's file mask is remembered per project again, instead of resetting every time you reopen the panel.
-- Renamed files now appear in the Git panel's Changes tab, which previously showed nothing at all after a rename and could commit the file under both its old and new name.
-- Discarding from the Git panel now also undoes staged changes, and can no longer touch files you did not select.
+- A spawned session's completion notification no longer repeats its entire original prompt back to the session that started it.
+- Reloading an extension now rebuilds it first, so your latest changes actually load.
 - Signing in or creating an organization now turns on Shared Docs right away, instead of staying hidden until you restart or reopen the window.
 - The voice agent no longer sounds like it switches to a different voice partway through an answer.
 - Accepting a team invitation now opens Nimbalyst instead of leaving you in the browser, and tells you how to sign in if you do not have the app yet.
