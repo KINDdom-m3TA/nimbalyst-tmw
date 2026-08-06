@@ -202,6 +202,27 @@ function parseTrackerContentColumn(raw: string): any {
   }
 }
 
+/**
+ * SQLite returns the encoded JSON text stored in `tracker_items.content`,
+ * while PGLite's JSONB column can return the decoded value. Treat either
+ * representation as equal so redundant renderer saves remain true no-ops.
+ */
+function trackerContentMatches(
+  storedContent: unknown,
+  content: unknown,
+  contentJson: string | null,
+): boolean {
+  if (storedContent === null || storedContent === undefined) {
+    return contentJson === null;
+  }
+  if (typeof storedContent === 'string') {
+    return storedContent === content
+      || storedContent === contentJson
+      || JSON.stringify(parseTrackerContentColumn(storedContent)) === contentJson;
+  }
+  return JSON.stringify(storedContent) === contentJson;
+}
+
 function normalizeTrackerTitle(title: string | undefined): string {
   return (title || '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
@@ -2520,6 +2541,9 @@ export class ElectronDocumentService implements DocumentService {
       throw new Error(`Tracker item not found: ${itemId}`);
     }
     const contentJson = content != null ? JSON.stringify(content) : null;
+    if (trackerContentMatches(row.content, content, contentJson)) {
+      return;
+    }
     const data = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
     const modifierIdentity = getCurrentIdentity(row.workspace);
     appendActivity(data, modifierIdentity, 'updated', { field: 'content' });
