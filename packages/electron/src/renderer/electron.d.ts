@@ -783,7 +783,15 @@ interface ElectronAPI {
 
   // Extensions API
   extensions: {
-    listInstalled: () => Promise<Array<{ id: string; path: string; manifest: any; name: string; enabled: boolean }>>;
+    listInstalled: () => Promise<Array<{
+      id: string;
+      path: string;
+      manifest: any;
+      name: string;
+      enabled: boolean;
+      isBuiltin?: boolean;
+      staleBundleWarning?: string;
+    }>>;
     getAllSettings: () => Promise<Record<string, { enabled: boolean; claudePluginEnabled?: boolean; agentWorkflowsEnabled?: boolean }>>;
     getEnabled: (extensionId: string, defaultEnabled?: boolean) => Promise<boolean>;
     setEnabled: (extensionId: string, enabled: boolean) => Promise<{ success: boolean; error?: string }>;
