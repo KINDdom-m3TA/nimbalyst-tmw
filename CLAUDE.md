@@ -202,8 +202,9 @@ Two-tier architecture — `ai_agent_messages` (raw append-only log, sole source 
 | [WEEKLY_DASHBOARD.md](./docs/WEEKLY_DASHBOARD.md) | Adding/modifying insights on the Weeklys PostHog dashboard. |
 | [VOICE_MODE.md](./docs/VOICE_MODE.md) | Working on voice mode, voice-agent prompts, audio pipeline, or session lifecycle. |
 | [TRACKER_WORKFLOWS.md](./docs/TRACKER_WORKFLOWS.md) | Creating decision or bug tracker items as part of a fix or design decision. |
-| [ARCHITECTURE_DIAGRAMS.md](./docs/ARCHITECTURE_DIAGRAMS.md) | Making any architectural decision — create an Excalidraw diagram. |
+| [ARCHITECTURE_DIAGRAMS.md](./docs/ARCHITECTURE_DIAGRAMS.md) | Considering whether a change is complex enough to warrant an Excalidraw diagram. |
 | [DEBUGGING_LOGS.md](./docs/DEBUGGING_LOGS.md) | Investigating bugs — use the log access tools, don't ask the user to paste logs. |
+| [RENDER_PERFORMANCE.md](./docs/RENDER_PERFORMANCE.md) | Chasing excessive React re-renders, or adding a render-budget test to a hot surface. |
 | [MAIN_PROCESS_INIT.md](./packages/electron/MAIN_PROCESS_INIT.md) | Working on Electron main-process bootstrap, singleton init, or IPC handler registration. |
 | [DATABASE.md](./packages/electron/DATABASE.md) | Working with PGLite tables, shutdown, or timestamp handling. |
 
@@ -218,9 +219,19 @@ Two-tier architecture — `ai_agent_messages` (raw append-only log, sole source 
 
 When choosing between alternatives (libraries, patterns, deciding NOT to do something), log a **decision** tracker item. When fixing a bug, ensure a **bug** tracker item exists before writing fix code. See [TRACKER_WORKFLOWS.md](./docs/TRACKER_WORKFLOWS.md) for the exact `tracker_create` calls and lifecycle.
 
+### `NIM-###` Keys Are Workspace-Local — Cite GitHub Issues in Source
+
+**`NIM-###` issue keys are internal to a Nimbalyst workspace's tracker. They do not resolve anywhere else** — every install numbers its own items, so the same key points at a different item in every workspace. In a public repo they are worse than no reference: a reader who looks one up lands on an unrelated item and believes it.
+
+- **Code comments and runtime log strings** reference the GitHub issue: `// #1146: typed workstream containers are always roots`. If there is no GitHub issue, write the reason in prose instead of citing a key.
+- **Commit messages** keep `Fixes NIM-123` — that trailer is what `CommitTrackerLinker` uses to auto-close the item, and it never ships inside the product. Add `Fixes #123` alongside it when a GitHub issue also exists.
+- **Existing `NIM-###` references in source stay put.** This applies to new code; there is no retro sweep.
+
+A contributed PR carrying a `NIM-###` reference is always wrong — it came from *their* tracker. Strip it or map it to the GitHub issue before merging.
+
 ## Architecture Diagrams for Decisions
 
-Whenever an architectural change is proposed, create an Excalidraw diagram in `nimbalyst-local/architecture/` and share the diagram file/link in the conversation. Use `capture_editor_screenshot` only when visual verification is needed or the user explicitly asks for an inline image. See [ARCHITECTURE_DIAGRAMS.md](./docs/ARCHITECTURE_DIAGRAMS.md).
+**Default: no diagram.** Only when a change rearranges how three or more components relate — and the topology is genuinely non-obvious from prose — create an Excalidraw diagram in `nimbalyst-local/architecture/` and share the file link. Never diagram linear sequences, phased rollouts, single components, bug fixes, or a restatement of your own section headings. See [ARCHITECTURE_DIAGRAMS.md](./docs/ARCHITECTURE_DIAGRAMS.md) for the full bar.
 
 ## Verifying Development Mode
 
