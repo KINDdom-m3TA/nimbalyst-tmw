@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Codex sessions using parallel sub-agents now wait for the lead agent's final response instead of ending when the first child finishes.
 - Committing from the Git panel's Changes tab works again; it previously failed with an error no matter which files were staged.
 - The Git panel's file mask is remembered per project again, instead of resetting every time you reopen the panel.
 - Renamed files now appear in the Git panel's Changes tab, which previously showed nothing at all after a rename and could commit the file under both its old and new name.
