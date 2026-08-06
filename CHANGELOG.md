@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - Committing from the Git panel's Changes tab works again; it previously failed with an error no matter which files were staged.
+- The Git panel's file mask is remembered per project again, instead of resetting every time you reopen the panel.
+- Renamed files now appear in the Git panel's Changes tab, which previously showed nothing at all after a rename and could commit the file under both its old and new name.
+- Discarding from the Git panel now also undoes staged changes, and can no longer touch files you did not select.
 - Signing in or creating an organization now turns on Shared Docs right away, instead of staying hidden until you restart or reopen the window.
 - The voice agent no longer sounds like it switches to a different voice partway through an answer.
 - Accepting a team invitation now opens Nimbalyst instead of leaving you in the browser, and tells you how to sign in if you do not have the app yet.
