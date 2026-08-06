@@ -1,33 +1,23 @@
-# Package metadata
-packageVersion: 1.0.0
-packageId: developer
-
 type: blog
 displayName: Blog
 displayNamePlural: Blog Posts
 icon: article
-color: "#059669"
-
+color: '#059669'
 modes:
   inline: true
   fullDocument: true
-
-sync:
-  mode: local
-  scope: project
-
 idPrefix: blog
 idFormat: ulid
-
 fields:
   - name: title
     type: string
     required: true
     displayInline: true
-
   - name: status
     type: select
+    required: false
     default: to-do
+    displayInline: true
     options:
       - value: to-do
         label: To Do
@@ -39,10 +29,11 @@ fields:
         label: Published
       - value: archived
         label: Archived
-
   - name: priority
     type: select
+    required: false
     default: medium
+    displayInline: true
     options:
       - value: low
         label: Low
@@ -50,26 +41,28 @@ fields:
         label: Medium
       - value: high
         label: High
-
   - name: owner
     type: user
+    required: false
     displayInline: true
-
   - name: tags
     type: array
-    itemType: string
+    required: false
     displayInline: false
-
+    itemType: string
   - name: description
     type: text
+    required: false
     displayInline: false
-
   - name: created
     type: string
+    required: false
     displayInline: false
-
   - name: updated
     type: string
+    required: false
     displayInline: false
-
-inlineTemplate: "{icon} {title} {status} {priority}"
+inlineTemplate: '{icon} {title} {status} {priority}'
+sync:
+  mode: local
+  scope: project
