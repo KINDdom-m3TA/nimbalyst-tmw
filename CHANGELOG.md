@@ -14,12 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- The Git panel's Changes tab is now one compact, collapsible list with no staging step: tick the files you want and commit them, or hand the selection to AI to write the message.
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Committing from the Git panel's Changes tab works again; it previously failed with an error no matter which files were staged.
 - Signing in or creating an organization now turns on Shared Docs right away, instead of staying hidden until you restart or reopen the window.
 - The voice agent no longer sounds like it switches to a different voice partway through an answer.
 - Accepting a team invitation now opens Nimbalyst instead of leaving you in the browser, and tells you how to sign in if you do not have the app yet.
+- When a session edits the same file several times, the red/green diff shows the whole set of changes again instead of only the last one.
 
 ### Removed
 <!-- Removed features go here -->
