@@ -1,13 +1,33 @@
 const { execFile } = require('node:child_process');
-const { rename } = require('node:fs/promises');
 const path = require('node:path');
 const { promisify } = require('node:util');
 
 const execFileAsync = promisify(execFile);
 
+// electron-builder asks us to sign more than we want to pay for. Even with
+// build.win.signExts unset it walks resources/app.asar.unpacked and signs every
+// .exe it finds (winPackager.js `shouldSignFile`: `file.endsWith(".exe")` is the
+// backwards-compatible default), which pulls in bundled third-party binaries --
+// rg.exe, codex.exe, claude.exe. Two reasons not to:
+//
+//   1. Cost. Each pass is a DigiCert KeyLocker call against a fixed yearly
+//      allocation. Signing the payload wholesale ran 59 calls per x64 build and
+//      exhausted a 1,000-call allocation in nine release runs.
+//   2. Provenance. Those binaries already carry their upstream publisher's
+//      signature. Replacing it with ours asserts we built them; we didn't.
+//
+// Windows and SmartScreen attribute the app by the payload executable and the
+// installer, so those -- plus the NSIS uninstaller -- are what we sign (#853).
+const UNSIGNED_PATH_SEGMENTS = ['app.asar.unpacked', 'swiftshader'];
+
+function isThirdPartyPayloadFile(filePath) {
+  const segments = filePath.split(/[\\/]/);
+  return UNSIGNED_PATH_SEGMENTS.some(segment => segments.includes(segment));
+}
+
 /**
- * Delegate every Windows PE signing pass from electron-builder to DigiCert
- * KeyLocker. This runs before NSIS packages the app, so the payload and the
+ * Delegate Windows PE signing from electron-builder to DigiCert KeyLocker. This
+ * runs before NSIS packages the app, so the payload executable and the
  * installer carry the same trusted Windows publisher.
  */
 exports.default = async function signWindows(configuration) {
@@ -28,35 +48,31 @@ exports.default = async function signWindows(configuration) {
     throw new Error(`Unsupported Windows signing hash: ${configuration.hash}`);
   }
 
-  // DigiCert simple signing recognizes PE binaries by extension and does not
-  // list Electron's .node extension. Authenticode does not bind the filename,
-  // so use a temporary .dll name for native modules and restore it afterward.
-  const isNativeModule = path.extname(configuration.path).toLowerCase() === '.node';
-  const signingPath = isNativeModule ? `${configuration.path}.dll` : configuration.path;
-
-  if (isNativeModule) await rename(configuration.path, signingPath);
-  try {
-    console.log(`[windows-sign] Signing ${configuration.path} with DigiCert KeyLocker`);
-    const { stdout, stderr } = await execFileAsync(
-      smctlPath,
-      [
-        'sign',
-        '--keypair-alias',
-        keypairAlias,
-        '--input',
-        signingPath,
-        '--simple'
-      ],
-      {
-        env: process.env,
-        maxBuffer: 10 * 1024 * 1024,
-        windowsHide: true
-      }
-    );
-
-    if (stdout) process.stdout.write(stdout);
-    if (stderr) process.stderr.write(stderr);
-  } finally {
-    if (isNativeModule) await rename(signingPath, configuration.path);
+  if (isThirdPartyPayloadFile(configuration.path)) {
+    console.log(`[windows-sign] Skipping bundled third-party binary ${path.basename(configuration.path)}`);
+    return;
   }
+
+  console.log(`[windows-sign] Signing ${configuration.path} with DigiCert KeyLocker`);
+  const { stdout, stderr } = await execFileAsync(
+    smctlPath,
+    [
+      'sign',
+      '--keypair-alias',
+      keypairAlias,
+      '--input',
+      configuration.path,
+      '--simple'
+    ],
+    {
+      env: process.env,
+      maxBuffer: 10 * 1024 * 1024,
+      windowsHide: true
+    }
+  );
+
+  if (stdout) process.stdout.write(stdout);
+  if (stderr) process.stderr.write(stderr);
 };
+
+exports.isThirdPartyPayloadFile = isThirdPartyPayloadFile;

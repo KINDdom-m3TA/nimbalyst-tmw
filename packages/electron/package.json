@@ -449,11 +449,6 @@
         }
       ],
       "artifactName": "${productName}-Windows-${arch}.${ext}",
-      "signExts": [
-        ".exe",
-        ".dll",
-        ".node"
-      ],
       "signtoolOptions": {
         "publisherName": "NIMBALYST, INC.",
         "signingHashAlgorithms": [
