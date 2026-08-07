@@ -13,12 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Git Log now shows which AI session produced each commit, with a click-through to open that session.
 - The editor header now shows the last AI session that worked on the open file, with a dropdown to jump to the other sessions that touched it or start a new one.
 - Linked local files can now pull the latest Shared Document content from the editor header, with conflict protection and offline-ready Markdown images.
+- Shared document version history now shows the contents of each earlier version, so you can see what you are restoring before you restore it.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Restoring an earlier version of a shared document now actually rolls the document back, instead of reporting success while leaving it unchanged.
 
 ### Removed
 <!-- Removed features go here -->

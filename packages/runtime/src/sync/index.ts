@@ -267,6 +267,7 @@ export type {
 // main process. Import them from `@nimbalyst/runtime/collab-lexical`.
 export {
   createRevisionAdapterFromCollabContent,
+  previewRevisionSnapshot,
   type CollabAdapterRevisionBridgeOptions,
 } from './revisionSnapshotBridge';
 
