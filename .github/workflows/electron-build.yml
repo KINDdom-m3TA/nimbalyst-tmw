@@ -645,24 +645,40 @@ jobs:
           Write-Host "DigiCert client certificate decoded ($($certBytes.Length) bytes)"
         shell: powershell
 
-      # Sign the payload executable only, never the directory. `smctl --simple`
-      # against a directory recurses and signs every file type Authenticode
-      # recognizes -- including node_modules JavaScript -- which cost ~200
-      # DigiCert calls per ARM64 build. The uninstaller and installer are signed
-      # by build/sign-windows.js during the repackage step below.
-      - name: Sign Windows ARM64 payload with DigiCert KeyLocker
+      # Install and authenticate smctl only. Signing goes through
+      # build/sign-windows.js so this job shares the x64 job's allowlist and
+      # retry policy; the action's own `input:` mode signs once with no retry,
+      # and a directory argument there makes `smctl --simple` recurse and sign
+      # every file type Authenticode recognizes, including node_modules
+      # JavaScript (~200 DigiCert calls per ARM64 build).
+      - name: Set up DigiCert KeyLocker for Windows ARM64 signing
         if: env.DIGICERT_CLIENT_CERT_BASE64 != ''
         uses: digicert/code-signing-software-trust-action@v1.0.0
         with:
           simple-signing-mode: true
-          input: ${{ steps.arm-payload.outputs.path }}\Nimbalyst.exe
-          keypair-alias: ${{ secrets.DIGICERT_KEYPAIR_ALIAS }}
         env:
           DIGICERT_CLIENT_CERT_BASE64: ${{ secrets.DIGICERT_CLIENT_CERT_BASE64 }}
           SM_HOST: "https://clientauth.one.digicert.com"
           SM_API_KEY: ${{ secrets.DIGICERT_CLIENT_API_TOKEN }}
           SM_CLIENT_CERT_FILE: ${{ runner.temp }}\digicert_client_cert.p12
           SM_CLIENT_CERT_PASSWORD: ${{ secrets.DIGICERT_CLIENT_CERT_PW }}
+
+      # The uninstaller and installer are signed by the same script during the
+      # repackage step below.
+      - name: Sign Windows ARM64 payload with DigiCert KeyLocker
+        if: env.DIGICERT_CLIENT_CERT_BASE64 != ''
+        shell: pwsh
+        env:
+          DIGICERT_KEYPAIR_ALIAS: ${{ secrets.DIGICERT_KEYPAIR_ALIAS }}
+          SM_HOST: "https://clientauth.one.digicert.com"
+          SM_API_KEY: ${{ secrets.DIGICERT_CLIENT_API_TOKEN }}
+          SM_CLIENT_CERT_FILE: ${{ runner.temp }}\digicert_client_cert.p12
+          SM_CLIENT_CERT_PASSWORD: ${{ secrets.DIGICERT_CLIENT_CERT_PW }}
+        run: |
+          node packages/electron/build/sign-windows.js "${{ steps.arm-payload.outputs.path }}\Nimbalyst.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to sign the Windows ARM64 payload executable"
+          }
 
       - name: Package signed Windows ARM64 payload
         working-directory: packages/electron

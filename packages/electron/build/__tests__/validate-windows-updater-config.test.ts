@@ -4,7 +4,7 @@ import { createRequire } from "module";
 
 const require_ = createRequire(import.meta.url);
 const packageJson = require_("../../package.json");
-const { isThirdPartyPayloadFile } = require_("../sign-windows.js");
+const { shouldSign } = require_("../sign-windows.js");
 
 // PR #854 added build.win.signExts, which makes electron-builder run the
 // DigiCert signer once per matching file in the staged payload: 59 KeyLocker
@@ -26,31 +26,38 @@ describe("Windows signing scope", () => {
   });
 });
 
-// Paths taken verbatim from the v0.72.4 Windows build logs. electron-builder
-// hands the signer every .exe it walks, so the skip rule is the only thing
-// keeping bundled vendor binaries from being re-signed with our certificate.
-describe("isThirdPartyPayloadFile", () => {
-  it.each([
-    "D:\\a\\nimbalyst\\nimbalyst\\packages\\electron\\release\\win-unpacked\\resources\\app.asar.unpacked\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\codex-path\\rg.exe",
-    "D:\\a\\nimbalyst\\nimbalyst\\packages\\electron\\release\\win-unpacked\\resources\\app.asar.unpacked\\node_modules\\@anthropic-ai\\claude-agent-sdk-win32-x64\\claude.exe",
-    "D:\\a\\nimbalyst\\nimbalyst\\packages\\electron\\release\\win-unpacked\\swiftshader\\vk_swiftshader.dll",
-  ])("skips bundled vendor binary %s", (filePath) => {
-    expect(isThirdPartyPayloadFile(filePath)).toBe(true);
-  });
+// Paths taken verbatim from Windows build logs. electron-builder hands the
+// signer every .exe it walks -- across app.asar.unpacked, extraResources and
+// swiftshader -- so this allowlist is the only thing keeping bundled vendor
+// binaries from being re-signed with our certificate at DigiCert's per-call
+// cost. A denylist was tried first and leaked 7 node-pty binaries in v0.72.7.
+const RELEASE_DIR =
+  "D:\\a\\nimbalyst\\nimbalyst\\packages\\electron\\release";
 
+describe("shouldSign", () => {
   it.each([
-    "D:\\a\\nimbalyst\\nimbalyst\\packages\\electron\\release\\win-unpacked\\Nimbalyst.exe",
-    "D:\\a\\nimbalyst\\nimbalyst\\packages\\electron\\release\\Nimbalyst-Windows-x64.exe",
-    "C:\\Users\\runneradmin\\AppData\\Local\\Temp\\t-abc\\Uninstall Nimbalyst.exe",
+    `${RELEASE_DIR}\\win-unpacked\\Nimbalyst.exe`,
+    `${RELEASE_DIR}\\Nimbalyst-Windows-x64.exe`,
+    `${RELEASE_DIR}\\Nimbalyst-Windows-arm64.exe`,
+    `${RELEASE_DIR}\\Nimbalyst-Windows-x64.__uninstaller.exe`,
   ])("signs our own binary %s", (filePath) => {
-    expect(isThirdPartyPayloadFile(filePath)).toBe(false);
+    expect(shouldSign(filePath)).toBe(true);
   });
 
-  it("does not skip a payload path that merely contains the segment name", () => {
-    expect(
-      isThirdPartyPayloadFile(
-        "D:\\a\\nimbalyst\\release\\win-unpacked\\app.asar.unpacked.helper\\Nimbalyst.exe"
-      )
-    ).toBe(false);
+  it.each([
+    `${RELEASE_DIR}\\win-unpacked\\resources\\node-pty\\third_party\\conpty\\1.23.251008001\\win10-x64\\OpenConsole.exe`,
+    `${RELEASE_DIR}\\win-unpacked\\resources\\node-pty\\prebuilds\\win32-x64\\winpty-agent.exe`,
+    `${RELEASE_DIR}\\win-unpacked\\resources\\app.asar.unpacked\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\codex-path\\rg.exe`,
+    `${RELEASE_DIR}\\win-unpacked\\resources\\app.asar.unpacked\\node_modules\\@anthropic-ai\\claude-agent-sdk-win32-x64\\claude.exe`,
+    `${RELEASE_DIR}\\win-unpacked\\swiftshader\\vk_swiftshader.dll`,
+    `${RELEASE_DIR}\\win-unpacked\\resources\\app.asar.unpacked\\node_modules\\@img\\sharp-win32-x64\\lib\\libvips-42.dll`,
+  ])("skips bundled binary %s", (filePath) => {
+    expect(shouldSign(filePath)).toBe(false);
+  });
+
+  it("skips a vendor binary that merely sits beside ours", () => {
+    expect(shouldSign(`${RELEASE_DIR}\\win-unpacked\\NimbalystHelper.exe`)).toBe(
+      false
+    );
   });
 });
