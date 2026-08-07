@@ -342,6 +342,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shared tracker saved views survive the view migration again.
 - Git actions are hidden in projects that are not git repositories.
 - iOS pairing links now open the in-app scanner instead of being ignored.
+- Persistent file-save failures now pause autosave after bounded retries, preserve unsaved edits, and show a Retry banner instead of looping indefinitely.
 
 ### Removed
 <!-- Removed features go here -->
