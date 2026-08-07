@@ -139,6 +139,8 @@ import {
   SKIP_DOM_SELECTION_TAG,
 } from 'lexical';
 import {$createAutoLinkNode, $isAutoLinkNode, $isLinkNode} from '@lexical/link';
+import {$isEmbeddedFileNode} from '../../EmbedPlugin/EmbeddedFileNode';
+import {$rescanForEmbedUpgrade} from '../../../extensions/builtin/EmbedExtension';
 
 import {createHeadlessEditor} from '@lexical/headless';
 import {createNodeFromSerialized} from './createNodeFromSerialized';
@@ -335,6 +337,45 @@ function $applyAutoLinksToHeadlessEditor(editor: LexicalEditor): void {
     },
     {discrete: true},
   );
+}
+
+function $editorHasEmbeds(editor: LexicalEditor): boolean {
+  let found = false;
+  editor.getEditorState().read(() => {
+    const visit = (node: LexicalNode) => {
+      if (found) return;
+      if ($isEmbeddedFileNode(node)) {
+        found = true;
+        return;
+      }
+      if ($isElementNode(node)) {
+        for (const child of node.getChildren()) {
+          visit(child);
+          if (found) return;
+        }
+      }
+    };
+    visit($getRoot());
+  });
+  return found;
+}
+
+/**
+ * Upgrade paragraph-isolated links in the headless target editor into
+ * `EmbeddedFileNode`s, mirroring what `EmbedExtension` would have done in the
+ * live editor.
+ *
+ * Same structural-mismatch class as `$applyAutoLinksToHeadlessEditor` above.
+ * `EmbeddedFileNode` has no markdown IMPORT transformer -- it is produced by a
+ * `registerNodeTransform` on `LinkNode` that only `EmbedExtension` installs.
+ * The headless target editor runs no extensions, so an embed exported as
+ * `[label](src)` comes back as a plain `LinkNode`. TreeMatcher then cannot
+ * pair the source embed with the target link and the recursion emits the item
+ * twice, red/green marked, which is what "the embed duplicated" looks like to
+ * a user (#1744).
+ */
+function $applyEmbedUpgradeToHeadlessEditor(editor: LexicalEditor): void {
+  editor.update(() => $rescanForEmbedUpgrade(), {discrete: true});
 }
 
 // Type for text replacement edits (internal use after resolution)
@@ -980,6 +1021,12 @@ export function applyMarkdownDiffToDocument(
       // has already run against its existing structure.
       if ($editorHasAutoLinks(sourceEditor)) {
         $applyAutoLinksToHeadlessEditor(targetEditor);
+      }
+
+      // Same reasoning for embeds: the target's re-imported markdown carries
+      // plain LinkNodes where the source clone has EmbeddedFileNodes (#1744).
+      if ($editorHasEmbeds(sourceEditor)) {
+        $applyEmbedUpgradeToHeadlessEditor(targetEditor);
       }
 
 

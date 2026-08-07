@@ -246,6 +246,7 @@ export {
   scrollToChangeGroup,
   $approveChangeGroup,
   $rejectChangeGroup,
+  $clearResidualDiffMarkers,
   $getDiffState,
   APPROVE_DIFF_COMMAND,
   REJECT_DIFF_COMMAND,
