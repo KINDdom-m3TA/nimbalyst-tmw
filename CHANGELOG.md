@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Tracker items shared with a team now get the same issue key for everyone, instead of each member's app assigning its own number to the same item.
 
 ### Removed
 <!-- Removed features go here -->
