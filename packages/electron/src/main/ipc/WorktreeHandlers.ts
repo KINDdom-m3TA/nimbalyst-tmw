@@ -1073,7 +1073,7 @@ export function registerWorktreeHandlers(): void {
    * @param files - Optional array of specific files to commit
    * @returns Commit information
    */
-  ipcMain.handle('worktree:commit', async (_event, worktreePath: string, message: string, files?: string[]) => {
+  ipcMain.handle('worktree:commit', async (_event, worktreePath: string, message: string, files?: string[], sessionId?: string) => {
     try {
       if (!worktreePath) {
         throw new Error('worktreePath is required');
@@ -1084,7 +1084,7 @@ export function registerWorktreeHandlers(): void {
 
       logger.info('Committing changes', { worktreePath, message, fileCount: files?.length });
 
-      const commit = await gitWorktreeService.commitChanges(worktreePath, message, files);
+      const commit = await gitWorktreeService.commitChanges(worktreePath, message, files, sessionId);
 
       // Convert Date object to ISO string for IPC serialization
       const dateValue = commit.date instanceof Date && !isNaN(commit.date.getTime())

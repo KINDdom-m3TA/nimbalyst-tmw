@@ -14,6 +14,7 @@ import { GitStatusBar } from './GitStatusBar';
 import { PanelHideButton } from './PanelHideButton';
 import { useOperationLog, getSuggestionForError } from '../hooks/useOperationLog';
 import { usePanelState, readSelectedHash } from '../hooks/usePanelState';
+import { useSessionsForCommits } from '../hooks/useSessionsForCommits';
 import { filterCommits } from '../commitFilters';
 
 interface GitCommit {
@@ -57,6 +58,15 @@ const ipc = (window as unknown as {
     invoke: (channel: string, ...args: unknown[]) => Promise<unknown>;
   };
 }).electronAPI;
+
+/** App.tsx listens for this event and routes the session into Agent mode. */
+function openSession(sessionId: string, workspacePath: string): void {
+  window.dispatchEvent(
+    new CustomEvent('open-ai-session', {
+      detail: { sessionId, workspacePath },
+    }),
+  );
+}
 
 function formatRelativeDate(dateStr: string): string {
   const date = new Date(dateStr);
@@ -128,6 +138,10 @@ export function GitLogPanel({ host }: PanelHostProps) {
     () => filterCommits(unfilteredCommits, searchFilter),
     [unfilteredCommits, searchFilter],
   );
+  // Keyed off the fetched page, not the search-filtered view, so typing in the
+  // search box re-filters locally instead of refiring the lookup.
+  const commitShas = useMemo(() => unfilteredCommits.map(c => c.hash), [unfilteredCommits]);
+  const sessionLinks = useSessionsForCommits(commitShas);
   const selectedIndex = useMemo(() => {
     if (!selectedHash) return null;
     const idx = commits.findIndex(c => c.hash === selectedHash);
@@ -839,6 +853,7 @@ export function GitLogPanel({ host }: PanelHostProps) {
                     <th className="git-log-th git-log-th--hash">Hash</th>
                     <th className="git-log-th git-log-th--message">Message</th>
                     <th className="git-log-th git-log-th--author">Author</th>
+                    <th className="git-log-th git-log-th--session">Session</th>
                     <th className="git-log-th git-log-th--date">Date</th>
                   </tr>
                 </thead>
@@ -880,6 +895,21 @@ export function GitLogPanel({ host }: PanelHostProps) {
                         <td className="git-log-td git-log-td--author">
                           {commit.author}
                         </td>
+                        <td className="git-log-td git-log-td--session">
+                          {sessionLinks[commit.hash] && (
+                            <button
+                              type="button"
+                              className="git-log-session-chip"
+                              title={`Open session: ${sessionLinks[commit.hash].title || 'Untitled session'}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openSession(sessionLinks[commit.hash].sessionId, workspacePath);
+                              }}
+                            >
+                              {sessionLinks[commit.hash].title || 'Untitled session'}
+                            </button>
+                          )}
+                        </td>
                         <td className="git-log-td git-log-td--date">
                           {formatRelativeDate(commit.date)}
                         </td>
@@ -904,6 +934,8 @@ export function GitLogPanel({ host }: PanelHostProps) {
                 layout="vertical"
                 workspacePath={workspacePath}
                 commitHash={commits[selectedIndex].hash}
+                sessionLink={sessionLinks[commits[selectedIndex].hash] ?? null}
+                onOpenSession={(sessionId) => openSession(sessionId, workspacePath)}
               />
             </div>
           )}

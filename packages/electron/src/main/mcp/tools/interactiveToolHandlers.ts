@@ -33,6 +33,7 @@ import {
 import { broadcastMessageLogged } from "../../services/ai/claudeCliUserPromptLog";
 import { ClaudeSettingsManager } from "../../services/ClaudeSettingsManager";
 import { getPermissionService } from "../../services/PermissionService";
+import { SessionCommitService } from "../../services/SessionCommitService";
 import { findFreshInteractiveResponse } from "./interactiveResponsePolling";
 import {
   clearPendingInteractiveWaiter,
@@ -996,6 +997,13 @@ export async function handleGitCommitProposal(
     }
 
     if (response.action === "committed" && response.commitHash) {
+      // Record the sha -> session link so the Git Log panel can show provenance
+      void SessionCommitService.getInstance().recordCommit({
+        commitSha: response.commitHash,
+        sessionId: targetSessionId,
+        workspaceId: workspacePath,
+      });
+
       // Link commit to tracker items via session (fire-and-forget)
       void linkCommitToTrackerItems(
         response.commitHash,
@@ -1089,8 +1097,15 @@ export async function handleGitCommitProposal(
       ipcMain.removeListener(responseChannel, onResponse);
 
       if (result.action === "committed" && result.commitHash) {
-        // Link commit to tracker items via session (fire-and-forget)
         if (targetSessionId && targetSessionId !== "unknown") {
+          // Record the sha -> session link for the Git Log panel
+          void SessionCommitService.getInstance().recordCommit({
+            commitSha: result.commitHash,
+            sessionId: targetSessionId,
+            workspaceId: workspacePath,
+          });
+
+          // Link commit to tracker items via session (fire-and-forget)
           void linkCommitToTrackerItems(
             result.commitHash,
             result.commitMessage || proposalArgs.commitMessage || "",

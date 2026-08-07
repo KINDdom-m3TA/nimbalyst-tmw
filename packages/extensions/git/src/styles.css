@@ -456,6 +456,47 @@
   height: 100%;
 }
 
+.git-detail-session {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--nim-border);
+  font-size: 11px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.git-detail-session-label {
+  color: var(--nim-text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.git-detail-session-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--nim-primary);
+  font-family: inherit;
+  font-size: 11px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.git-detail-session-link:hover {
+  text-decoration: underline;
+}
+
+.git-detail-session-provider {
+  color: var(--nim-text-faint);
+  flex-shrink: 0;
+}
+
 .git-detail-message {
   margin: 0;
   padding: 10px 12px;
@@ -523,6 +564,10 @@
 
 .git-log-th--author {
   width: 120px;
+}
+
+.git-log-th--session {
+  width: 150px;
 }
 
 .git-log-th--date {
@@ -599,6 +644,35 @@
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--nim-text-muted);
+}
+
+/*
+ * Commits made outside a session (bash, release scripts) render an empty cell
+ * rather than a placeholder -- the column reads as sparse-by-design.
+ */
+.git-log-td--session {
+  max-width: 0;
+  overflow: hidden;
+}
+
+.git-log-session-chip {
+  display: block;
+  max-width: 100%;
+  padding: 1px 6px;
+  border: none;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--nim-primary) 12%, transparent);
+  color: var(--nim-primary);
+  font-family: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.git-log-session-chip:hover {
+  background: color-mix(in srgb, var(--nim-primary) 22%, transparent);
 }
 
 .git-log-td--date {

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- Git Log now shows which AI session produced each commit, with a click-through to open that session.
 
 ### Changed
 <!-- Changes to existing functionality go here -->

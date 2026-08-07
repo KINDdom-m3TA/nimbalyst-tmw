@@ -1868,7 +1868,8 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
             'git:commit',
             gitWorkspacePath,
             message,
-            files
+            files,
+            sessionId
           ) as { success: boolean; commitHash?: string; commitDate?: string; error?: string };
 
           // Send response via unified IPC channel for the durable prompt.

@@ -191,6 +191,11 @@ export function getMigrations(schemaDir: string): Migration[] {
       name: 'tracker_type_defs_synced_model',
       sqlFile: path.join(schemaDir, '0030_tracker_type_defs_synced_model.sql'),
     },
+    {
+      version: 31,
+      name: 'session_commits',
+      sqlFile: path.join(schemaDir, '0031_session_commits.sql'),
+    },
   ];
 }
 

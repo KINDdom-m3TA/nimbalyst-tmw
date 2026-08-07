@@ -150,6 +150,8 @@ const COPY_TABLES: readonly string[] = [
   'tool_usage_counters',
   'tool_usage_backfill_meta',
   'tool_usage_backfill_sessions',
+  'session_commits',
+  'session_commit_backfill_meta',
   'tracker_items',
   'tracker_body_cache',
   'tracker_transactions',
@@ -172,6 +174,7 @@ const COPY_TABLES: readonly string[] = [
  */
 const SOURCE_AUTHORITATIVE_CONFLICT_KEYS: Readonly<Record<string, readonly string[]>> = {
   tool_usage_backfill_meta: ['singleton'],
+  session_commit_backfill_meta: ['singleton'],
 };
 
 /**

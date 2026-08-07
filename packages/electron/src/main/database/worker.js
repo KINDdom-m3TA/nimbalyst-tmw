@@ -3046,6 +3046,37 @@ class PGLiteWorker {
       console.error('[PGLite Worker] Failed to create tool usage backfill state:', error);
       throw error;
     }
+
+    // Migration: commit sha -> AI session ledger (schema version 31).
+    // Mirror of SQLite 0031_session_commits.sql.
+    try {
+      await this.db.exec(`
+        CREATE TABLE IF NOT EXISTS session_commits (
+          commit_sha   TEXT NOT NULL,
+          session_id   TEXT NOT NULL,
+          workspace_id TEXT,
+          attribution  TEXT NOT NULL DEFAULT 'exact',
+          committed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (commit_sha, session_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_session_commits_session ON session_commits (session_id);
+
+        CREATE TABLE IF NOT EXISTS session_commit_backfill_meta (
+          singleton    INTEGER PRIMARY KEY CHECK (singleton = 1),
+          cutoff_at    TIMESTAMPTZ NOT NULL,
+          cursor_at    TIMESTAMPTZ,
+          completed_at TIMESTAMPTZ
+        );
+        INSERT INTO session_commit_backfill_meta (singleton, cutoff_at)
+        VALUES (1, NOW())
+        ON CONFLICT (singleton) DO NOTHING;
+      `);
+      console.log('[PGLite Worker] session_commits table created successfully');
+    } catch (error) {
+      console.error('[PGLite Worker] Failed to create session_commits table:', error);
+      throw error;
+    }
   }
 
   async query(message) {

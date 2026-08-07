@@ -68,6 +68,13 @@ describe('PGLiteToSQLiteMigrator', () => {
     );
   });
 
+  // Omitting these silently drops every user's commit provenance on cutover.
+  it('includes the session commit ledger in the cutover whitelist', () => {
+    expect(__TEST_HOOKS.COPY_TABLES).toEqual(
+      expect.arrayContaining(['session_commits', 'session_commit_backfill_meta']),
+    );
+  });
+
   it('replaces the SQLite bootstrap backfill cutoff with the PGLite source cutoff', async () => {
     await pglite.exec(`
       CREATE TABLE tool_usage_backfill_meta (

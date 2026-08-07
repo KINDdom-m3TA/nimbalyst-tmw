@@ -12,6 +12,7 @@ import { dirname, join, relative, isAbsolute, resolve } from 'path';
 import { gitOperationLock } from '../services/GitOperationLock';
 import { executeGitCommit, toRepositoryRelativePath } from '../services/GitCommitService';
 import { getGitSubprocessEnv, simpleGitWithHookEnv } from '../services/gitEnv';
+import { SessionCommitService } from '../services/SessionCommitService';
 import { safeHandle } from '../utils/ipcRegistry';
 import { findGitRootForFile } from '../services/GitStatusService';
 import { isFileInWorkspaceOrWorktree } from '../utils/workspaceDetection';
@@ -1092,9 +1093,13 @@ export function registerGitHandlers(): void {
       _event,
       workspacePath: string,
       message: string,
-      filesToStage: string[]
+      filesToStage: string[],
+      // Optional: when the commit originates from an AI session, recording the
+      // link here means the Git Log panel can attribute it even if the widget
+      // response round-trip never lands.
+      sessionId?: string
     ): Promise<{ success: boolean; commitHash?: string; commitDate?: string; error?: string }> => {
-      return withGitOperationLog(
+      const result = await withGitOperationLog(
         operationLog,
         workspacePath,
         ['commit', '-m', message],
@@ -1105,6 +1110,16 @@ export function registerGitHandlers(): void {
         }),
         result => result.commitHash ? `[${result.commitHash}] commit created` : undefined,
       );
+
+      if (sessionId && result.success && result.commitHash) {
+        void SessionCommitService.getInstance().recordCommit({
+          commitSha: result.commitHash,
+          sessionId,
+          workspaceId: workspacePath,
+        });
+      }
+
+      return result;
     }
   );
 
