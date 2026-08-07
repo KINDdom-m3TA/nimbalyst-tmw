@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 <!-- Removed features go here -->
+- The accept/reject bar on shared tracker content — edits from teammates now just appear, the same as in shared documents.
 
 ## [0.72.5] - 2026-08-06
 
