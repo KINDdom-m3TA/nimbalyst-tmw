@@ -690,6 +690,24 @@ export const UnifiedEditorHeaderBar: React.FC<UnifiedEditorHeaderBarProps> = ({
                     </button>
                   )}
                   <button
+                    className="shared-doc-pull dropdown-item w-full py-2 px-3 border-none bg-transparent text-[13px] text-left cursor-pointer flex items-center gap-2.5 transition-colors duration-150 text-[var(--nim-text)] hover:bg-[var(--nim-bg-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={sharedDocLink.busyAction !== null}
+                    onClick={async () => {
+                      const success = await sharedDocLink.pullFromSharedDoc();
+                      if (success) {
+                        await sharedDocLink.refresh();
+                        sharedDocMenu.setIsOpen(false);
+                      }
+                    }}
+                  >
+                    <svg className="w-4 h-4 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                      <polyline points="7 10 12 15 17 10" />
+                      <line x1="12" y1="15" x2="12" y2="4" />
+                    </svg>
+                    Pull from Shared Doc
+                  </button>
+                  <button
                     className="dropdown-item w-full py-2 px-3 border-none bg-transparent text-[13px] text-left cursor-pointer flex items-center gap-2.5 transition-colors duration-150 text-[var(--nim-text)] hover:bg-[var(--nim-bg-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
                     disabled={sharedDocLink.busyAction !== null}
                     onClick={async () => {

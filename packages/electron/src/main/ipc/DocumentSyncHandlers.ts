@@ -42,6 +42,7 @@ import {
   getLocalOriginBinding,
   recordLocalOriginShare,
   relinkLocalOriginBinding,
+  pullFromSharedOrigin,
   reuploadFromLocalOrigin,
   seedSharedDocumentFromContent,
 } from '../services/CollabLocalOriginService';
@@ -793,6 +794,23 @@ export function registerDocumentSyncHandlers(): void {
   }) => {
     try {
       return await reuploadFromLocalOrigin(payload);
+    } catch (err) {
+      return {
+        success: false,
+        status: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
+
+  safeHandle('document-sync:pull-local-origin', async (_event, payload: {
+    workspacePath: string;
+    documentId: string;
+    forceOverwriteLocal?: boolean;
+    conflictToken?: string;
+  }) => {
+    try {
+      return await pullFromSharedOrigin(payload);
     } catch (err) {
       return {
         success: false,

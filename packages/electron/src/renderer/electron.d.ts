@@ -1340,6 +1340,40 @@ interface ElectronAPI {
       lastEditorId?: string | null;
       lastEditedAt?: number | null;
     }>;
+    pullLocalOrigin: (payload: {
+      workspacePath: string;
+      documentId: string;
+      forceOverwriteLocal?: boolean;
+      conflictToken?: string;
+    }) => Promise<{
+      success: boolean;
+      status: 'noop' | 'pulled' | 'conflict' | 'missing-source' | 'unsupported' | 'error';
+      conflictKind?: 'missing-baseline' | 'local-ahead' | 'diverged';
+      conflictToken?: string;
+      message?: string;
+      binding?: {
+        orgId: string;
+        documentId: string;
+        gitRemoteHash: string | null;
+        workspacePathHash: string | null;
+        relativePath: string;
+        documentType: string;
+        sourceBasename: string;
+        lastLocalContentHash: string | null;
+        lastCollabContentHash: string | null;
+        lastSyncedAt: string | null;
+        lastSeenMtimeMs: number | null;
+        lastSeenSizeBytes: number | null;
+        resolutionStatus: 'resolved' | 'missing' | 'relinked' | 'conflict';
+        resolutionError: string | null;
+        createdAt: string;
+        updatedAt: string;
+        resolvedPath: string | null;
+      } | null;
+      lastEditorId?: string | null;
+      lastEditedAt?: number | null;
+      materializedAssetCount?: number;
+    }>;
     findLocalOriginLink: (workspacePath: string, sourceFilePath: string) => Promise<{
       success: boolean;
       binding?: {

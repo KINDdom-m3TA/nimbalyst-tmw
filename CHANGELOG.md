@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- New features go here -->
 - Git Log now shows which AI session produced each commit, with a click-through to open that session.
 - The editor header now shows the last AI session that worked on the open file, with a dropdown to jump to the other sessions that touched it or start a new one.
+- Linked local files can now pull the latest Shared Document content from the editor header, with conflict protection and offline-ready Markdown images.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
