@@ -127,6 +127,7 @@ import { registerMigrationHandlers } from './ipc/MigrationHandlers';
 import { registerTerminalHandlers, shutdownTerminalHandlers } from './ipc/TerminalHandlers';
 import { AIService } from './services/ai/AIService';
 import { detectFileWorkspace, suggestWorkspaceForFile, getAdditionalDirectoriesForWorkspace } from './utils/workspaceDetection';
+import { getAgentGitContext } from './utils/gitAgentContext';
 import {
   getExternalAttachmentStagingDirectory,
   resolveWorkspaceAttachmentStagingDirectory,
@@ -2171,6 +2172,11 @@ app.whenReady().then(async () => {
       ));
     OpenAICodexProvider.setAdditionalDirectoriesLoader((workspacePath: string) =>
       withAttachmentStagingDirectory(workspacePath, getAdditionalDirectoriesForWorkspace(workspacePath)));
+    // #1177: replaces the CLI's own git-status block, which we suppress because
+    // it is rebuilt from the live working tree on every resumed turn and busts
+    // the prompt cache. The provider resolves this once per session and freezes
+    // it.
+    ClaudeCodeProvider.setGitContextLoader((workspacePath: string) => getAgentGitContext(workspacePath));
     ClaudeCodeProvider.setAttachmentStagingLoader((workspacePath: string) => ({
       root: resolveWorkspaceAttachmentStagingDirectory(workspacePath),
       mode: getAttachmentStagingConfig().mode,
