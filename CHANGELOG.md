@@ -16,7 +16,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+
+### Removed
+<!-- Removed features go here -->
+
+## [0.72.6] - 2026-08-07
+
+
+### Added
+<!-- New features go here -->
+
+### Changed
+<!-- Changes to existing functionality go here -->
+
+### Fixed
+<!-- Bug fixes go here -->
 - Tracker items shared with a team now get the same issue key for everyone, instead of each member's app assigning its own number to the same item.
+- Simply opening a tracker item no longer bumps its "Updated" time or adds a phantom edit to its history.
 
 ### Removed
 <!-- Removed features go here -->
