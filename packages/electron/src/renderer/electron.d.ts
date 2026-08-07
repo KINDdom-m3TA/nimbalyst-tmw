@@ -300,7 +300,20 @@ interface ElectronAPI {
     filters?: Array<{ name: string; extensions: string[] }>;
     defaultPath?: string;
   }) => Promise<{ canceled: boolean; filePaths: string[] }>;
-  saveFile: (content: string, filePath: string, lastKnownContent?: string) => Promise<{ success: boolean; filePath: string; conflict?: boolean; diskContent?: string } | null>;
+  saveFile: (
+    content: string,
+    filePath: string,
+    lastKnownContent?: string,
+    saveSource?: 'auto' | 'manual',
+  ) => Promise<{
+    success: boolean;
+    filePath: string;
+    conflict?: boolean;
+    deleted?: boolean;
+    diskContent?: string;
+    errorType?: string;
+    errorCode?: string;
+  } | null>;
   saveFileAs: (content: string) => Promise<{ success: boolean; filePath: string } | null>;
   showErrorDialog: (title: string, message: string) => Promise<void>;
   showSaveDialogPdf: (options: { defaultPath?: string }) => Promise<string | null>;
