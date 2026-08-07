@@ -20,6 +20,7 @@ import type { CollabScope } from '@nimbalyst/collab-client/core';
 import type { Tab } from '../TabManager/TabManager';
 import { TabEditor } from '../TabEditor/TabEditor';
 import { CollaborativeTabEditor } from '../TabEditor/CollaborativeTabEditor';
+import type { DocumentSessionActions } from '../TabEditor/DocumentSessionControl';
 import { TabEditorErrorBoundary } from '../TabEditorErrorBoundary';
 import { logger } from '../../utils/logger';
 import { useTabsActions, type TabData, notifyDirtyStateChange, isTrackerTabPath } from '../../contexts/TabsContext';
@@ -64,6 +65,10 @@ interface TabContentProps {
   // to persist per-tracker-tab content-focus state.
   workstreamId?: string;
 
+  // What the collab editor's header-bar session chip may do. Supplied by the
+  // host that owns the chat sidebar (CollabMode).
+  documentSessionActions?: DocumentSessionActions;
+
   // Document metadata
   workspaceId?: string;
   collabScope?: CollabScope;
@@ -87,6 +92,7 @@ const TabContentComponent: React.FC<TabContentProps> = ({
   onOpenSessionInChat,
   onTabClose,
   onOpenTracker,
+  documentSessionActions,
   workstreamId,
   workspaceId,
   collabScope,
@@ -120,6 +126,7 @@ const TabContentComponent: React.FC<TabContentProps> = ({
     onOpenSessionInChat,
     onTabClose,
     onOpenTracker,
+    documentSessionActions,
     workstreamId,
     workspaceId,
     collabScope,
@@ -134,10 +141,19 @@ const TabContentComponent: React.FC<TabContentProps> = ({
     onOpenSessionInChat,
     onTabClose,
     onOpenTracker,
+    documentSessionActions,
     workstreamId,
     workspaceId,
     collabScope,
   };
+
+  // Tab editors render into detached React roots, so they must not capture the
+  // host's action bag by identity -- it would go stale the moment the host
+  // re-renders. Delegate every call through propsRef instead.
+  const collabSessionActionsRef = useRef<DocumentSessionActions>({
+    openInChat: (sessionId: string) => propsRef.current.documentSessionActions?.openInChat?.(sessionId),
+    startNew: () => propsRef.current.documentSessionActions?.startNew?.(),
+  });
 
   // Load content for a file
   const loadContent = useCallback(async (filePath: string, title?: string): Promise<string> => {
@@ -444,6 +460,7 @@ const TabContentComponent: React.FC<TabContentProps> = ({
               onDirtyChange={handleDirtyChange}
               onGetContentReady={handleGetContentReady}
               onManualSaveReady={handleManualSaveReady}
+              documentSessionActions={propsRef.current.documentSessionActions ? collabSessionActionsRef.current : undefined}
             />
           ) : (
             <TabEditor

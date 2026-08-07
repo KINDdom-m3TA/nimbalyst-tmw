@@ -18,6 +18,7 @@ import { ElectronCollabDocsUIProvider } from './ElectronCollabDocsUIProvider';
 import { TabsProvider, useTabsActions, useTabs, useTabNavigationShortcuts, type TabData } from '../../contexts/TabsContext';
 import { TabManager } from '../TabManager/TabManager';
 import { TabContent } from '../TabContent/TabContent';
+import type { DocumentSessionActions } from '../TabEditor/DocumentSessionControl';
 import { ChatSidebar, type ChatSidebarRef } from '../ChatSidebar';
 import { useEditorMaximize } from '../../hooks/useEditorMaximize';
 import { useResizeDragShield } from '../../hooks/useResizeDragShield';
@@ -705,6 +706,20 @@ export const CollabModeInner = forwardRef<CollabModeRef, CollabModeInnerProps>(f
     return tab && isCollabUri(tab.filePath) ? tab.filePath : '';
   }, [activeTabId, tabs]);
 
+  // The header-bar session chip acts on the chat sidebar this mode already
+  // owns. Deliberately no `openInAgentMode` — a shared document isn't a file
+  // Agent mode can open.
+  const documentSessionActions = useMemo<DocumentSessionActions>(() => ({
+    openInChat: (sessionId: string) => {
+      setChatCollapsed(false);
+      chatSidebarRef.current?.loadSession(sessionId);
+    },
+    startNew: () => {
+      setChatCollapsed(false);
+      void chatSidebarRef.current?.createNewSession();
+    },
+  }), []);
+
   const handleTabClose = useCallback((tabId: string) => {
     tabsActions.removeTab(tabId);
   }, [tabsActions]);
@@ -787,6 +802,7 @@ export const CollabModeInner = forwardRef<CollabModeRef, CollabModeInnerProps>(f
               collabScope={scope}
               onTabClose={handleTabClose}
               onGetContentReady={handleGetContentReady}
+              documentSessionActions={documentSessionActions}
             />
           </TabManager>
         )}

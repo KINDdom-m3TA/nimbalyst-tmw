@@ -49,6 +49,7 @@ import { setEditorContext, setEditorContextItems, clearEditorContext } from '../
 import { store, editorHasUnacceptedChangesAtom, makeEditorKey } from '@nimbalyst/runtime/store';
 import { historyDialogFileAtom } from '../../store';
 import { UnifiedEditorHeaderBar } from './UnifiedEditorHeaderBar';
+import type { DocumentSessionActions } from './DocumentSessionControl';
 import { usePersonalDocSync } from '../../hooks/usePersonalDocSync';
 import { useDocumentModel } from '../../services/document-model/useDocumentModel';
 import { DocumentModelRegistry } from '../../services/document-model/DocumentModelRegistry';
@@ -430,6 +431,15 @@ export const TabEditor: React.FC<TabEditorProps> = ({
       onOpenSessionInChat(sessionId);
     }
   }, [onOpenSessionInChat]);
+
+  // What the header-bar session control may do with this document's sessions.
+  const documentSessionActions = useMemo<DocumentSessionActions>(() => ({
+    openInChat: onOpenSessionInChat,
+    openInAgentMode: onSwitchToAgentMode
+      ? (sessionId: string) => onSwitchToAgentMode(undefined, sessionId)
+      : undefined,
+    startNew: onSwitchToAgentMode && filePath ? () => onSwitchToAgentMode(filePath) : undefined,
+  }), [onOpenSessionInChat, onSwitchToAgentMode, filePath]);
 
   // Notify custom editors of theme changes (themeRef is updated synchronously above)
   useEffect(() => {
@@ -2717,8 +2727,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
             documentModelHandleRef.current?.setDirty(isDirty);
             onDirtyChange?.(isDirty);
           }}
-          onSwitchToAgentMode={onSwitchToAgentMode}
-          onOpenSessionInChat={onOpenSessionInChat}
+          documentSessionActions={documentSessionActions}
           extensionMenuItems={extensionMenuItems}
           onToggleDebugTree={() => setShowTreeView(prev => !prev)}
           onContentChanged={() => setReloadVersion(v => v + 1)}

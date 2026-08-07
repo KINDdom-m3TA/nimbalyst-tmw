@@ -122,9 +122,9 @@ export const HelpContent: Record<string, HelpEntry> = {
   // Files Mode - Unified Header
   // ============================================================================
 
-  'ai-sessions-button': {
-    title: 'Past AI Sessions',
-    body: 'See AI sessions that edited this file. Jump back to continue a conversation or review changes.',
+  'document-session-control': {
+    title: 'AI Sessions for This Document',
+    body: 'Jump straight back into the last session on this document, or use the arrow to pick another session or start a new one.',
   },
   'file-history-button': {
     title: 'Document History',
