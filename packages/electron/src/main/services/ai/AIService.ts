@@ -60,7 +60,6 @@ import { subscribeProviderSettingsInvalidation } from './providerSettingsCacheIn
 import { windowStates, findWindowByWorkspace, getWindowId, createWindow, isAppQuitting } from '../../window/WindowManager';
 import { resolveActiveWorkspacePathForWindowId } from '../../window/windowState';
 import { sessionFileTracker } from '../SessionFileTracker';
-import { enrichTranscriptMessagesWithToolCallDiffs } from '../TranscriptToolCallEnricher';
 import { extractFilePath } from './tools/extractFilePath';
 import { handleBackendTool } from '../../mcp/tools/backendToolHandler';
 import { findOwnedBackendTool } from '../../mcp/backendToolRegistry';
@@ -141,6 +140,7 @@ import { createWorkspaceWindowResolver } from './resolveWorkspaceWindow';
 import { runQueueDriveAttempt } from './queueDriveAttempt';
 import { clearStuckRunningState } from './clearStuckRunningState';
 import { publishQueuedPromptsToSync } from './queuedPromptSyncPublisher';
+import { ingestMobileQueuedPrompts } from './mobileQueuedPromptIngest';
 import { onWorkspaceWindowAvailable } from '../../window/workspaceWindowAvailability';
 import { dispatchQueuedPromptToClaudeCli } from './claudeCliQueueDispatch';
 import { ensureClaudeCliSession, claudeCliSessionSupportsPlugins } from './claudeCliLauncherSingleton';
@@ -1130,102 +1130,51 @@ export class AIService {
 
             // Only process if there are queuedPrompts in the broadcast
             if (entry.queuedPrompts && entry.queuedPrompts.length > 0) {
-              logger.main.info('[AIService] Received queuedPrompts from mobile via onIndexChange:', {
-                sessionId,
-                count: entry.queuedPrompts.length,
-                promptIds: entry.queuedPrompts.map(p => p.id)
-              });
-
-              try {
-                // Insert prompts into the queued_prompts table
-                const { getQueuedPromptsStore } = await import('../RepositoryManager');
-                const queueStore = getQueuedPromptsStore();
-
-                let newPromptsCount = 0;
-                for (const prompt of entry.queuedPrompts) {
-                  // Skip prompts that were created locally (echoed back via Y.js sync)
-                  // Local prompts have IDs starting with 'local-'
-                  if (prompt.id.startsWith('local-')) {
-                    // logger.main.info(`[AIService] Prompt ${prompt.id} is a local prompt echoed via sync, skipping`);
-                    continue;
-                  }
-
-                  // Check if prompt already exists
-                  const existing = await queueStore.get(prompt.id);
-                  if (existing) {
-                    // logger.main.info(`[AIService] Prompt ${prompt.id} already exists, skipping`);
-                    continue;
-                  }
-
-                  // Create the prompt in the queued_prompts table
-                  await queueStore.create({
-                    id: prompt.id,
-                    sessionId,
-                    prompt: prompt.prompt,
-                    attachments: prompt.attachments,
-                    documentContext: {
-                      promptProvenance: {
-                        actor: 'human',
-                        origin: 'mobile',
-                        queuedPromptId: prompt.id,
-                      },
-                    },
-                  });
-                  newPromptsCount++;
-                }
-
-                if (newPromptsCount === 0) {
-                  // logger.main.info('[AIService] No new prompts to process, all already exist');
-                  return;
-                }
-
-                logger.main.info(`[AIService] Inserted ${newPromptsCount} new prompts into queued_prompts table`);
-
-                // Load session to get its workspacePath for window routing
-                // Use repository directly since we just need metadata, not full session load
-                const { AISessionsRepository } = await import('@nimbalyst/runtime/storage/repositories/AISessionsRepository');
-                const session = await AISessionsRepository.get(sessionId);
-                if (!session) {
-                  logger.main.warn('[AIService] Session not found for queuedPrompts:', sessionId);
-                  return;
-                }
-
-                // Track ai_message_queued analytics event for each prompt from mobile
-                // Note: Mobile doesn't currently support attachments or documentContext
-                for (let i = 0; i < newPromptsCount; i++) {
-                  AnalyticsService.getInstance().sendEvent('ai_message_queued', {
-                    provider: session.provider,
-                    source: 'mobile',
-                    hasDocumentContext: false,
-                    hasAttachments: false,
-                  });
-                }
-
-                // Only notify the window that owns this session's workspace
-                // This prevents duplicate execution when multiple windows are open
-                if (session.workspacePath) {
-                  // Tell an already-open window so its queue list updates now.
-                  // Opening a window (when there isn't one) and actually
-                  // dispatching are the driver's job — it owns the retry when
-                  // the workspace is closed or the session is mid-turn (#962).
-                  const openWindow = findWindowByWorkspace(session.workspacePath);
-                  if (openWindow && !openWindow.isDestroyed()) {
-                    openWindow.webContents.send('ai:queuedPromptsReceived', {
-                      sessionId,
-                      promptCount: newPromptsCount,
-                      workspacePath: session.workspacePath  // Include for renderer-side filtering
+              await ingestMobileQueuedPrompts(
+                {
+                  getExisting: async (promptId) => {
+                    const { getQueuedPromptsStore } = await import('../RepositoryManager');
+                    return getQueuedPromptsStore().get(promptId);
+                  },
+                  createPrompt: async (input) => {
+                    const { getQueuedPromptsStore } = await import('../RepositoryManager');
+                    return getQueuedPromptsStore().create(input);
+                  },
+                  publishQueueState: (id) => this.publishQueueStateToSync(id),
+                  getSession: async (id) => {
+                    // Repository directly: we only need metadata, not a full session load.
+                    const { AISessionsRepository } = await import('@nimbalyst/runtime/storage/repositories/AISessionsRepository');
+                    return AISessionsRepository.get(id);
+                  },
+                  trackQueued: (provider) => {
+                    AnalyticsService.getInstance().sendEvent('ai_message_queued', {
+                      provider,
+                      source: 'mobile',
+                      hasDocumentContext: false,
+                      hasAttachments: false,
                     });
-                  }
-
-                  this.requestQueueDrive(sessionId, session.workspacePath, 'mobile-index');
-                } else {
-                  // Sessions MUST have a workspacePath - this indicates a data integrity issue
-                  logger.main.error('[AIService] Session has no workspacePath - cannot route queued prompts. SessionId:', sessionId);
-                  // Do NOT fall back to windows[0] - that masks the real bug
-                }
-              } catch (err) {
-                logger.main.error('[AIService] Failed to insert queuedPrompts into table:', err);
-              }
+                  },
+                  notifyWindow: ({ sessionId: id, promptCount, workspacePath }) => {
+                    // Only the window owning this workspace, or multiple windows
+                    // race to execute the same prompt. workspacePath rides along
+                    // for renderer-side filtering.
+                    const openWindow = findWindowByWorkspace(workspacePath);
+                    if (openWindow && !openWindow.isDestroyed()) {
+                      openWindow.webContents.send('ai:queuedPromptsReceived', {
+                        sessionId: id,
+                        promptCount,
+                        workspacePath,
+                      });
+                    }
+                  },
+                  requestDrive: (id, path) => this.requestQueueDrive(id, path, 'mobile-index'),
+                  logInfo: (message) => logger.main.info(message),
+                  logWarn: (message) => logger.main.warn(message),
+                  logError: (message, error) => logger.main.error(message, error),
+                },
+                sessionId,
+                entry.queuedPrompts,
+              );
             }
           });
 
@@ -2227,8 +2176,6 @@ export class AIService {
         console.log(`[SESSION] Session not found: ${sessionId} (this is normal if the session was deleted)`);
         return null;
       }
-
-      session.messages = await enrichTranscriptMessagesWithToolCallDiffs(session.id, session.messages);
 
       // Restore document context state from persisted data (if available)
       // This enables transition detection across app restarts
