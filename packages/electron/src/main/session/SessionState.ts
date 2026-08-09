@@ -12,6 +12,7 @@ import { GitStatusService } from '../services/GitStatusService';
 import { autoMatchTeamForWorkspace } from '../services/TeamService';
 import { updateTrackerSchemaWorkspace } from '../services/TrackerSchemaService';
 import { runWhenAppIsActive } from '../window/AppActivationGuard';
+import { shouldSuppressSafeModeSessionSave } from './safeModeSessionState';
 
 // Save session state
 export async function saveSessionState() {
@@ -53,6 +54,11 @@ export async function saveSessionState() {
         windows: sessionWindows,
         lastUpdated: Date.now()
     };
+
+    if (shouldSuppressSafeModeSessionSave(sessionWindows)) {
+        logger.session.info('[SAFE MODE] Preserving the saved restoration state while Workspace Manager is open');
+        return;
+    }
 
     logger.session.debug(`[SAVE] Saving session state: ${sessionWindows.length} window(s): ${sessionWindows.map((w) => w.workspacePath || w.filePath || w.mode).join(', ')}`);
     saveToStore(sessionState);

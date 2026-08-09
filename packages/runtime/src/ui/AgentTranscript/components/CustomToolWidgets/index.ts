@@ -38,7 +38,7 @@
  * ```
  */
 
-import type { TranscriptViewMessage } from '../../../../ai/server/transcript/TranscriptProjector';
+import type { ToolCallDiffLoadResult, TranscriptViewMessage } from '../../../../ai/server/transcript/TranscriptProjector';
 
 // Re-export widgets
 export { EditorScreenshotWidget, MockupScreenshotWidget } from './EditorScreenshotWidget';
@@ -80,6 +80,8 @@ export interface CustomToolWidgetProps {
   sessionId: string;
   /** Optional: Read a file from the filesystem (for loading persisted output files) */
   readFile?: (filePath: string) => Promise<{ success: boolean; content?: string; error?: string }>;
+  /** Resolve history-derived file changes after explicit user disclosure. */
+  loadToolCallDiffs?: () => Promise<ToolCallDiffLoadResult>;
   // Note: Interactive widgets read their host from interactiveWidgetHostAtom(sessionId)
   // No host prop needed - avoids prop drilling through the component tree
 }

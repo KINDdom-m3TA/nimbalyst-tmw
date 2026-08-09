@@ -18,6 +18,7 @@ import React, { useCallback, useRef, useImperativeHandle, forwardRef, useEffect,
 import { useAtom, useSetAtom, useAtomValue } from 'jotai';
 import { store, registerInteractiveWidgetHost, unregisterInteractiveWidgetHost } from '@nimbalyst/runtime/store';
 import type { SessionData, ChatAttachment, TranscriptViewMessage } from '@nimbalyst/runtime/ai/server/types';
+import type { ToolCallDiffLoadResult } from '@nimbalyst/runtime/ai/server/transcript';
 import { AgentTranscriptPanel } from '@nimbalyst/runtime/ui/AgentTranscript/components/AgentTranscriptPanel';
 import { ClaudeCliTerminalStrip } from './ClaudeCliTerminalStrip';
 import { ClaudeCliNotInstalledNotice } from './ClaudeCliNotInstalledNotice';
@@ -415,6 +416,17 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
   const posthog = usePostHog();
   const inputRef = useRef<AIInputRef>(null);
   const transcriptPanelRef = useRef<{ scrollToMessage: (index: number) => void; scrollToTop: () => void }>(null);
+  const loadToolCallDiffs = useCallback(
+    (toolCallItemId: string, toolCallTimestamp?: number): Promise<ToolCallDiffLoadResult> =>
+      window.electronAPI.invoke(
+        'session-files:get-tool-call-diffs',
+        workspacePath,
+        sessionId,
+        toolCallItemId,
+        toolCallTimestamp,
+      ),
+    [sessionId, workspacePath],
+  );
 
   // Get effective document context - prefer getter for fresh data (reads from disk at call time)
   const getEffectiveDocumentContext = useCallback(async () => {
@@ -2463,6 +2475,7 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
             appStartTime={appStartTime ?? undefined}
             renderEmbeddedFile={renderEmbeddedFile}
             canEmbedFile={canEmbedFile}
+            loadToolCallDiffs={loadToolCallDiffs}
             currentPhase={currentPhase}
             phaseColumns={SESSION_PHASE_COLUMNS}
             onSetPhase={handleSetPhase}

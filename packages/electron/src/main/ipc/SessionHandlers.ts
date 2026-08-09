@@ -24,7 +24,6 @@ import {
     resolveGitCommitProposalPromptId,
 } from '../services/ai/gitCommitProposalPromptUtils';
 import { SessionCommitService } from '../services/SessionCommitService';
-import { enrichTranscriptMessagesWithToolCallDiffs } from '../services/TranscriptToolCallEnricher';
 import { setSessionPendingPrompt } from '../services/ai/pendingPromptPersistence';
 import { normalizeSessionPhaseMetadataUpdate } from '../services/session/sessionPhaseTransition';
 import { destroyProviderForArchivedSession } from '../services/ai/archiveSessionProviderLifecycle';
@@ -1565,7 +1564,7 @@ export async function registerSessionHandlers() {
         );
 
         const viewModel = TranscriptProjector.project(tailEvents);
-        return await enrichTranscriptMessagesWithToolCallDiffs(sessionId, viewModel.messages);
+        return viewModel.messages;
     });
 
     // DEV/TESTING ONLY: Force a single session's canonical events to be

@@ -26,6 +26,8 @@ import { loadFileIntoWindow } from './file/FileOperations';
 import { createApplicationMenu } from './menu/ApplicationMenu';
 import { updateNativeTheme, updateWindowTitleBars } from './theme/ThemeManager';
 import { restoreSessionState, saveSessionState } from './session/SessionState';
+import { setSafeModeSessionStateProtection } from './session/safeModeSessionState';
+import { isSafeModeArgument } from './session/startupSafeMode';
 import { getRestartSignalPath } from './utils/appPaths';
 import { planProtocolRegistration } from './utils/protocolRegistration';
 import {
@@ -317,6 +319,7 @@ let pendingWorkspacePath: string | null = null;
 let pendingFilter: string | null = null;
 // Track pending file to open within workspace (--file flag, requires --workspace)
 let pendingCliFilePath: string | null = null;
+let safeModeRequested = false;
 
 // Session save interval
 let sessionSaveInterval: NodeJS.Timeout | null = null;
@@ -1431,7 +1434,10 @@ function parseCommandLineArgs() {
         const arg = args[i];
         logger.main.info(`Checking arg[${i}]: "${arg}"`);
 
-        if (arg === '--workspace' && i + 1 < args.length) {
+        if (isSafeModeArgument(arg)) {
+            safeModeRequested = true;
+            logger.main.warn('[SAFE MODE] Session restoration will be skipped');
+        } else if (arg === '--workspace' && i + 1 < args.length) {
             pendingWorkspacePath = args[i + 1];
             logger.main.info(`✓ Workspace path from CLI: ${pendingWorkspacePath}`);
         } else if (arg === '--file' && i + 1 < args.length) {
@@ -2735,7 +2741,10 @@ app.whenReady().then(async () => {
 
     // Skip session restoration if opening a specific workspace from CLI
     markStart('session-restore');
-    const shouldSkipSessionRestore = !!pendingWorkspacePath;
+    const shouldSkipSessionRestore = !!pendingWorkspacePath || safeModeRequested;
+    if (safeModeRequested) {
+        setSafeModeSessionStateProtection(true);
+    }
     const sessionRestored = shouldSkipSessionRestore ? false : await restoreSessionState();
     markEnd('session-restore');
 
@@ -2869,9 +2878,9 @@ app.whenReady().then(async () => {
             unifiedOnboardingCompleted: onboardingState.unifiedOnboardingCompleted,
             launchCount: getLaunchCount(),
         })) {
-            createWorkspaceManagerWindow({ showOnboarding: true });
+            createWorkspaceManagerWindow({ showOnboarding: true, safeMode: safeModeRequested });
         } else {
-            createWorkspaceManagerWindow();
+            createWorkspaceManagerWindow({ safeMode: safeModeRequested });
         }
     } else if (pendingFilePath) {
         // Handle pending file with workspace detection

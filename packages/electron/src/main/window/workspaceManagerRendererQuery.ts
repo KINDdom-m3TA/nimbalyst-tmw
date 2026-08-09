@@ -1,5 +1,6 @@
 export interface WorkspaceManagerWindowOptions {
   showOnboarding?: boolean;
+  safeMode?: boolean;
 }
 
 export type WorkspaceManagerRendererQuery = Record<string, string>;
@@ -12,6 +13,7 @@ export function createWorkspaceManagerRendererQuery(
     mode: 'workspace-manager',
     theme,
     ...(options.showOnboarding ? { onboarding: '1' } : {}),
+    ...(options.safeMode ? { safeMode: '1' } : {}),
   };
 }
 

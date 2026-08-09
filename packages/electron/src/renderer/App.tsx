@@ -492,6 +492,7 @@ export default function App() {
     return (
       <WorkspaceManagerOnboarding
         showOnboarding={urlParams.get('onboarding') === '1'}
+        safeMode={urlParams.get('safeMode') === '1'}
       />
     );
   }

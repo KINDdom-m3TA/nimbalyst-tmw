@@ -2,6 +2,7 @@ import type { JSX } from 'react';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { VList, type VListHandle, type CacheSnapshot } from 'virtua';
 import type { TranscriptViewMessage, SessionData } from '../../../ai/server/types';
+import type { ToolCallDiffLoadResult } from '../../../ai/server/transcript';
 import type { TranscriptSettings } from '../types';
 import { MessageSegment } from './MessageSegment';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -516,6 +517,8 @@ interface RichTranscriptViewProps {
    * runtime asks without crossing the package boundary.
    */
   canEmbedFile?: (filePath: string) => boolean;
+  /** Host callback for lazy, workspace-scoped history diff hydration. */
+  loadToolCallDiffs?: (toolCallItemId: string, toolCallTimestamp?: number) => Promise<ToolCallDiffLoadResult>;
   /**
    * Optional: callback fired when the transcript find-in-page search bar
    * shows or hides. The parent uses this to shift `FloatingTranscriptActions`
@@ -1106,7 +1109,7 @@ export const extractEditsFromToolMessage = (message: TranscriptViewMessage): any
 export const RichTranscriptView = React.forwardRef<
   { scrollToMessage: (index: number) => void; scrollToTop: () => void },
   RichTranscriptViewProps
->(({ sessionId, sessionStatus, isProcessing, hasPendingInteractivePrompt, messages, provider, settings: propsSettings, onSettingsChange, showSettings, documentContext, workspacePath, renderEmptyExtra, hideEmptyHelp, readFile, onOpenFile, onOpenSession, onCompact, promptAdditions, currentTeammates, waitingForNoun, appStartTime, renderEmbeddedFile, canEmbedFile, onSearchBarVisibilityChange, persistScrollState = true }, ref) => {
+>(({ sessionId, sessionStatus, isProcessing, hasPendingInteractivePrompt, messages, provider, settings: propsSettings, onSettingsChange, showSettings, documentContext, workspacePath, renderEmptyExtra, hideEmptyHelp, readFile, onOpenFile, onOpenSession, onCompact, promptAdditions, currentTeammates, waitingForNoun, appStartTime, renderEmbeddedFile, canEmbedFile, loadToolCallDiffs, onSearchBarVisibilityChange, persistScrollState = true }, ref) => {
   const [collapsedMessages, setCollapsedMessages] = useState<Set<number>>(new Set());
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const scrollButtonRef = useRef<HTMLDivElement>(null);
@@ -1697,6 +1700,9 @@ export const RichTranscriptView = React.forwardRef<
     const isSubAgent = toolMsg.type === 'subagent';
     const isTeammate = isSubAgent && !!(toolMsg.subagent?.teammateName || toolMsg.subagent?.teamName);
     const hasChildren = isSubAgent && toolMsg.subagent?.childEvents && toolMsg.subagent.childEvents.length > 0;
+    const lazyDiffLoader = tool.providerToolCallId && loadToolCallDiffs
+      ? () => loadToolCallDiffs(tool.providerToolCallId!, toolMsg.createdAt?.getTime())
+      : undefined;
 
     // Check for custom widget first
     const CustomWidget = tool.toolName ? getCustomToolWidget(tool.toolName) : undefined;
@@ -1715,30 +1721,9 @@ export const RichTranscriptView = React.forwardRef<
               workspacePath={workspacePath}
               sessionId={sessionId}
               readFile={readFile}
+              loadToolCallDiffs={lazyDiffLoader}
             />
           </ToolWidgetErrorBoundary>
-        </div>
-      );
-    }
-
-    // Codex SDK `file_change` rows are enriched with resolved diffs in main
-    // before the transcript reaches the renderer. Render them through the same
-    // EditToolResultCard path as Claude's Edit tool.
-    if (tool.toolName === 'file_change' && tool.fileDiffs && tool.fileDiffs.length > 0) {
-      return (
-        <div
-          key={toolRenderKey}
-          className={`rich-transcript-tool-container mb-2 ${depth > 0 ? 'nested ml-0' : ''}`}
-          style={{ marginLeft: depth > 0 ? '1rem' : '0' }}
-        >
-          <EditToolResultCard
-            toolMessage={toolMsg}
-            edits={toolCallDiffsToEdits(tool.fileDiffs)}
-            workspacePath={workspacePath}
-            onOpenFile={onOpenFile}
-            renderEmbeddedFile={renderEmbeddedFile}
-            canEmbedFile={canEmbedFile}
-          />
         </div>
       );
     }
@@ -1994,7 +1979,7 @@ export const RichTranscriptView = React.forwardRef<
               )}
 
               {/* File changes caused by this tool call */}
-              {!isSubAgent && tool.fileDiffs && tool.fileDiffs.length > 0 && (
+              {!isSubAgent && ((tool.fileDiffs && tool.fileDiffs.length > 0) || lazyDiffLoader) && (
                 <ToolCallChanges
                   diffs={tool.fileDiffs}
                   isExpanded={isExpanded}
@@ -2002,6 +1987,7 @@ export const RichTranscriptView = React.forwardRef<
                   onOpenFile={onOpenFile}
                   renderEmbeddedFile={renderEmbeddedFile}
                   canEmbedFile={canEmbedFile}
+                  loadDiffs={lazyDiffLoader}
                 />
               )}
             </div>
