@@ -9,6 +9,7 @@ import os from 'os';
 import { AnalyticsService } from '../services/analytics/AnalyticsService';
 import { openWorkspaceFile, openFile } from '../file/FileOpener';
 import { fuzzyMatchPath } from '@nimbalyst/runtime';
+import { parseFileMask, matchesFileMask } from '@nimbalyst/extension-sdk/file-mask';
 import { getSyncId, removeFileFromIndex } from '../services/DocSyncService';
 
 const { writeFile, mkdir, rename, unlink, rmdir, copyFile, readFile, rm, stat, cp } = fsPromises;
@@ -109,39 +110,13 @@ const BINARY_EXTENSIONS = new Set([
 
 const NIMBALYST_LOCAL_DIRNAME = 'nimbalyst-local';
 
-function globToRegex(glob: string): RegExp {
-    const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-    const pattern = escaped
-        .replace(/\*\*/g, '__DOUBLESTAR__')
-        .replace(/\*/g, '[^/]*')
-        .replace(/__DOUBLESTAR__/g, '.*')
-        .replace(/\?/g, '[^/]');
-    return new RegExp(`^${pattern}$`, 'i');
-}
-
-function parseQuickOpenFileMask(mask: string | null | undefined): RegExp[] {
-    if (!mask) return [];
-    return mask
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean)
-        .map(globToRegex);
-}
-
-function matchesQuickOpenFileMask(filePath: string, patterns: RegExp[]): boolean {
-    if (patterns.length === 0) return true;
-    const normalizedPath = filePath.replace(/\\/g, '/');
-    const base = path.basename(normalizedPath);
-    return patterns.some(re => re.test(base) || re.test(normalizedPath));
-}
-
 function shouldIncludeQuickOpenCacheItem(
     item: { path: string; type: 'file' | 'directory' },
     maskPatterns: RegExp[]
 ): boolean {
     if (maskPatterns.length === 0) return true;
     if (item.type === 'directory') return false;
-    return matchesQuickOpenFileMask(item.path, maskPatterns);
+    return matchesFileMask(item.path, maskPatterns);
 }
 
 // Get the ripgrep binary path for the current platform.
@@ -446,7 +421,7 @@ export function registerWorkspaceHandlers() {
     ) => {
         try {
             const trimmedQuery = query.trim();
-            const maskPatterns = parseQuickOpenFileMask(options?.fileMask);
+            const maskPatterns = parseFileMask(options?.fileMask);
 
             // Use cache if available
             const cache = fileNameCaches.get(workspacePath);

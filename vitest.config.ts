@@ -26,6 +26,10 @@ const alias = [
     replacement: path.resolve(__dirname, './packages/extension-sdk/src/fileDirectoryTree.ts'),
   },
   {
+    find: '@nimbalyst/extension-sdk/file-mask',
+    replacement: path.resolve(__dirname, './packages/extension-sdk/src/fileMask.ts'),
+  },
+  {
     find: '@nimbalyst/extension-sdk',
     replacement: path.resolve(__dirname, './packages/extension-sdk/src'),
   },

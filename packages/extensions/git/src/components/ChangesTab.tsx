@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState, useMemo, useRef } from 'react';
+import { parseFileMask, matchesFileMask } from '@nimbalyst/extension-sdk/file-mask';
 import { DiffPeekPopover } from './DiffPeekPopover';
 import { useDiffCache, type DiffGroup } from '../hooks/useDiffCache';
 import { SessionsForFilePane } from './SessionsForFilePane';
@@ -48,34 +49,6 @@ interface SuccessResult {
 }
 
 const NO_COLLAPSED_DIRS: Set<string> = new Set();
-
-// --- File mask: comma-separated globs, e.g. "*.tsx,*.ts, *.css" ---
-
-function globToRegex(glob: string): RegExp {
-  // Escape regex special chars except * and ?
-  const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  // Convert glob wildcards: ** -> match any path, * -> match any non-slash, ? -> single non-slash
-  const pattern = escaped
-    .replace(/\*\*/g, '__DOUBLESTAR__')
-    .replace(/\*/g, '[^/]*')
-    .replace(/__DOUBLESTAR__/g, '.*')
-    .replace(/\?/g, '[^/]');
-  return new RegExp(`^${pattern}$`, 'i');
-}
-
-function parseFileMask(mask: string): RegExp[] {
-  return mask
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean)
-    .map(globToRegex);
-}
-
-function matchesFileMask(path: string, patterns: RegExp[]): boolean {
-  if (patterns.length === 0) return true;
-  const basename = path.split('/').pop() ?? path;
-  return patterns.some(re => re.test(basename) || re.test(path));
-}
 
 // --- Status -> color class for filename (matches FilesEditedSidebar conventions) ---
 

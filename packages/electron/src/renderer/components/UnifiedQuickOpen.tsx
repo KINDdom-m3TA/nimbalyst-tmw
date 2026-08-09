@@ -57,7 +57,7 @@ import {
   type FilterChipOption,
 } from './UnifiedQuickOpen/FilterChip';
 import { useRecentHistory } from './UnifiedQuickOpen/useRecentHistory';
-import { parseFileMask, matchesFileMask } from './UnifiedQuickOpen/fileMask';
+import { parseFileMask, matchesFileMask } from '@nimbalyst/extension-sdk/file-mask';
 import type { TrackerItem } from '@nimbalyst/runtime/core/DocumentService';
 
 const isMac =

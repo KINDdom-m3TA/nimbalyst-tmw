@@ -1,10 +1,11 @@
 /**
- * Comma-separated glob matcher, matching the git extension's File Mask filter
- * exactly so users get the same syntax everywhere:
+ * Comma-separated file mask matching, shared by Quick Open (renderer and main)
+ * and the git extension's Changes filter so the syntax means the same thing
+ * everywhere:
  *
  *   "*.ts,*.tsx"        — any .ts or .tsx file
  *   "src/** /*.test.ts" — recursive pattern
- *   "Readme*"           — case-insensitive filename match
+ *   "Ch0*.md"           — case-insensitive filename match
  *
  * Glob semantics: `*` matches any run of non-slash characters, `**` matches
  * anything (across slashes), `?` matches a single non-slash character. The
@@ -24,7 +25,8 @@ function globToRegex(glob: string): RegExp {
   return new RegExp(`^${pattern}$`, 'i');
 }
 
-export function parseFileMask(mask: string): RegExp[] {
+export function parseFileMask(mask: string | null | undefined): RegExp[] {
+  if (!mask) return [];
   return mask
     .split(',')
     .map((s) => s.trim())
@@ -32,8 +34,13 @@ export function parseFileMask(mask: string): RegExp[] {
     .map(globToRegex);
 }
 
-export function matchesFileMask(path: string, patterns: RegExp[]): boolean {
+export function matchesFileMask(filePath: string, patterns: RegExp[]): boolean {
   if (patterns.length === 0) return true;
-  const basename = path.split('/').pop() ?? path;
-  return patterns.some((re) => re.test(basename) || re.test(path));
+  // Windows paths arrive back-slashed (main runs `path.normalize`). Without
+  // this the basename split finds no separator, so the whole absolute path is
+  // treated as the filename: `*.md` still matches it but `Ch0*.md` never can,
+  // which is the extension-only filtering reported in #1196.
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  const basename = normalizedPath.split('/').pop() ?? normalizedPath;
+  return patterns.some((re) => re.test(basename) || re.test(normalizedPath));
 }

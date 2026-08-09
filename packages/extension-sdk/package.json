@@ -44,6 +44,10 @@
     "./file-tree": {
       "types": "./dist/fileDirectoryTree.d.ts",
       "import": "./dist/fileDirectoryTree.js"
+    },
+    "./file-mask": {
+      "types": "./dist/fileMask.d.ts",
+      "import": "./dist/fileMask.js"
     }
   },
   "files": [
