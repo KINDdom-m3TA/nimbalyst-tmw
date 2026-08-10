@@ -88,6 +88,7 @@ import { customEditorRegistry } from '../CustomEditors';
 import type { CustomEditorRegistration } from '../CustomEditors/types';
 import { useCollabLocalOrigin } from '../../hooks/useCollabLocalOrigin';
 import { useLexicalSelectionContext } from '../../hooks/useLexicalSelectionContext';
+import { teamMemberDisplayName } from '../../utils/teamMemberDisplayName';
 import { SearchReplaceStateManager, isLexicalSearchEditor } from '@nimbalyst/runtime/plugins/SearchReplace';
 import { hasEditorFind, registerEditorFindHandler } from './editorFindCommand';
 import { markDocViewed } from '../../hooks/useDocUnread';
@@ -902,7 +903,7 @@ export const CollaborativeTabEditor: React.FC<CollaborativeTabEditorProps> = ({
         .filter((m) => m.userId !== activeConfig.userId)
         .map((m) => ({
           userId: m.userId,
-          name: m.email || m.userId,
+          name: teamMemberDisplayName(m),
           personalOrgId: m.personalOrgId,
         }));
     },

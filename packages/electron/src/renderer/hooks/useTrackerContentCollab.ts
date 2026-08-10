@@ -58,6 +58,7 @@ import { buildCollabUri } from '@nimbalyst/collab-protocol';
 import { notifyDocumentCommentRecipients } from '../services/documentCommentNotifier';
 import { trackerContentCollabKey } from './trackerContentCollabKey';
 import type { TrackerSharing } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/TrackerDataModel';
+import { teamMemberDisplayName } from '../utils/teamMemberDisplayName';
 
 const TRACKER_CONTENT_TTL_MS = String(90 * 24 * 60 * 60 * 1000);
 
@@ -424,7 +425,7 @@ export function useTrackerContentCollab({
           .filter((member) => member.userId !== currentUser.id)
           .map((member) => ({
             userId: member.userId,
-            name: member.email || member.userId,
+            name: teamMemberDisplayName(member),
             personalOrgId: member.personalOrgId,
           }));
       },

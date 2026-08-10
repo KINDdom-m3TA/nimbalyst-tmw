@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { errorNotificationService } from '../services/ErrorNotificationService';
 import { DocumentModelRegistry } from '../services/document-model/DocumentModelRegistry';
 import { getTeamSyncProviderForScopeKey } from '../store/atoms/collabDocuments';
+import { teamMemberDisplayName } from '../utils/teamMemberDisplayName';
 
 export type CollabLocalOriginBinding = NonNullable<
   Awaited<ReturnType<typeof window.electronAPI.documentSync.getLocalOrigin>>['binding']
@@ -42,16 +43,16 @@ function formatRelativeTime(ms: number): string {
 }
 
 /**
- * Resolve a room-authed userId to a human label. The team member list carries
- * email (no separate display name), so email is the best "who" we have; falls
- * back to null when the editor isn't in the roster (e.g. it was the local user
- * on another device, or a since-removed member).
+ * Resolve a room-authed userId to a human label. Falls back to null when the
+ * editor isn't in the roster (e.g. it was the local user on another device,
+ * or a since-removed member).
  */
 function resolveEditorLabel(workspacePath: string, userId: string | null | undefined): string | null {
   if (!userId) return null;
   try {
     const members = getTeamSyncProviderForScopeKey(workspacePath)?.getTeamState()?.members ?? [];
-    return members.find((m) => m.userId === userId)?.email || null;
+    const member = members.find((candidate) => candidate.userId === userId);
+    return member ? teamMemberDisplayName(member) : null;
   } catch {
     return null;
   }

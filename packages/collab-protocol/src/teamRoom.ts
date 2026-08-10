@@ -437,6 +437,7 @@ export interface MemberInfo {
   userId: string;
   role: string;
   email: string | null;
+  name?: string | null;
   /**
    * The member's personal org id, recorded at team create / invite acceptance.
    * Informational roster data; nothing routes on it any more.

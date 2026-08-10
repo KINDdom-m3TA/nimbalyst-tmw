@@ -17,6 +17,7 @@ import { parseCollabUri } from '@nimbalyst/collab-protocol';
 import { notifyDocumentCommentRecipients } from './documentCommentNotifier';
 import { collaborativeEmbedProviderCache } from './CollaborativeEmbedProviderCache';
 import { getCollaborativeDocumentTypeCatalog } from './CollaborativeDocumentTypeCatalog';
+import { teamMemberDisplayName } from '../utils/teamMemberDisplayName';
 
 const HYDRATION_TIMEOUT_MS = 10_000;
 const FLUSH_TIMEOUT_MS = 5_000;
@@ -115,7 +116,7 @@ export async function acquireHeadlessCollabCommentController(
         .filter((member) => member.userId !== currentUser.id)
         .map((member) => ({
           userId: member.userId,
-          name: member.email || member.userId,
+          name: teamMemberDisplayName(member),
           personalOrgId: member.personalOrgId,
         }));
     const controller = createCollabCommentController({

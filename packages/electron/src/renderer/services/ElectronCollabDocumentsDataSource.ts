@@ -20,6 +20,7 @@ import {
 } from '@nimbalyst/runtime/sync';
 import { asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 import { createProxiedWebSocket } from '../utils/proxiedWebSocket';
+import { teamMemberDisplayName } from '../utils/teamMemberDisplayName';
 
 export interface ElectronCollabDocumentsDataSourceEvents {
   observeStatus?: (status: ReturnType<TeamSyncProvider['getStatus']>, error?: unknown) => void;
@@ -79,6 +80,7 @@ function mapMember(member: TeamMemberInfo): TeamMemberSummary {
   return {
     memberId: asTeamMemberId(member.userId),
     email: member.email,
+    name: teamMemberDisplayName(member),
     role: member.role,
   };
 }
