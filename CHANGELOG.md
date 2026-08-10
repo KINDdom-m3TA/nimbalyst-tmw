@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A Quick Open file mask that filters by name, such as `Ch0*.md`, now matches on Windows instead of silently returning nothing.
 - Comment highlights in a shared document now reappear after the document reloads, instead of silently vanishing while the comments stay in the panel.
 - Teammates appear by name rather than by email address when you `@`-mention them and in the notifications a mention produces.
+- Edits you make to a shared document on one of your own devices now appear live on your others, instead of only after a reload.
 - A failed sign-in on iPhone and iPad now explains what went wrong, instead of returning to the login screen with no message.
 
 ### Removed

@@ -1070,9 +1070,18 @@ export class DocumentSyncProvider {
   private async handleUpdateBroadcast(
     msg: DocUpdateBroadcastMessage
   ): Promise<void> {
-    // Skip our own updates (server echoes don't happen, but guard anyway)
-    if (msg.senderId === this.config.userId) return;
-
+    // Every broadcast is applied, including ones this user's other clients
+    // sent. `senderId` names the PERSON (the room stamps it from the JWT sub),
+    // not the connection, so filtering on it discarded the desktop edits of
+    // whoever was also reading the document in a browser -- the same human
+    // signed in twice is the ordinary case, not an echo.
+    //
+    // There is nothing left to guard against: DocumentRoom excludes the
+    // originating socket from its broadcast, applying an update a Y.Doc
+    // already holds emits no events, and the bytes land under REMOTE_ORIGIN,
+    // which the local-update observer skips -- so no re-send loop is possible.
+    // Reconnect replay (docSyncResponse) has always applied this user's own
+    // rows with no such filter.
     let updateBytes: Uint8Array;
     try {
       updateBytes = await this.decryptFromWire(
