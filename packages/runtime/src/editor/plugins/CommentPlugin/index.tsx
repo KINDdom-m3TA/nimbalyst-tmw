@@ -60,6 +60,7 @@ import {
   createCollabCommentController,
 } from '../../commenting/CollabCommentControllerRegistry';
 import { CommentCollabProvider } from '../../commenting/CommentCollabProvider';
+import { reanchorOrphanedThreads } from '../../commenting/reanchorOrphanedThreads';
 import type {
   CommentMember,
   CommentsConfig,
@@ -77,6 +78,9 @@ import { createBasicTriggerFunction } from '../TypeaheadPlugin/TypeaheadMenu';
 import './CommentPlugin.css';
 
 type MarkNodeMap = Map<string, Set<NodeKey>>;
+
+/** Coalesce the mark mutations a document rebuild fires before healing. */
+const REANCHOR_DEBOUNCE_MS = 250;
 
 export { OPEN_COMMENT_COMPOSER_COMMAND } from './commands';
 
@@ -688,6 +692,31 @@ export default function CommentsPlugin({
       { skipInitialization: false },
     );
   }, [editor]);
+
+  // -- Re-attach orphaned thread anchors -------------------------------------
+  // Rebuilding the document from markdown -- the path agent edits take through
+  // applyCollabDocEdit -- drops every MarkNode while leaving the threads and
+  // the quoted text intact, silently unhighlighting the whole document (#2644).
+  // Heal by exact quote match once the doc is hydrated. This runs on every
+  // client rather than a single elected writer: a concurrent heal can nest two
+  // MarkNodes carrying the same id, which still renders and still unwraps
+  // through the mutation-tracked key map.
+  useEffect(() => {
+    if (threads.length === 0) return;
+    const capabilities = config.getCapabilities?.() ?? {
+      read: true,
+      comment: true,
+    };
+    if (!capabilities.comment) return;
+    // A partially-synced document would resolve quotes against incomplete text
+    // and anchor them in the wrong place -- permanently, for everyone.
+    if (!(config.isHydrated?.() ?? config.getYDoc() !== null)) return;
+
+    const timer = setTimeout(() => {
+      reanchorOrphanedThreads(editor, threads);
+    }, REANCHOR_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [editor, threads, config, markVersion]);
 
   // -- Track which thread the caret is inside (active mark) ------------------
   useEffect(() => {
