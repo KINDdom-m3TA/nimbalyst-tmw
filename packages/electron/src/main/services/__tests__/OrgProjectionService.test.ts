@@ -30,6 +30,7 @@ import {
   applyProjectGrant,
   applyProjectRevoke,
   defaultProjectRoleForOrgRole,
+  reconcileProjectAccessFromServer,
   upsertProject,
 } from '../OrgProjectionService';
 import { canAccess } from '../OrgAccessResolver';
@@ -104,6 +105,50 @@ describe('OrgProjectionService (SQLite backend, migration 0013)', () => {
 
   it('maps an unrecognized organization role to the least-privileged project role', () => {
     expect(defaultProjectRoleForOrgRole('future-role')).toBe('project-viewer');
+  });
+
+  it('reconcile replaces role-derived guesses with the server grant list', async () => {
+    // The roster seed is a guess: it derives grants from org roles rather than
+    // reading them. When it guesses high, canAccess promises edit rights the
+    // server refuses with document_read_only; when it invents a grant the
+    // server never issued, the row has to disappear entirely.
+    await backfillProjection(db, [{
+      org: { orgId: 'org-recon', name: 'Recon', flavor: 'team', teamProjectId: 'proj-recon' },
+      members: [
+        { userId: 'seeded-editor', role: 'member' },
+        { userId: 'seeded-phantom', role: 'member' },
+      ],
+    }]);
+    expect((await canAccess(db, 'seeded-editor', {
+      orgId: 'org-recon', projectId: 'proj-recon', action: 'edit',
+    })).allowed).toBe(true);
+
+    await reconcileProjectAccessFromServer(db, 'proj-recon', [
+      { userId: 'seeded-editor', projectRole: 'project-viewer' },
+    ]);
+
+    const rows = await db.query<{ user_id: string; project_role: string }>(
+      `SELECT user_id, project_role FROM project_access WHERE project_id = 'proj-recon' ORDER BY user_id`);
+    expect(rows.rows).toEqual([
+      { user_id: 'seeded-editor', project_role: 'project-viewer' },
+    ]);
+    expect((await canAccess(db, 'seeded-editor', {
+      orgId: 'org-recon', projectId: 'proj-recon', action: 'edit',
+    })).allowed).toBe(false);
+  });
+
+  it('reconcile leaves other projects untouched', async () => {
+    await backfillProjection(db, [{
+      org: { orgId: 'org-multi', name: 'Multi', flavor: 'team', teamProjectId: 'proj-keep' },
+      members: [{ userId: 'member1', role: 'member' }],
+    }]);
+    await applyProjectGrant(db, 'proj-other', 'member1', 'project-editor');
+
+    await reconcileProjectAccessFromServer(db, 'proj-keep', []);
+
+    const other = await db.query<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM project_access WHERE project_id = 'proj-other'`);
+    expect(other.rows[0].c).toBe(1);
   });
 
   it('is idempotent and refreshes mutable fields on re-run', async () => {

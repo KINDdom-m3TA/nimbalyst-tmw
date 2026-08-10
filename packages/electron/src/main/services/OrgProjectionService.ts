@@ -219,6 +219,47 @@ export async function seedProjectAccessFromRoster(
 }
 
 /**
+ * Replace this project's local grants with the server's authoritative list.
+ *
+ * `seedProjectAccessFromRoster` guesses grants from org roles because a cold
+ * client has no other source, but a guess is not a grant: it made `canAccess`
+ * report edit rights the server then refused with `document_read_only`, and it
+ * invented rows for members the server had never granted anything. Once the
+ * real list is in hand it wins outright — grants the server does not list are
+ * deleted, and roles it does list overwrite whatever was guessed.
+ *
+ * Scoped to one project; other projects' grants are left alone.
+ */
+export async function reconcileProjectAccessFromServer(
+  db: ProjectionDb,
+  projectId: string,
+  grants: Array<{ userId: string; projectRole: string }>,
+): Promise<number> {
+  const ts = nowIso();
+  const serverUserIds = grants.map((g) => g.userId);
+  for (const grant of grants) {
+    await db.query(
+      `INSERT INTO project_access (project_id, user_id, project_role, created_at)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (project_id, user_id) DO UPDATE SET
+         project_role = EXCLUDED.project_role`,
+      [projectId, grant.userId, grant.projectRole, ts],
+    );
+  }
+  if (serverUserIds.length === 0) {
+    await db.query(`DELETE FROM project_access WHERE project_id = $1`, [projectId]);
+    return 0;
+  }
+  const placeholders = serverUserIds.map((_, i) => `$${i + 2}`).join(', ');
+  await db.query(
+    `DELETE FROM project_access
+      WHERE project_id = $1 AND user_id NOT IN (${placeholders})`,
+    [projectId, ...serverUserIds],
+  );
+  return grants.length;
+}
+
+/**
  * One-time / launch backfill: mint the local projection for a set of orgs and
  * their rosters. Idempotent — safe to run on every launch (upserts + DO NOTHING
  * grant seeding). Returns counts for logging.

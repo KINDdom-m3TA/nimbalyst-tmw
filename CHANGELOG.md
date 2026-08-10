@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- A shared document you are only allowed to read now says so, instead of looking editable and silently retrying the refused save until you reload.
 - Restoring an earlier version of a shared document now actually rolls the document back, instead of reporting success while leaving it unchanged.
 - Keeping or reverting an AI change in a shared document now clears its highlight for good, instead of leaving marks that pile up on every later turn.
 - An AI edit near an embedded file in a shared document no longer duplicates the embed.

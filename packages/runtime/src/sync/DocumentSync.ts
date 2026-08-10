@@ -1423,10 +1423,17 @@ export class DocumentSyncProvider {
     if (!clientUpdateId || clientUpdateId !== this.replayingClientUpdateId) {
       return;
     }
-    if (!this.config.replica || this.replayingReplicaOutboxIds.length === 0) {
+    // A replica-backed client replays durable outbox rows and needs their ids
+    // to settle them. A replica-less client (the browser console) has only the
+    // inflight update, and must still handle the rejection -- returning early
+    // here left the update inflight forever, so the replay-ack timer fired, the
+    // socket was force-closed, and the same refused update replayed on every
+    // reconnect with nothing ever surfacing the refusal.
+    const replica = this.config.replica;
+    const rejectedIds = [...this.replayingReplicaOutboxIds];
+    if (replica && rejectedIds.length === 0) {
       return;
     }
-    const rejectedIds = [...this.replayingReplicaOutboxIds];
     this.clearReplayAckTimer();
     this.config.onOfflineMetric?.({
       metric: 'outbox_replay',
@@ -1435,21 +1442,23 @@ export class DocumentSyncProvider {
       rejectionCode: errorCode,
     });
     if (!isConfirmedOutboxRevocationCode(errorCode)) {
-      try {
-        await this.config.replica.recordOutboxError(rejectedIds, errorCode);
-      } catch (error) {
-        console.warn('[DocumentSync] Failed to persist retryable outbox error:', error);
+      if (replica) {
+        try {
+          await replica.recordOutboxError(rejectedIds, errorCode);
+        } catch (error) {
+          console.warn('[DocumentSync] Failed to persist retryable outbox error:', error);
+        }
       }
       this.requeueInflightPendingUpdate();
       this.setStatus('offline-unsynced');
       if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.close();
       return;
     }
-    await this.config.replica.rejectOutbox(rejectedIds, errorCode);
+    if (replica) await replica.rejectOutbox(rejectedIds, errorCode);
     this.inflightPendingUpdate = null;
     this.replayingClientUpdateId = null;
     this.replayingReplicaOutboxIds = [];
-    this.queuedPendingUpdate = this.config.replica.getPendingOutboxUpdate();
+    this.queuedPendingUpdate = replica ? replica.getPendingOutboxUpdate() : null;
     this.surfaceReplayStatus = false;
     this.replayStartedAt = null;
     this.replayAttemptCount = 0;

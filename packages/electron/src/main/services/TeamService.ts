@@ -67,6 +67,7 @@ import { normalizeOrgSettings } from '../../shared/orgSettings';
 import { getDatabase } from '../database/initialize';
 import {
   backfillProjection,
+  reconcileProjectAccessFromServer,
   applyMemberUpserted,
   applyMemberRemoved,
   applyMemberRoleChanged,
@@ -2015,6 +2016,24 @@ export async function syncOrgProjectionFromServer(knownTeams?: TeamDetails[]): P
     }
 
     const counts = await backfillProjection(db, orgs);
+
+    // The backfill above derives grants from org roles, which is a guess. Where
+    // the server will actually answer, its list replaces that guess -- otherwise
+    // canAccess keeps promising edit rights the server refuses with
+    // document_read_only. Admin-only endpoint, so a non-admin member simply
+    // keeps the role-derived projection.
+    for (const team of teams) {
+      if (!team.teamProjectId) continue;
+      try {
+        const grants = await listProjectAccess(team.orgId, team.teamProjectId);
+        await reconcileProjectAccessFromServer(db, team.teamProjectId, grants);
+      } catch (err) {
+        logger.main.debug(
+          '[TeamService] projection sync: listProjectAccess failed for', team.orgId, err,
+        );
+      }
+    }
+
     for (const team of teams) {
       const bindings = team.accountBindings ?? (
         team.sourcePersonalOrgId && team.teamMemberId
