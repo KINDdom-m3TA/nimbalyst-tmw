@@ -41,6 +41,13 @@ describe('document room server signals', () => {
       closeCode: 4003,
       message: 'Document access revoked',
     });
+    // A deleted room is terminal too: without this the host reconnects into a
+    // room that no longer exists and reports it as a failed sync.
+    expect(classifyDocumentClose(4004, '')).toEqual({
+      reason: 'deleted-document',
+      closeCode: 4004,
+      message: 'Document was deleted',
+    });
     expect(classifyDocumentClose(1006, '')).toBeNull();
   });
 });

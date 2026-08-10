@@ -1,3 +1,5 @@
+import type { CollabEditorTermination } from './types';
+
 export type ObservedDocumentServerSignal =
   | {
       type: 'write-acknowledged';
@@ -43,7 +45,7 @@ export function parseDocumentServerSignal(data: unknown): ObservedDocumentServer
 export function classifyDocumentClose(
   code: number,
   reason: string,
-): { reason: 'removed-from-org' | 'document-access-revoked'; closeCode: 4002 | 4003; message: string } | null {
+): CollabEditorTermination | null {
   if (code === 4002) {
     return { reason: 'removed-from-org', closeCode: 4002, message: reason || 'Removed from team' };
   }
@@ -53,6 +55,12 @@ export function classifyDocumentClose(
       closeCode: 4003,
       message: reason || 'Document access revoked',
     };
+  }
+  // A deleted document is terminal in the same way access removal is: the room
+  // is gone, so reconnecting can only fail again. Hosts need it distinguished
+  // from a revocation because it is not an access problem to explain away.
+  if (code === 4004) {
+    return { reason: 'deleted-document', closeCode: 4004, message: reason || 'Document was deleted' };
   }
   return null;
 }

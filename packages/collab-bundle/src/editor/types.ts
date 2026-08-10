@@ -69,8 +69,8 @@ export interface CollabEditorWriteRejection {
 }
 
 export interface CollabEditorTermination {
-  reason: 'removed-from-org' | 'document-access-revoked';
-  closeCode: 4002 | 4003;
+  reason: 'removed-from-org' | 'document-access-revoked' | 'deleted-document';
+  closeCode: 4002 | 4003 | 4004;
   message: string;
 }
 
@@ -86,7 +86,8 @@ export type CollabEditorFlushResult =
         | 'disconnected'
         | 'server-read-only'
         | 'removed-from-org'
-        | 'document-access-revoked';
+        | 'document-access-revoked'
+        | 'deleted-document';
     }
   | { status: 'timed-out'; timeoutMs: number }
   | { status: 'failed'; message: string };
