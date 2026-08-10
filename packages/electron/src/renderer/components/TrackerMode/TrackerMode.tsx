@@ -4,6 +4,7 @@ import { globalRegistry, loadBuiltinTrackers } from '@nimbalyst/runtime/plugins/
 import { getDefaultColumnConfig } from '@nimbalyst/runtime/plugins/TrackerPlugin';
 import { TrackerSidebar } from './TrackerSidebar';
 import { TrackerMainView, type ViewMode } from './TrackerMainView';
+import { useTrackerTeamOwnership } from './useTrackerTeamMembers';
 import { ResizablePanel } from '../AgenticCoding/ResizablePanel';
 import type { TrackerIdentity, TrackerItemType } from '@nimbalyst/runtime';
 import {
@@ -321,6 +322,10 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
 
   const filterType = selectedType as TrackerItemType | 'all';
 
+  // One team lookup for the whole mode: the sidebar's ownership sections and the
+  // migration summary both name the same team, without each fetching it.
+  const { team, members: teamMembers } = useTrackerTeamOwnership(workspacePath || undefined);
+
   const sidebarContent = (
     <TrackerSidebar
       workspacePath={workspacePath || undefined}
@@ -347,6 +352,8 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
       onToggleShareView={handleToggleShareView}
       onSaveNavigationEntry={handleSaveNavigationEntry}
       onDeleteFolder={handleDeleteFolder}
+      team={team}
+      teamMembers={teamMembers}
     />
   );
 
@@ -358,6 +365,7 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
       onViewModeChange={handleViewModeChange}
       onSwitchToFilesMode={onSwitchToFilesMode}
       workspacePath={workspacePath || undefined}
+      teamName={team?.name}
       trackerTypes={trackerTypes}
       onClearSidebarFilters={handleClearFilters}
       tagFilter={tagFilter}
