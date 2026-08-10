@@ -2,11 +2,18 @@ import { act } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 
-import { asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
+import { asTeamJwt, asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
+import { collabCommentControllerRegistry } from '@nimbalyst/runtime/editor/commenting/CollabCommentControllerRegistry';
 import { MarkdownCollabContentAdapter } from '@nimbalyst/runtime/sync/MarkdownCollabContentAdapter';
 import { mountCollabEditor } from '../mount';
 import { CollabPresenceSurface } from '../presence';
-import type { CollabEditorHandle } from '../types';
+import {
+  asTeamDocumentId,
+  asTeamOrgId,
+  asTeamProjectId,
+  type CollabEditorCommentsOptions,
+  type CollabEditorHandle,
+} from '../types';
 
 const mountedHandles: CollabEditorHandle[] = [];
 
@@ -164,5 +171,137 @@ describe('in-memory collaborative editor harness', () => {
     expect(setActive).toHaveBeenLastCalledWith(true);
     visibilityState.mockRestore();
     setActive.mockRestore();
+  });
+});
+
+/**
+ * A room socket that opens and answers the initial sync, and nothing else.
+ *
+ * That is precisely the state a reader is in: the document arrived, no edit has
+ * been attempted, so the server has never acknowledged or refused a write.
+ */
+class FakeRoomSocket {
+  static readonly opened: FakeRoomSocket[] = [];
+  readyState = 0;
+  private readonly listeners = new Map<string, Set<(event: unknown) => void>>();
+
+  constructor() {
+    FakeRoomSocket.opened.push(this);
+  }
+
+  addEventListener(type: string, listener: (event: unknown) => void): void {
+    const current = this.listeners.get(type) ?? new Set<(event: unknown) => void>();
+    current.add(listener);
+    this.listeners.set(type, current);
+  }
+
+  removeEventListener(type: string, listener: (event: unknown) => void): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  send(): void {}
+
+  close(): void {
+    this.readyState = 3;
+  }
+
+  open(): void {
+    this.readyState = 1;
+    this.emit('open', {});
+  }
+
+  /** The server's answer to `docSyncRequest`: a document, and no write verdict. */
+  deliverSyncResponse(): void {
+    this.emit('message', {
+      data: JSON.stringify({
+        type: 'docSyncResponse',
+        updates: [],
+        hasMore: false,
+        cursor: 0,
+        serverHead: 0,
+        serverHasState: true,
+      }),
+    });
+  }
+
+  private emit(type: string, event: unknown): void {
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
+}
+
+describe('comment authoring on a document that has not been written to', () => {
+  async function openTeamDocument(
+    documentId: string,
+    canComment: () => boolean,
+  ): Promise<{ handle: CollabEditorHandle; documentUri: string }> {
+    FakeRoomSocket.opened.length = 0;
+    const element = document.createElement('div');
+    document.body.append(element);
+    const documentUri = `nimbalyst://doc/${documentId}`;
+    const comments: CollabEditorCommentsOptions = {
+      currentUser: { id: 'member-reader', name: 'Reader' },
+      getMembers: () => [],
+      documentTitle: 'Shared plan',
+      documentId,
+      documentUri,
+      canComment,
+    };
+    const handle = mountCollabEditor({
+      element,
+      source: {
+        kind: 'team-room',
+        serverUrl: 'ws://collab.test',
+        room: {
+          orgId: asTeamOrgId('org-comments'),
+          projectId: asTeamProjectId('project-comments'),
+          documentId: asTeamDocumentId(documentId),
+        },
+        auth: {
+          scope: 'team',
+          memberId: asTeamMemberId('member-reader'),
+          getTeamJwt: async () => asTeamJwt('team-jwt'),
+        },
+        createWebSocket: () => new FakeRoomSocket() as unknown as WebSocket,
+      },
+      user: { memberId: asTeamMemberId('member-reader'), name: 'Reader' },
+      comments,
+    });
+    mountedHandles.push(handle);
+    await settle();
+
+    const socket = FakeRoomSocket.opened[0];
+    if (!socket) throw new Error('the editor never opened a room socket');
+    await act(async () => {
+      socket.open();
+      socket.deliverSyncResponse();
+    });
+    await settle();
+    return { handle, documentUri };
+  }
+
+  function commentCapability(documentUri: string): boolean {
+    const controller = collabCommentControllerRegistry.get(documentUri);
+    if (!controller) throw new Error('the comment plugin never registered a controller');
+    return controller.getCapabilities().comment;
+  }
+
+  it('offers authoring to a writer and withholds it from a viewer', async () => {
+    // The bug this covers: comment capability was derived from `serverAccess`
+    // alone, which only reaches `writable` after the server acknowledges a
+    // write. Opening a document performs no write, so every writer sat at
+    // `unknown` and commenting was unreachable for the whole session.
+    const writer = await openTeamDocument('doc-writer', () => true);
+    expect(writer.handle.getState()).toMatchObject({
+      connection: 'connected',
+      serverAccess: 'unknown',
+    });
+    expect(commentCapability(writer.documentUri)).toBe(true);
+
+    const viewer = await openTeamDocument('doc-viewer', () => false);
+    expect(viewer.handle.getState()).toMatchObject({
+      connection: 'connected',
+      serverAccess: 'unknown',
+    });
+    expect(commentCapability(viewer.documentUri)).toBe(false);
   });
 });

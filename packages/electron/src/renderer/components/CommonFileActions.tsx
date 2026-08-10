@@ -32,7 +32,7 @@ import { getRelativePath } from '../utils/pathUtils';
 import { dialogRef, DIALOG_IDS } from '../dialogs';
 import type { ShareToTeamData } from '../dialogs';
 import { joinCollabPath, normalizeCollabPath } from './CollabMode/collabTree';
-import { isCollabUri } from '../utils/collabUri';
+import { isCollabUri } from '@nimbalyst/collab-protocol';
 import {
   getCollaborativeDocumentTypeCatalog,
   type CollaborativeDocumentTypeDescriptor,

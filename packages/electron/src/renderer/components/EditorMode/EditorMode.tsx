@@ -13,7 +13,7 @@ import { handleWorkspaceFileSelect as handleWorkspaceFileSelectUtil } from '../.
 import { createInitialFileContent, createMockupContent } from '../../utils/fileUtils';
 import { getFileName } from '../../utils/pathUtils';
 import { canPersistWorkspaceHydratedState } from '../../utils/workspaceHydration';
-import { isCollabUri } from '../../utils/collabUri';
+import { isCollabUri } from '@nimbalyst/collab-protocol';
 import { aiToolService } from '../../services/AIToolService';
 import { editorRegistry } from '@nimbalyst/runtime/ai/EditorRegistry';
 import { getExtensionLoader } from '@nimbalyst/runtime';

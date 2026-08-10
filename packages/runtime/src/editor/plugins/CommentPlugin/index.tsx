@@ -60,6 +60,10 @@ import {
   createCollabCommentController,
 } from '../../commenting/CollabCommentControllerRegistry';
 import { CommentCollabProvider } from '../../commenting/CommentCollabProvider';
+import {
+  canAuthorComments,
+  resolveCommentCapabilities,
+} from '../../commenting/capabilities';
 import { reanchorOrphanedThreads } from '../../commenting/reanchorOrphanedThreads';
 import type {
   CommentMember,
@@ -360,6 +364,7 @@ function CommentComposer(props: {
 function CommentsPanel({
   threads,
   activeThreadId,
+  canComment,
   getMembers,
   onSelectThread,
   onSetThreadResolved,
@@ -370,6 +375,8 @@ function CommentsPanel({
 }: {
   threads: Thread[];
   activeThreadId: string | null;
+  /** False for a read-only viewer: reading stays, authoring disappears. */
+  canComment: boolean;
   getMembers: () => CommentMember[];
   onSelectThread: (id: string) => void;
   onSetThreadResolved: (thread: Thread, resolved: boolean) => void;
@@ -395,10 +402,19 @@ function CommentsPanel({
             <span className="material-symbols-outlined">close</span>
           </button>
         </div>
+        {/* Explain the missing affordances once, at the container, rather than
+            repeating a notice under every thread. */}
+        {!canComment && (
+          <div className="nim-comments-panel-notice">
+            You have read-only access to this document.
+          </div>
+        )}
         <div className="nim-comments-panel-list">
           {threads.length === 0 ? (
             <div className="nim-comments-empty">
-              No comments yet. Select text in the document and add one.
+              {canComment
+                ? 'No comments yet. Select text in the document and add one.'
+                : 'No comments yet.'}
             </div>
           ) : (
             threads.map((thread) => (
@@ -439,27 +455,31 @@ function CommentsPanel({
                       {thread.comments.length === 1 ? 'comment' : 'comments'}
                       {' · Resolved'}
                     </span>
-                    <button
-                      type="button"
-                      className="nim-comment-btn nim-comment-btn-unresolve"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSetThreadResolved(thread, false);
-                      }}
-                    >
-                      Unresolve
-                    </button>
-                    <button
-                      type="button"
-                      className="nim-comment-btn nim-comment-btn-delete-thread"
-                      title="Delete thread"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDeleteThread(thread);
-                      }}
-                    >
-                      Delete
-                    </button>
+                    {canComment && (
+                      <>
+                        <button
+                          type="button"
+                          className="nim-comment-btn nim-comment-btn-unresolve"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSetThreadResolved(thread, false);
+                          }}
+                        >
+                          Unresolve
+                        </button>
+                        <button
+                          type="button"
+                          className="nim-comment-btn nim-comment-btn-delete-thread"
+                          title="Delete thread"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteThread(thread);
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </>
+                    )}
                   </div>
                 ) : (
                   <>
@@ -470,20 +490,22 @@ function CommentsPanel({
                           <span className="nim-comment-time">
                             {formatTimestamp(comment.timeStamp)}
                           </span>
-                          <button
-                            type="button"
-                            className="nim-comment-delete"
-                            title="Delete comment"
-                            aria-label="Delete comment"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onDeleteComment(comment, thread);
-                            }}
-                          >
-                            <span className="material-symbols-outlined">
-                              delete
-                            </span>
-                          </button>
+                          {canComment && (
+                            <button
+                              type="button"
+                              className="nim-comment-delete"
+                              title="Delete comment"
+                              aria-label="Delete comment"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDeleteComment(comment, thread);
+                              }}
+                            >
+                              <span className="material-symbols-outlined">
+                                delete
+                              </span>
+                            </button>
+                          )}
                         </div>
                         {comment.replyToCommentId && (
                           <div className="nim-comment-reply-target">
@@ -495,55 +517,57 @@ function CommentsPanel({
                         </div>
                       </div>
                     ))}
-                    <div
-                      className="nim-comment-thread-footer"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <CommentComposer
-                        getMembers={getMembers}
-                        submitLabel={
-                          thread.comments.length === 0 ? 'Comment' : 'Reply'
-                        }
-                        placeholder={
-                          thread.comments.length === 0
-                            ? 'Add a comment... use @ to mention'
-                            : 'Reply...'
-                        }
-                        autoFocus={
-                          thread.comments.length === 0 &&
-                          thread.id === activeThreadId
-                        }
-                        onSubmit={(text, mentioned) =>
-                          onReply(thread, text, mentioned)
-                        }
-                        onCancel={() => {
-                          if (thread.comments.length === 0) {
-                            onDeleteThread(thread);
+                    {canComment && (
+                      <div
+                        className="nim-comment-thread-footer"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <CommentComposer
+                          getMembers={getMembers}
+                          submitLabel={
+                            thread.comments.length === 0 ? 'Comment' : 'Reply'
                           }
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="nim-comment-btn nim-comment-btn-resolve"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onSetThreadResolved(thread, true);
-                        }}
-                      >
-                        Resolve
-                      </button>
-                      <button
-                        type="button"
-                        className="nim-comment-btn nim-comment-btn-delete-thread"
-                        title="Delete thread"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDeleteThread(thread);
-                        }}
-                      >
-                        Delete
-                      </button>
-                    </div>
+                          placeholder={
+                            thread.comments.length === 0
+                              ? 'Add a comment... use @ to mention'
+                              : 'Reply...'
+                          }
+                          autoFocus={
+                            thread.comments.length === 0 &&
+                            thread.id === activeThreadId
+                          }
+                          onSubmit={(text, mentioned) =>
+                            onReply(thread, text, mentioned)
+                          }
+                          onCancel={() => {
+                            if (thread.comments.length === 0) {
+                              onDeleteThread(thread);
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="nim-comment-btn nim-comment-btn-resolve"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSetThreadResolved(thread, true);
+                          }}
+                        >
+                          Resolve
+                        </button>
+                        <button
+                          type="button"
+                          className="nim-comment-btn nim-comment-btn-delete-thread"
+                          title="Delete thread"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteThread(thread);
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -606,8 +630,7 @@ export default function CommentsPlugin({
       documentTitle: config.documentTitle,
       documentUri: config.documentUri,
       editor,
-      getCapabilities: () =>
-        config.getCapabilities?.() ?? { read: true, comment: true },
+      getCapabilities: () => resolveCommentCapabilities(config),
       getMembers: config.getMembers,
       isHydrated: () => config.isHydrated?.() ?? config.getYDoc() !== null,
       isVisible: () => {
@@ -703,11 +726,7 @@ export default function CommentsPlugin({
   // through the mutation-tracked key map.
   useEffect(() => {
     if (threads.length === 0) return;
-    const capabilities = config.getCapabilities?.() ?? {
-      read: true,
-      comment: true,
-    };
-    if (!capabilities.comment) return;
+    if (!canAuthorComments(config)) return;
     // A partially-synced document would resolve quotes against incomplete text
     // and anchor them in the wrong place -- permanently, for everyone.
     if (!(config.isHydrated?.() ?? config.getYDoc() !== null)) return;
@@ -832,6 +851,11 @@ export default function CommentsPlugin({
 
   // -- Actions ---------------------------------------------------------------
   const handleAddComment = useCallback(() => {
+    // Re-read rather than trusting the rendered affordance: access can be
+    // revoked between the frame that drew the toolbar and this dispatch, and
+    // `getCommentToolbarActions` is memoized on the config object's identity,
+    // which does not change when the capability behind it flips.
+    if (!canAuthorComments(config)) return;
     let quote = '';
     let isBackward = false;
     editor.getEditorState().read(() => {
@@ -852,7 +876,7 @@ export default function CommentsPlugin({
 
     setPanelOpen(true);
     setActiveThreadId(thread.id);
-  }, [editor, commentStore]);
+  }, [editor, commentStore, config]);
 
   useEffect(
     () =>
@@ -869,6 +893,7 @@ export default function CommentsPlugin({
 
   const handleReply = useCallback(
     (thread: Thread, text: string, mentionedUserIds: string[]) => {
+      if (!canAuthorComments(config)) return;
       const actor: CommentActor = {
         kind: 'user',
         userId: config.currentUser.id,
@@ -953,6 +978,11 @@ export default function CommentsPlugin({
 
   const getMembers = useCallback(() => config.getMembers(), [config]);
 
+  // Read on every render and deliberately not memoized on `config`: hosts keep
+  // the same config object across an access change, so a memo keyed on its
+  // identity would leave the gate showing stale affordances after revocation.
+  const canComment = canAuthorComments(config);
+
   // Reserve room on the right of the editor pane while the panel is docked
   // open, so document text isn't hidden underneath it.
   useEffect(() => {
@@ -989,6 +1019,7 @@ export default function CommentsPlugin({
           <CommentsPanel
             threads={threads}
             activeThreadId={activeThreadId}
+            canComment={canComment}
             getMembers={getMembers}
             onSelectThread={handleSelectThread}
             onSetThreadResolved={handleSetThreadResolved}

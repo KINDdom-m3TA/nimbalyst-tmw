@@ -11,6 +11,7 @@ export type {
 } from './bridge';
 export type {
   CollabEditorConnectionState,
+  CollabEditorCommentsOptions,
   CollabEditorFlushResult,
   CollabEditorHandle,
   CollabEditorMountOptions,
@@ -22,6 +23,7 @@ export type {
   CollabEditorTermination,
   CollabEditorUser,
   CollabEditorWriteRejection,
+  CommentMember,
   InMemorySource,
   ResolvedCollabEditorUser,
   TeamDocumentId,

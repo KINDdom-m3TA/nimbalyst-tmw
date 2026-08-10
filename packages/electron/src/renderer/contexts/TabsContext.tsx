@@ -15,7 +15,7 @@
 
 import React, { createContext, useContext, useRef, useCallback, useSyncExternalStore, useMemo } from 'react';
 import { getFileName } from '../utils/pathUtils';
-import { isCollabUri } from '../utils/collabUri';
+import { isCollabUri } from '@nimbalyst/collab-protocol';
 import { store as jotaiStore, editorDirtyAtom, makeEditorKey } from '@nimbalyst/runtime/store';
 
 export interface TabData {

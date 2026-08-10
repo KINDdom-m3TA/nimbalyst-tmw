@@ -36,7 +36,7 @@ import { trackTeamAnalyticsEvent } from '../utils/teamAnalytics';
 import { readReceiptService } from './RendererReadReceiptService';
 import { CollaborationHealthAttemptTracker } from '../../shared/analytics/collaborationHealth';
 import { historyDialogFileAtom } from '../store/atoms/historyDialog';
-import { buildCollabUri } from '../utils/collabUri';
+import { buildCollabUri } from '@nimbalyst/collab-protocol';
 import {
   buildSharedDocumentDeepLink,
   buildSharedFolderDeepLink,

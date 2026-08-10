@@ -39,7 +39,7 @@ import {
   sharedDocumentsAtom,
   sharedFoldersAtom,
 } from '../../store/atoms/collabDocuments';
-import { buildCollabUri } from '../../utils/collabUri';
+import { buildCollabUri } from '@nimbalyst/collab-protocol';
 import { FixedTabHeaderContainer, FixedTabHeaderRegistry } from '@nimbalyst/runtime/plugins/shared/fixedTabHeader';
 import { LexicalDiffHeaderAdapter } from '../UnifiedDiffHeader';
 import { DocumentSyncProvider, CollabHistoryClient, LocalDocumentReplica } from '@nimbalyst/runtime/sync';

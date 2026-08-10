@@ -54,7 +54,7 @@ import {
   setCollabOutboxState,
 } from '../store/listeners/collabStateListeners';
 import { getTeamSyncProviderForScopeKey } from '../store/atoms/collabDocuments';
-import { buildCollabUri } from '../utils/collabUri';
+import { buildCollabUri } from '@nimbalyst/collab-protocol';
 import { notifyDocumentCommentRecipients } from '../services/documentCommentNotifier';
 import { trackerContentCollabKey } from './trackerContentCollabKey';
 import type { TrackerSharing } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/TrackerDataModel';

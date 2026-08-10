@@ -239,7 +239,7 @@ import {
   showTrustToastRequestAtom,
   toggleAIChatPanelRequestAtom,
 } from './store/atoms/appCommands';
-import { isCollabUri } from './utils/collabUri';
+import { isCollabUri } from '@nimbalyst/collab-protocol';
 import {
   collabConnectionStatusAtom,
   hasCollabUnsyncedChanges,

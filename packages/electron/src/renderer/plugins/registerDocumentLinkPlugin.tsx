@@ -31,7 +31,7 @@ import {
   parseCollabReferenceDocumentId,
 } from '@nimbalyst/runtime/plugins/DocumentLinkPlugin/documentLinkPaths';
 import { ElectronRendererDocumentService } from '../services/ElectronDocumentService';
-import { isCollabUri, parseCollabUri } from '../utils/collabUri';
+import { isCollabUri, parseCollabUri } from '@nimbalyst/collab-protocol';
 import {
   sharedDocumentsAtom,
   sharedFoldersAtom,

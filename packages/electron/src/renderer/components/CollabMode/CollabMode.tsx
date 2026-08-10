@@ -46,7 +46,7 @@ import {
 } from '../../store/atoms/collabDocuments';
 import { changedDocIdsAtom } from '../../store/atoms/collabDiscovery';
 import { SHARED_HOME_TAB_URI, SHARED_HOME_TAB_TITLE, isSharedHomeTab } from './sharedHomeTab';
-import { isCollabUri, parseCollabUri } from '../../utils/collabUri';
+import { isCollabUri, parseCollabUri } from '@nimbalyst/collab-protocol';
 import {
   getCollabNodeName,
   getSharedDocumentDisplayName,

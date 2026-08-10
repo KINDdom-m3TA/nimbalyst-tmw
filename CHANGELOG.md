@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Linked local files can now pull the latest Shared Document content from the editor header, with conflict protection and offline-ready Markdown images.
 - Shared document version history now shows the contents of each earlier version, so you can see what you are restoring before you restore it.
 - Trackers are now plainly personal or your team's: your own lists stay on your machine, items in a team tracker stay private until you publish them, issue keys are assigned on publishing, and removing a field or status asks first and shows how many items it affects.
+- You can now read, write, and reply to comments on shared documents in the browser, and an `@`-mention reaches the person's inbox; teammates with read-only access can follow the discussion without being offered edits the server would refuse.
 
 ### Changed
 <!-- Changes to existing functionality go here -->

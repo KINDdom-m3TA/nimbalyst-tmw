@@ -19,7 +19,7 @@ import type { CollabScope } from '@nimbalyst/collab-client/core';
 import { DocumentModelRegistry } from '../services/document-model/DocumentModelRegistry';
 import { aiApi } from '../services/aiApi';
 import { getFileName } from '../utils/pathUtils';
-import { isCollabUri } from '../utils/collabUri';
+import { isCollabUri } from '@nimbalyst/collab-protocol';
 import {
   updateSharedDocumentTitle,
   removeSharedDocument,

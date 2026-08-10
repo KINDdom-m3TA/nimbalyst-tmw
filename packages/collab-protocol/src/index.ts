@@ -8,6 +8,7 @@
 
 export * from "./identityScope.js";
 export * from "./roomIds.js";
+export * from "./collabUri.js";
 export * from "./comments.js";
 export * from "./conversation.js";
 export * from "./conversationRoom.js";

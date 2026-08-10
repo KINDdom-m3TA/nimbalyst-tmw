@@ -8,6 +8,8 @@
  * similar to how virtual:// URIs are used for non-filesystem tabs.
  */
 
+import type { TeamDocumentRoomId } from './roomIds.js';
+
 const COLLAB_PREFIX = 'collab://';
 
 /**
@@ -32,14 +34,16 @@ export function parseCollabUri(uri: string): { orgId: string; documentId: string
 
   const path = uri.slice(COLLAB_PREFIX.length);
   // Expected format: org:{orgId}:doc:{documentId}
-  const match = path.match(/^org:([^:]+):doc:(.+)$/);
-  if (!match) {
+  const match = /^org:([^:]+):doc:(.+)$/.exec(path);
+  const orgId = match?.[1];
+  const documentId = match?.[2];
+  if (orgId === undefined || documentId === undefined) {
     throw new Error(`Invalid collab URI format: ${uri}`);
   }
 
   return {
-    orgId: match[1],
-    documentId: match[2],
+    orgId,
+    documentId,
   };
 }
 
@@ -58,7 +62,7 @@ export function buildCollabUri(orgId: string, documentId: string): string {
  * Build the DocumentRoom ID from a collab URI.
  * This matches the room ID format used by the collabv3 server routing.
  */
-export function collabUriToRoomId(uri: string): string {
+export function collabUriToRoomId(uri: string): TeamDocumentRoomId {
   const { orgId, documentId } = parseCollabUri(uri);
   return `org:${orgId}:doc:${documentId}`;
 }

@@ -11,7 +11,7 @@ import {
   notifyCollabStatus,
 } from '../components/TabEditor/collabExtensionHost';
 import { documentSyncRegistry } from '../store/atoms/documentSyncRegistry';
-import { buildCollabUri } from '../utils/collabUri';
+import { buildCollabUri } from '@nimbalyst/collab-protocol';
 import {
   resolveDesktopCollabConfigForUri,
   type CollabDocumentConfig,

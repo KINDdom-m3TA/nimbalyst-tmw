@@ -25,6 +25,7 @@ import {
 } from './BrowserEditorSurface';
 import './browserChrome.css';
 import { applyBrowserEditorChrome } from './browserChrome';
+import { deriveCollabEditorCommentsState } from './commenting';
 import {
   CollabPresenceSurface,
   resolveCollabEditorUser,
@@ -115,6 +116,7 @@ export function mountCollabEditor(options: CollabEditorMountOptions): CollabEdit
   let getMarkdown = (): string => '';
   let destroyed = false;
   let readyReported = false;
+  let hasConnectedOnce = false;
   let hostReadOnly = options.readOnly ?? false;
   let latestWriteRejection: CollabEditorWriteRejection | null = null;
   let transportState: 'not-created' | 'connecting' | 'open' | 'closed' = 'not-created';
@@ -148,13 +150,37 @@ export function mountCollabEditor(options: CollabEditorMountOptions): CollabEdit
     state.edit = 'dirty';
     emitState();
   };
-  const updateEffectiveReadOnly = (): boolean => {
-    const nextReadOnly = hostReadOnly
+  const updateEffectiveReadOnly = (): void => {
+    state.readOnly = hostReadOnly
       || state.serverAccess === 'read-only'
       || state.serverAccess === 'revoked';
-    if (state.readOnly === nextReadOnly) return false;
-    state.readOnly = nextReadOnly;
-    return true;
+  };
+  const hostCanComment = (): boolean => options.comments?.canComment?.() ?? true;
+  const currentCommentCapability = (): boolean => deriveCollabEditorCommentsState({
+    connection: state.connection,
+    serverAccess: state.serverAccess,
+    hasConnectedOnce,
+    hostCanComment: hostCanComment(),
+  }).capabilities.comment;
+  let renderedReadOnly = state.readOnly;
+  let renderedCanComment = currentCommentCapability();
+  /**
+   * Re-render when what the editor is *allowed* to do has drifted from what is
+   * on screen.
+   *
+   * Effective read-only is not a proxy for that. The runtime resolves comment
+   * capability on every render and deliberately never caches it, but nothing
+   * re-renders on its own: gating the re-render on a read-only flip left the
+   * toolbar permanently without "Add comment" for a writer whose capability
+   * changed while read-only did not. The comparison is against what was last
+   * rendered rather than against one field's previous value, so every input to
+   * the answer -- server access, termination, the host's role answer -- lands
+   * the same way, and a change that cancels out renders nothing.
+   */
+  const syncEditorSurface = (): void => {
+    if (state.readOnly === renderedReadOnly
+      && currentCommentCapability() === renderedCanComment) return;
+    renderEditor();
   };
   const interruptFlushes = (result: CollabEditorFlushResult): void => {
     for (const resolve of flushInterruptWaiters) resolve(result);
@@ -163,18 +189,18 @@ export function mountCollabEditor(options: CollabEditorMountOptions): CollabEdit
   const setServerAccess = (access: CollabEditorState['serverAccess']): void => {
     if (state.termination || state.serverAccess === access) return;
     state.serverAccess = access;
-    const readOnlyChanged = updateEffectiveReadOnly();
+    updateEffectiveReadOnly();
     emitState();
-    if (readOnlyChanged) renderEditor();
+    syncEditorSurface();
   };
   const setTermination = (termination: CollabEditorTermination): void => {
     if (state.termination) return;
     state.termination = termination;
     state.connection = 'terminated';
     state.serverAccess = 'revoked';
-    const readOnlyChanged = updateEffectiveReadOnly();
+    updateEffectiveReadOnly();
     emitState();
-    if (readOnlyChanged) renderEditor();
+    syncEditorSurface();
     options.onTermination?.(termination);
     interruptFlushes({ status: 'unavailable', reason: termination.reason });
   };
@@ -255,6 +281,12 @@ export function mountCollabEditor(options: CollabEditorMountOptions): CollabEdit
       },
       onStatusChange: (status) => {
         if (!state.termination) state.connection = status;
+        hasConnectedOnce = deriveCollabEditorCommentsState({
+          connection: state.connection,
+          serverAccess: state.serverAccess,
+          hasConnectedOnce,
+          hostCanComment: hostCanComment(),
+        }).hasConnectedOnce;
         lexicalProvider?.handleStatusChange(status);
         emitState();
       },
@@ -384,9 +416,13 @@ export function mountCollabEditor(options: CollabEditorMountOptions): CollabEdit
       if (destroyed || hostReadOnly === nextReadOnly) return;
       hostReadOnly = nextReadOnly;
       state.hostReadOnly = nextReadOnly;
-      const readOnlyChanged = updateEffectiveReadOnly();
+      updateEffectiveReadOnly();
       emitState();
-      if (readOnlyChanged) renderEditor();
+      syncEditorSurface();
+    },
+    refreshCommentAccess() {
+      if (destroyed) return;
+      syncEditorSurface();
     },
     markClean() {
       if (state.edit === 'clean') return;
@@ -424,6 +460,8 @@ export function mountCollabEditor(options: CollabEditorMountOptions): CollabEdit
 
   function renderEditor(): void {
     if (!root || destroyed) return;
+    renderedReadOnly = state.readOnly;
+    renderedCanComment = currentCommentCapability();
     const config: EditorConfig = {
       isRichText: true,
       editable: !state.readOnly,
@@ -436,6 +474,19 @@ export function mountCollabEditor(options: CollabEditorMountOptions): CollabEdit
         username: resolvedUser.displayName,
         cursorColor: resolvedUser.cursorColor,
       },
+      comments: options.comments ? {
+        ...options.comments,
+        // Browser comment threads belong to the document-lifetime shared doc;
+        // desktop uses the rotating per-binding editorDoc, which this bridge keeps converged.
+        getYDoc: () => sharedDocument,
+        isHydrated: () => hasConnectedOnce,
+        getCapabilities: () => deriveCollabEditorCommentsState({
+          connection: state.connection,
+          serverAccess: state.serverAccess,
+          hasConnectedOnce,
+          hostCanComment: hostCanComment(),
+        }).capabilities,
+      } : undefined,
       onDirtyChange: (dirty) => {
         if (dirty) setDirty();
       },

@@ -10,7 +10,7 @@
  * host scope so identical document URIs in two mounted scopes cannot alias.
  */
 
-import { buildCollabUri } from './collabUri';
+import { buildCollabUri } from '@nimbalyst/collab-protocol';
 import { logger } from './logger';
 import { createProxiedWebSocket } from './proxiedWebSocket';
 import {

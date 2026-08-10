@@ -28,7 +28,7 @@ import { TrackerResourceEditor } from '../AgentMode/TrackerResourceEditor';
 import { SharedDocsListView } from '@nimbalyst/collab-client/docs-ui';
 import { ElectronCollabDocsUIRoot } from '../CollabMode/ElectronCollabDocsUIProvider';
 import { isSharedHomeTab } from '../CollabMode/sharedHomeTab';
-import { isCollabUri, parseCollabUri } from '../../utils/collabUri';
+import { isCollabUri, parseCollabUri } from '@nimbalyst/collab-protocol';
 import {
   getCollabConfig,
   getCollabConfigForScopeKey,

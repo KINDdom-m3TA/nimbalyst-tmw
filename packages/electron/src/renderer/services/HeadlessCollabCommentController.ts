@@ -13,7 +13,7 @@ import {
   getTeamSyncProviderForScopeKey,
   getSharedDocumentsForScopeKey,
 } from '../store/atoms/collabDocuments';
-import { parseCollabUri } from '../utils/collabUri';
+import { parseCollabUri } from '@nimbalyst/collab-protocol';
 import { notifyDocumentCommentRecipients } from './documentCommentNotifier';
 import { collaborativeEmbedProviderCache } from './CollaborativeEmbedProviderCache';
 import { getCollaborativeDocumentTypeCatalog } from './CollaborativeDocumentTypeCatalog';

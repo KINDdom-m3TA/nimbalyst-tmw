@@ -73,7 +73,7 @@ import {
 import { activeWorkspacePathAtom } from '../../store/atoms/openProjects';
 import { setWindowModeAtom } from '../../store/atoms/windowMode';
 import { getCollaborativeDocumentTypeCatalog } from '../../services/CollaborativeDocumentTypeCatalog';
-import { isCollabUri, parseCollabUri } from '../../utils/collabUri';
+import { isCollabUri, parseCollabUri } from '@nimbalyst/collab-protocol';
 
 import './EmbedFrame.css';
 

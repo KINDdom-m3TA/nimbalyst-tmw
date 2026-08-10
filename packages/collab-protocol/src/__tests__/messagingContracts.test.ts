@@ -175,9 +175,12 @@ describe("Teams messaging protocol validation", () => {
     expect(wireRoundTrip.append.event.deliveryHints).toEqual(
       canonical.deliveryHints
     );
-    expect(wireRoundTrip.history.events[0].deliveryHints).toEqual(
-      canonical.deliveryHints
-    );
+    expect(wireRoundTrip.history.events).toHaveLength(1);
+    const [historyEvent] = wireRoundTrip.history.events;
+    if (!historyEvent) {
+      throw new Error("Expected exactly one history event");
+    }
+    expect(historyEvent.deliveryHints).toEqual(canonical.deliveryHints);
   });
 
   it.each(COMMENT_BODY_CONTRACT_CORPUS)(

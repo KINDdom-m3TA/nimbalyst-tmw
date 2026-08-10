@@ -129,11 +129,61 @@ export interface CollabEditorPresence {
   participants: CollabEditorParticipant[];
 }
 
+export interface CommentMember {
+  userId: string;
+  name: string;
+  personalOrgId?: string | null;
+}
+
+interface CommentMentionPayload {
+  actorName?: string;
+  sourceTitle?: string;
+  snippet?: string;
+  commentId?: string;
+  threadId?: string;
+  markId?: string;
+  url?: string;
+}
+
+interface CommentReplyPayload extends CommentMentionPayload {
+  commentId: string;
+  clientMutationId: string;
+  replyToCommentId?: string;
+}
+
+export interface CollabEditorCommentsOptions {
+  currentUser: { id: string; name: string };
+  getMembers(): CommentMember[];
+  documentTitle: string;
+  documentId: string;
+  documentUri: string;
+  /**
+   * Whether this user's role permits authoring comments, answered by the host.
+   *
+   * Comment threads live in the document's Y.Doc, so authoring one needs the
+   * same server write authority as editing the prose, and the transport learns
+   * that only by having a write accepted or refused. A host that knows the
+   * answer up front supplies it here; the bundle ANDs it with what the
+   * transport has observed.
+   *
+   * Resolved as a function, never captured: a host reading it off an
+   * asynchronous roster answers "not yet known" (`false`, fail closed) first.
+   * Call `CollabEditorHandle.refreshCommentAccess` after the answer changes.
+   *
+   * Omitted means "this host does not model per-role comment access", which the
+   * bundle treats as permitted.
+   */
+  canComment?: () => boolean;
+  onMention?: (recipientUserIds: string[], payload: CommentMentionPayload) => void;
+  onReply?: (recipientUserIds: string[], payload: CommentReplyPayload) => void;
+}
+
 export interface CollabEditorMountOptions {
   element: HTMLElement;
   source: CollabEditorSource;
   user: CollabEditorUser;
   readOnly?: boolean;
+  comments?: CollabEditorCommentsOptions;
   onStateChange?(state: CollabEditorState): void;
   onPresenceChange?(presence: CollabEditorPresence): void;
   onWriteRejected?(rejection: CollabEditorWriteRejection): void;
@@ -158,6 +208,12 @@ export interface CollabEditorHandle {
   setPresenceActive(active: boolean): void;
   flush(options?: { timeoutMs?: number }): Promise<CollabEditorFlushResult>;
   setReadOnly(readOnly: boolean): void;
+  /**
+   * Re-read `comments.canComment` and re-render if the answer changed. The
+   * bundle owns its own React root, so a host answer that resolves after mount
+   * reaches nothing until something renders again.
+   */
+  refreshCommentAccess(): void;
   markClean(): void;
   focus(): void;
   insertText(text: string): void;
