@@ -81,7 +81,8 @@ describe('useTrackerRows cell writes', () => {
     expect(updateTrackerItem).toHaveBeenCalledWith({
       itemId: 'item-1',
       updates: { points: 8 },
-      syncMode: 'local',
+      sharing: 'personal',
+      draftByDefault: false,
     });
 
     await act(async () => {
@@ -90,7 +91,8 @@ describe('useTrackerRows cell writes', () => {
     expect(updateTrackerItem).toHaveBeenLastCalledWith({
       itemId: 'item-1',
       updates: { labels: ['ui', 'sync'] },
-      syncMode: 'local',
+      sharing: 'personal',
+      draftByDefault: false,
     });
 
     await act(async () => {
@@ -99,7 +101,8 @@ describe('useTrackerRows cell writes', () => {
     expect(updateTrackerItem).toHaveBeenLastCalledWith({
       itemId: 'item-1',
       updates: { done: false },
-      syncMode: 'local',
+      sharing: 'personal',
+      draftByDefault: false,
     });
   });
 
@@ -119,7 +122,8 @@ describe('useTrackerRows cell writes', () => {
     expect(updateTrackerItem).toHaveBeenCalledWith({
       itemId: 'item-1',
       updates: { title: 'Renamed', points: 3 },
-      syncMode: 'local',
+      sharing: 'personal',
+      draftByDefault: false,
     });
   });
 
@@ -235,7 +239,8 @@ describe('useTrackerRows cell writes', () => {
     expect(updateTrackerItem).toHaveBeenCalledWith({
       itemId: 'collection-1',
       updates: { members: ['a'] },
-      syncMode: 'local',
+      sharing: 'personal',
+      draftByDefault: false,
     });
   });
 
@@ -290,12 +295,14 @@ describe('useTrackerRows cell writes', () => {
     expect(updateTrackerItem).toHaveBeenCalledWith({
       itemId: 'item-1',
       updates: { labels: [{ itemId: 'old' }] },
-      syncMode: 'local',
+      sharing: 'personal',
+      draftByDefault: false,
     });
     expect(updateTrackerItem).toHaveBeenCalledWith({
       itemId: 'item-3',
       updates: { title: 'Three' },
-      syncMode: 'local',
+      sharing: 'personal',
+      draftByDefault: false,
     });
 
     // The entry is consumed whole -- a second undo has nothing left to write.
@@ -383,7 +390,8 @@ describe('useTrackerRows cell writes', () => {
     expect(updateTrackerItem).toHaveBeenCalledWith({
       itemId: 'item-1',
       updates: { points: 1 },
-      syncMode: 'local',
+      sharing: 'personal',
+      draftByDefault: false,
     });
   });
 
@@ -426,7 +434,8 @@ describe('useTrackerRows cell writes', () => {
     expect(updateTrackerItem).toHaveBeenCalledWith({
       itemId: 'item-2',
       updates: { points: 1 },
-      syncMode: 'local',
+      sharing: 'personal',
+      draftByDefault: false,
     });
 
     // A rejected write is not an applied change, however it resolves: the IPC
@@ -479,7 +488,8 @@ describe('useTrackerRows cell writes', () => {
     expect(updateTrackerItem).toHaveBeenCalledWith({
       itemId: 'item-1',
       updates: { points: 1 },
-      syncMode: 'local',
+      sharing: 'personal',
+      draftByDefault: false,
     });
   });
 });

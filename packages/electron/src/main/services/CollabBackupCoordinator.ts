@@ -15,7 +15,7 @@ import { getDatabase } from '../database/initialize';
 import { getCollabSyncWsUrl } from '../utils/collabSyncUrl';
 import { logger } from '../utils/logger';
 import { findTeamForWorkspace, getOrgScopedJwt } from './TeamService';
-import { getEffectiveTrackerSyncPolicy, shouldSyncTrackerItem } from './TrackerPolicyService';
+import { getEffectiveTrackerSharingPolicy, shouldSyncTrackerItem } from './TrackerPolicyService';
 import {
   getCollabBackupService,
   type CollabBackupKind,
@@ -164,7 +164,7 @@ async function enumerateSweepItems(
       return row.sync_id != null || (row.sync_status != null && row.sync_status !== 'local');
     }
     return row.sync_id != null || (row.sync_status != null && row.sync_status !== 'local') || shouldSyncTrackerItem(
-      getEffectiveTrackerSyncPolicy(workspacePath, row.type),
+      getEffectiveTrackerSharingPolicy(workspacePath, row.type),
       data,
     );
   });

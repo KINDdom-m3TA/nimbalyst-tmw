@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   bindingRow: null as Record<string, unknown> | null,
-  sharedContent: new Uint8Array(),
+  sharedContent: new Uint8Array() as Uint8Array<ArrayBufferLike>,
   databaseQuery: vi.fn(),
   convertExportToFile: vi.fn(),
   createSnapshot: vi.fn(),
@@ -156,7 +156,7 @@ describe('pullFromSharedOrigin', () => {
     const sourcePath = path.join(workspacePath, relativePath);
     const original = 'local original';
     const previousShared = 'shared original';
-    mocks.sharedContent = new TextEncoder().encode('shared replacement') as Uint8Array;
+    mocks.sharedContent = new TextEncoder().encode('shared replacement');
     mocks.convertExportToFile.mockResolvedValue('shared replacement');
     await fs.writeFile(sourcePath, original);
     mocks.bindingRow = createBindingRow(
