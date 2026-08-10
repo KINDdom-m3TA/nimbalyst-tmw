@@ -41,6 +41,7 @@ import { TrackerViewTitle } from './TrackerViewTitle';
 import { TrackerActiveFilterPills } from './TrackerActiveFilterPills';
 import { TrackerFilterOmnibox } from './TrackerFilterOmnibox';
 import { TrackerSyncRejectionBanner } from './TrackerSyncRejectionBanner';
+import { TrackerSharingMigrationBanner } from './TrackerSharingMigrationBanner';
 import { ImportFromSourceDialog } from './ImportFromSourceDialog';
 import { TrackerDocumentView } from './TrackerDocumentView';
 import {
@@ -55,6 +56,8 @@ import {
 } from '../../store/atoms/trackers';
 import { activeTeamOrgIdAtom, buildTrackerDeepLink, buildTrackerDocumentDeepLink } from '../../store/atoms/collabDocuments';
 import { errorNotificationService } from '../../services/ErrorNotificationService';
+import { globalRegistry } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
+import { resolveTrackerWriteAccess } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerLifecycle';
 import { useTrackerBodyPrewarm } from '../../hooks/useTrackerBodyPrewarm';
 import { setSelectedWorkstreamAtom, sessionRegistryAtom, refreshSessionListAtom, initSessionList } from '../../store/atoms/sessions';
 import { trackerItemsMapAtom } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerDataAtoms';
@@ -111,6 +114,8 @@ interface TrackerMainViewProps {
   onViewModeChange: (mode: ViewMode) => void;
   onSwitchToFilesMode?: () => void;
   workspacePath?: string;
+  /** Team that owns this workspace's shared trackers, when there is one. */
+  teamName?: string | null;
   trackerTypes: TrackerDataModel[];
   onClearSidebarFilters: () => void;
   tagFilter: string[];
@@ -137,6 +142,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   onViewModeChange,
   onSwitchToFilesMode,
   workspacePath,
+  teamName,
   trackerTypes,
   onClearSidebarFilters,
   tagFilter,
@@ -347,6 +353,22 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
             icon: option.icon,
           });
         }
+      }
+
+      if (column.id === 'shared') {
+        // Draft/Published is a state you filter on ("show me my drafts"), not
+        // free text. The values are the publication states themselves, which is
+        // what getColumnValue('shared') returns.
+        return {
+          id: column.id,
+          label: column.label,
+          type: 'select',
+          group: 'system',
+          options: [
+            { value: 'draft', label: 'Draft' },
+            { value: 'published', label: 'Published' },
+          ],
+        };
       }
 
       if (column.id === 'type') {
@@ -801,8 +823,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
 
   // Pre-warm body Y.Docs for visible team-synced items so detail-open
   // hits a warm WebSocket + Y.Doc state (phase 4a of the tracker sync
-  // redesign, D5). Filter to types whose syncMode is not 'local' --
-  // local-only items have no DocumentRoom and `resolveCollabConfigForUri`
+  // redesign, D5). Filter to team trackers; personal items have no DocumentRoom and `resolveCollabConfigForUri`
   // would no-op for them. We also gate on a workspace-team check to
   // avoid 50 wasted IPC round-trips for workspaces without a team.
   const [hasTeam, setHasTeam] = useState(false);
@@ -827,7 +848,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   const teamSyncedTypes = useMemo(() => {
     const out = new Set<string>();
     for (const t of trackerTypes) {
-      if (t.sync?.mode && t.sync.mode !== 'local') out.add(t.type);
+      if (t.sharing === 'team') out.add(t.type);
     }
     return out;
   }, [trackerTypes]);
@@ -982,6 +1003,12 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   }, []);
 
   const handleNewItem = useCallback((type: string) => {
+    // An archived tracker keeps everything it has and gains nothing more.
+    const writeAccess = resolveTrackerWriteAccess(globalRegistry.get(type));
+    if (!writeAccess.canWrite) {
+      errorNotificationService.showInfo('Archived tracker', writeAccess.readOnlyReason ?? '', { duration: 4000 });
+      return;
+    }
     setQuickAddType(type);
   }, []);
 
@@ -1003,7 +1030,6 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
       const statusFieldName = tracker?.roles?.workflowStatus ?? 'status';
       const statusField = tracker?.fields.find(f => f.name === statusFieldName);
       const defaultStatus = (statusField?.default as string) || 'to-do';
-      const syncMode = tracker?.sync?.mode || 'local';
 
       const result = await window.electronAPI.documentService.createTrackerItem({
         id,
@@ -1012,7 +1038,8 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
         status: defaultStatus,
         priority,
         workspace: workspacePath,
-        syncMode,
+        sharing: tracker?.sharing ?? 'personal',
+        draftByDefault: tracker?.draftByDefault ?? false,
       });
 
       if (!result.success) {
@@ -1210,6 +1237,8 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
     <>
       {/* Sync rejection banner -- key rotation / stale-envelope feedback */}
       <TrackerSyncRejectionBanner workspacePath={workspacePath} />
+      {/* One-time summary of what the sharing-model upgrade moved (PRD D6) */}
+      <TrackerSharingMigrationBanner workspacePath={workspacePath} teamName={teamName} />
       {/* Toolbar */}
       <div className="tracker-toolbar flex items-center gap-2 px-3 py-2 border-b border-nim bg-nim shrink-0">
         {/* Title */}

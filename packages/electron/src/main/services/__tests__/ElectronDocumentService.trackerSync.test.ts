@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 /**
  * Tests for tracker sync integration in ElectronDocumentService.
  *
@@ -22,6 +24,8 @@ const {
   mockIsTrackerSyncActive,
   mockGetWorkspaceState,
   mockGlobalRegistryGet,
+  mockIpcHandlers,
+  mockSafeHandle,
 } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockSyncTrackerItem: vi.fn(),
@@ -29,7 +33,13 @@ const {
   mockIsTrackerSyncActive: vi.fn(),
   mockGetWorkspaceState: vi.fn((..._args: any[]) => ({})),
   mockGlobalRegistryGet: vi.fn((..._args: any[]) => undefined as any),
+  mockIpcHandlers: new Map<string, (...args: any[]) => any>(),
+  mockSafeHandle: vi.fn(),
 }));
+
+mockSafeHandle.mockImplementation((channel: string, handler: (...args: any[]) => any) => {
+  mockIpcHandlers.set(channel, handler);
+});
 
 // Mock the database before importing ElectronDocumentService
 vi.mock('../../database/PGLiteDatabaseWorker', () => ({
@@ -50,13 +60,19 @@ vi.mock('../../utils/store', () => ({
   isAnalyticsEnabled: () => true,
 }));
 
+vi.mock('../../utils/ipcRegistry', () => ({
+  safeHandle: mockSafeHandle,
+  safeOn: vi.fn(),
+}));
+
 vi.mock('@nimbalyst/runtime/plugins/TrackerPlugin/models/TrackerDataModel', () => ({
   globalRegistry: {
     get: mockGlobalRegistryGet,
   },
 }));
 
-import { ElectronDocumentService } from '../ElectronDocumentService';
+import { trackerItemToRecord } from '@nimbalyst/runtime/core/TrackerRecord';
+import { ElectronDocumentService, setupDocumentServiceHandlers } from '../ElectronDocumentService';
 
 const WORKSPACE = '/Users/test/my-project';
 
@@ -98,6 +114,8 @@ function makeTrackerRow(overrides: Record<string, any> = {}) {
 
 let tempDir: string;
 let service: ElectronDocumentService;
+
+setupDocumentServiceHandlers(() => service);
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -183,11 +201,11 @@ describe('deleteTrackerItem sync integration', () => {
 describe('archiveTrackerItem sync integration', () => {
   // Archive now pushes to the room only for share-eligible items (NIM-880):
   // syncTrackerItem itself does no policy check, so the call site gates on the
-  // per-item policy. Use a shared-mode type here -- the realistic "archive
-  // propagates to teammates" scenario. (An unflagged hybrid/local item correctly
+  // per-item policy. Use a published-by-default team tracker here -- the realistic "archive
+  // propagates to teammates" scenario. (A draft/personal item correctly
   // does NOT push; covered in ElectronDocumentService.planTransition.test.ts.)
   beforeEach(() => {
-    mockGlobalRegistryGet.mockReturnValue({ sync: { mode: 'shared', scope: 'project' } });
+    mockGlobalRegistryGet.mockReturnValue({ sharing: 'team', draftByDefault: false });
   });
 
   it('should call syncTrackerItem when archiving with sync active', async () => {
@@ -243,20 +261,16 @@ describe('archiveTrackerItem sync integration', () => {
 });
 
 describe('createTrackerItem sync status policy', () => {
-  it('stores local sync_status for local policy items', async () => {
-    mockGetWorkspaceState.mockReturnValue({
-      trackerSyncPolicies: { bug: 'local' },
-    });
+  it('stores local sync_status for personal tracker items', async () => {
     mockGlobalRegistryGet.mockReturnValue({
-      sync: { mode: 'shared', scope: 'project' },
+      sharing: 'personal',
+      draftByDefault: false,
     });
 
     mockIsTrackerSyncActive.mockReturnValue(false);
 
     mockQuery.mockResolvedValueOnce({ rows: [{ min_key: null }] }); // kanbanSortOrder MIN query
     mockQuery.mockResolvedValueOnce({ rows: [] }); // INSERT
-    mockQuery.mockResolvedValueOnce({ rows: [{ max_num: null }] }); // issue-key MAX query
-    mockQuery.mockResolvedValueOnce({ rows: [] }); // issue-key UPDATE
     mockQuery.mockResolvedValueOnce({ rows: [makeTrackerRow({ id: 'bug-local', sync_status: 'local' })] }); // SELECT
 
     await service.createTrackerItem({
@@ -273,22 +287,17 @@ describe('createTrackerItem sync status policy', () => {
     expect(mockQuery.mock.calls[1]?.[1]?.[5]).toBe('local');
   });
 
-  it('stores pending sync_status for shared policy items', async () => {
-    mockGetWorkspaceState.mockReturnValue({
-      trackerSyncPolicies: { bug: 'shared' },
-    });
+  it('stores pending sync_status for published team tracker items', async () => {
     mockGlobalRegistryGet.mockReturnValue({
-      sync: { mode: 'local', scope: 'project' },
+      sharing: 'team',
+      draftByDefault: false,
     });
 
-    // Sync is active, so the create takes a provisional LC-### key rather than
-    // minting into the room's namespace.
+    // The room will assign the key after this published item is synced.
     mockIsTrackerSyncActive.mockReturnValue(true);
 
     mockQuery.mockResolvedValueOnce({ rows: [{ min_key: null }] }); // kanbanSortOrder MIN query
     mockQuery.mockResolvedValueOnce({ rows: [] }); // INSERT
-    mockQuery.mockResolvedValueOnce({ rows: [] }); // existing local-key scan
-    mockQuery.mockResolvedValueOnce({ rows: [] }); // issue-key UPDATE
     mockQuery.mockResolvedValueOnce({ rows: [makeTrackerRow({ id: 'bug-shared', sync_status: 'pending' })] }); // SELECT
 
     await service.createTrackerItem({
@@ -303,6 +312,53 @@ describe('createTrackerItem sync status policy', () => {
     // INSERT is the second query (index 1) after kanbanSortOrder; sync_status
     // is the 6th INSERT param ($6) -- after id, type, type_tags, data, workspace.
     expect(mockQuery.mock.calls[1]?.[1]?.[5]).toBe('pending');
+  });
+});
+
+describe('updateTrackerItem sync payload', () => {
+  it('pushes an edited nested field value when the local schema does not recognize it as a relationship', async () => {
+    const staleValue = [{ itemId: 'bug-stale', relationshipTypeKey: 'depends-on' }];
+    const editedValue = [{ itemId: 'bug-new', relationshipTypeKey: 'depends-on' }];
+    let row = makeTrackerRow({
+      workspace: tempDir,
+      data: {
+        title: 'Test bug',
+        status: 'to-do',
+        activity: [],
+        customFields: { dependsOn: staleValue },
+      },
+    });
+
+    mockGlobalRegistryGet.mockReturnValue({
+      sharing: 'team',
+      draftByDefault: false,
+      fields: [{ name: 'title', type: 'string' }],
+    });
+    mockIsTrackerSyncActive.mockReturnValue(true);
+    mockSyncTrackerItem.mockResolvedValue(undefined);
+    mockQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim();
+      if (normalized.startsWith('SELECT')) return { rows: [row] };
+      if (normalized.startsWith('UPDATE tracker_items SET data = $1')) {
+        row = { ...row, data: params?.[0] as string };
+        return { rows: [row] };
+      }
+      throw new Error(`Unexpected query in test: ${normalized}`);
+    });
+
+    const updateHandler = mockIpcHandlers.get('document-service:update-tracker-item');
+    expect(updateHandler).toBeDefined();
+    const result = await updateHandler!({}, {
+      itemId: 'bug-001',
+      updates: { dependsOn: editedValue },
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockSyncTrackerItem).toHaveBeenCalledTimes(1);
+    const pushedPayload = {
+      fields: trackerItemToRecord(mockSyncTrackerItem.mock.calls[0][0]).fields,
+    };
+    expect(pushedPayload.fields.dependsOn).toEqual(editedValue);
   });
 });
 

@@ -32,6 +32,36 @@ export function isLocalIssueKey(issueKey: string | null | undefined): boolean {
   return typeof issueKey === 'string' && LOCAL_ISSUE_KEY_PATTERN.test(issueKey.trim());
 }
 
+/**
+ * How a key should be described to an agent or a user.
+ *
+ * A provisional key is not just "not final" -- it is actively unsafe to hold
+ * onto. `nextLocalIssueNumber` derives the next suffix by scanning rows whose
+ * key still starts with `LC-`, so once the ack rewrites `LC-2` to `NIM-2615`
+ * nothing matches and the counter resets: the next create is `LC-2` again.
+ * A caller that stashed the first `LC-2` and later resolves it lands on a
+ * different item entirely.
+ */
+export function describeIssueKey(
+  issueKey: string | null | undefined,
+  itemId: string,
+): { ref: string; isProvisional: boolean; caveat: string | null } {
+  if (!issueKey) {
+    return { ref: itemId, isProvisional: false, caveat: null };
+  }
+  if (!isLocalIssueKey(issueKey)) {
+    return { ref: issueKey, isProvisional: false, caveat: null };
+  }
+  return {
+    ref: `${issueKey} (provisional)`,
+    isProvisional: true,
+    caveat:
+      `${issueKey} is a local placeholder, NOT this item's issue key. The server assigns the real key. ` +
+      `Re-read the item by its ID (${itemId}) to get it. Do not put ${issueKey} in commit messages, ` +
+      `links, or references -- it does not resolve, and it is later reused by a different item.`,
+  };
+}
+
 /** Numeric suffix of a local key, or null when it is not one. */
 export function parseLocalIssueNumber(issueKey: string | null | undefined): number | null {
   if (typeof issueKey !== 'string') return null;

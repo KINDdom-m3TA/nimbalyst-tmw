@@ -165,9 +165,9 @@ function TrackerBodyHarness({ focused = false }: { focused?: boolean }): React.R
     itemId: ITEM_ID,
     title: 'NIM-TEST',
     workspacePath: '/workspace',
-    syncMode: 'shared',
+    sharing: 'team',
     teamOrgId: 'org-1',
-    itemShared: true,
+    itemPublished: true,
   });
 
   const config = useMemo((): EditorConfig | null => {

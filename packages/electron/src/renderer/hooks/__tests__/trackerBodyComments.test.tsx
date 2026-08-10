@@ -116,9 +116,9 @@ function TrackerBodyEditor(): React.ReactElement {
     itemId: ITEM_ID,
     title: 'NIM-COMMENT',
     workspacePath: '/workspace',
-    syncMode: 'shared',
+    sharing: 'team',
     teamOrgId: 'org-1',
-    itemShared: true,
+    itemPublished: true,
   });
 
   const config = useMemo<EditorConfig | null>(() => {

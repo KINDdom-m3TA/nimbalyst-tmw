@@ -218,11 +218,13 @@ Two-tier architecture — `ai_agent_messages` (raw append-only log, sole source 
 
 ## Tracker Workflows
 
+Tracker sharing model: **a tracker is personal or it is the team's; if it is the team's, the server owns it — schema and items together — and `.nimbalyst/trackers/*.yaml` is the local copy.** Read [TRACKER_SCHEMA_SHARING.md](./docs/TRACKER_SCHEMA_SHARING.md) before changing a tracker schema or sharing and numbering behavior.
+
 When choosing between alternatives (libraries, patterns, deciding NOT to do something), log a **decision** tracker item. When fixing a bug, ensure a **bug** tracker item exists before writing fix code. See [TRACKER_WORKFLOWS.md](./docs/TRACKER_WORKFLOWS.md) for the exact `tracker_create` calls and lifecycle.
 
-### `NIM-###` Keys Are Workspace-Local — Cite GitHub Issues in Source
+### `NIM-###` Keys Are Tracker-Scoped — Cite GitHub Issues in Source
 
-**`NIM-###` issue keys are internal to a Nimbalyst workspace's tracker. They do not resolve anywhere else** — every install numbers its own items, so the same key points at a different item in every workspace. In a public repo they are worse than no reference: a reader who looks one up lands on an unrelated item and believes it.
+**`NIM-###` issue keys are scoped to the tracker room for a Nimbalyst workspace or team project. They do not resolve anywhere else** — peer installs in the same room share an identity, but the same key can point at a different item in an unrelated workspace. In a public repo they are worse than no reference: a reader who looks one up can land on an unrelated item and believe it is authoritative.
 
 - **Code comments and runtime log strings** reference the GitHub issue: `// #1146: typed workstream containers are always roots`. If there is no GitHub issue, write the reason in prose instead of citing a key.
 - **Commit messages** keep `Fixes NIM-123` — that trailer is what `CommitTrackerLinker` uses to auto-close the item, and it never ships inside the product. Add `Fixes #123` alongside it when a GitHub issue also exists.

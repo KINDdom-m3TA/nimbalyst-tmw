@@ -610,6 +610,17 @@ interface ElectronAPI {
     rename: (oldPath: string, newName: string) => Promise<{ success: boolean; error?: string; newPath?: string }>;
   };
 
+  // Tracker lifecycle: personal -> team promotion (one-way) and archive.
+  trackerLifecycle: {
+    promoteToTeam: (payload: { workspacePath: string; type: string }) => Promise<{
+      success: boolean;
+      promotion?: { publishedCount: number; assignedKeyCount: number; pendingKeyCount: number };
+      error?: string;
+    }>;
+    setArchived: (payload: { workspacePath: string; type: string; archived: boolean }) =>
+      Promise<{ success: boolean; error?: string }>;
+  };
+
   // Document Service
   documentService: {
     list: () => Promise<any[]>;
@@ -631,7 +642,8 @@ interface ElectronAPI {
       owner?: string;
       tags?: string[];
       customFields?: Record<string, any>;
-      syncMode?: string;
+      sharing?: 'personal' | 'team';
+      draftByDefault?: boolean;
       content?: any;
       source?: string;
       sourceRef?: string;
@@ -639,11 +651,12 @@ interface ElectronAPI {
     updateTrackerItem: (payload: {
       itemId: string;
       updates: Record<string, any>;
-      syncMode?: string;
+      sharing?: 'personal' | 'team';
+      draftByDefault?: boolean;
     }) => Promise<{ success: boolean; item?: any; error?: string }>;
-    setTrackerItemShared: (payload: {
+    setTrackerItemPublished: (payload: {
       itemId: string;
-      shared: boolean;
+      published: boolean;
     }) => Promise<{ success: boolean; item?: any; error?: string }>;
     migrateSharedFrontmatterIds: (payload?: { dryRun?: boolean }) => Promise<{
       success: boolean;

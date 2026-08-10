@@ -88,6 +88,7 @@ export function useTrackerBodyPrewarm({
           orgId: config.orgId,
           userId: config.userId,
           documentId: config.documentId,
+          workspacePath,
           createWebSocket: config.createWebSocket,
         };
       };

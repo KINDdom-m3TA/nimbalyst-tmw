@@ -57,6 +57,7 @@ import { getTeamSyncProviderForScopeKey } from '../store/atoms/collabDocuments';
 import { buildCollabUri } from '../utils/collabUri';
 import { notifyDocumentCommentRecipients } from '../services/documentCommentNotifier';
 import { trackerContentCollabKey } from './trackerContentCollabKey';
+import type { TrackerSharing } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/TrackerDataModel';
 
 const TRACKER_CONTENT_TTL_MS = String(90 * 24 * 60 * 60 * 1000);
 
@@ -68,7 +69,7 @@ interface UseTrackerContentCollabOptions {
   itemId: string;
   title?: string;
   workspacePath?: string;
-  syncMode: string;
+  sharing: TrackerSharing;
   /**
    * orgId of the team that owns this workspace.
    * - `undefined`: the parent is still resolving team membership; the hook
@@ -80,14 +81,12 @@ interface UseTrackerContentCollabOptions {
    */
   teamOrgId: string | null | undefined;
   /**
-   * Whether THIS item is shared with the team. Only consulted for `hybrid`
-   * trackers, where sharing is per-item: an unshared hybrid item must NOT
+   * Whether THIS item is published to the team. A draft must NOT
    * connect to its `tracker-content/<id>` room (that would push its body to the
-   * server). `shared`-mode types ignore this (every item is shared); `local`
-   * types never collaborate. Defaults to treating the item as shared so callers
+   * server). Personal trackers never collaborate. Defaults to published so callers
    * that don't pass it keep the prior always-collaborative behavior.
    */
-  itemShared?: boolean;
+  itemPublished?: boolean;
 }
 
 interface TrackerContentCollabResult {
@@ -144,16 +143,12 @@ export function useTrackerContentCollab({
   itemId,
   title,
   workspacePath,
-  syncMode,
+  sharing,
   teamOrgId,
-  itemShared = true,
+  itemPublished = true,
 }: UseTrackerContentCollabOptions): TrackerContentCollabResult {
-  const isTeamSynced = syncMode !== 'local';
-  // Per-item gate: `shared` types always collaborate; `hybrid` types only
-  // collaborate when THIS item is shared (an unshared local plan stays on the
-  // PGLite editor and never pushes its body to the room). Sharing flips this
-  // true, which remounts the editor in collaborative mode and seeds the room.
-  const perItemShareSatisfied = syncMode === 'shared' || (syncMode === 'hybrid' && itemShared);
+  const isTeamSynced = sharing === 'team';
+  const perItemShareSatisfied = itemPublished;
   // Collab is only attempted for team-synced trackers in workspaces that
   // actually have a team. Without a team there is nothing to collaborate
   // with, so we skip the document-sync IPC entirely.
@@ -249,6 +244,10 @@ export function useTrackerContentCollab({
         userName: config.userName,
         userEmail: config.userEmail,
         documentId: config.documentId,
+        // Stamped so an out-of-band write (an agent body replacement routed in
+        // from the main process) can tell this entry apart from a same-named
+        // item in another project open in the same window.
+        workspacePath,
         createWebSocket: config.createWebSocket,
         onContentChanged: (yDoc) => {
           const adapter = getCollabContentAdapter('markdown');

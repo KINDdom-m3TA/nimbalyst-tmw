@@ -165,11 +165,11 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
           });
         } else if (!record.system.documentPath || record.source === 'native') {
           const tracker = globalRegistry.get(record.primaryType);
-          const syncMode = tracker?.sync?.mode || 'local';
           await window.electronAPI.documentService.updateTrackerItem({
             itemId: record.id,
             updates: otherUpdates,
-            syncMode,
+            sharing: tracker?.sharing ?? 'personal',
+            draftByDefault: tracker?.draftByDefault ?? false,
           });
         }
       }
@@ -177,11 +177,11 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
       // Sort order always goes through the DB path
       if (kanbanSortOrder !== undefined) {
         const tracker = globalRegistry.get(record.primaryType);
-        const syncMode = tracker?.sync?.mode || 'local';
         await window.electronAPI.documentService.updateTrackerItem({
           itemId: record.id,
           updates: { kanbanSortOrder },
-          syncMode,
+          sharing: tracker?.sharing ?? 'personal',
+          draftByDefault: tracker?.draftByDefault ?? false,
         });
       }
     } catch (err) {

@@ -873,17 +873,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       owner?: string;
       tags?: string[];
       customFields?: Record<string, any>;
-      syncMode?: string;
+      sharing?: 'personal' | 'team';
+      draftByDefault?: boolean;
     }) => ipcRenderer.invoke('document-service:create-tracker-item', item) as Promise<{ success: boolean; item?: any; error?: string }>,
     updateTrackerItem: (payload: {
       itemId: string;
       updates: Record<string, any>;
-      syncMode?: string;
+      sharing?: 'personal' | 'team';
+      draftByDefault?: boolean;
     }) => ipcRenderer.invoke('document-service:update-tracker-item', payload) as Promise<{ success: boolean; item?: any; error?: string }>,
-    setTrackerItemShared: (payload: {
+    setTrackerItemPublished: (payload: {
       itemId: string;
-      shared: boolean;
-    }) => ipcRenderer.invoke('document-service:set-tracker-item-shared', payload) as Promise<{ success: boolean; item?: any; error?: string }>,
+      published: boolean;
+    }) => ipcRenderer.invoke('document-service:set-tracker-item-published', payload) as Promise<{ success: boolean; item?: any; error?: string }>,
     migrateSharedFrontmatterIds: (payload?: { dryRun?: boolean }) =>
       ipcRenderer.invoke('document-service:migrate-shared-frontmatter-ids', payload) as Promise<{
         success: boolean;
@@ -983,6 +985,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('tracker-schema:changed', handler);
       return () => ipcRenderer.removeListener('tracker-schema:changed', handler);
     },
+  },
+
+  // Tracker lifecycle: personal -> team promotion (one-way) and archive.
+  trackerLifecycle: {
+    promoteToTeam: (payload: { workspacePath: string; type: string }) =>
+      ipcRenderer.invoke('tracker-lifecycle:promote', payload) as Promise<{
+        success: boolean;
+        promotion?: { publishedCount: number; assignedKeyCount: number; pendingKeyCount: number };
+        error?: string;
+      }>,
+    setArchived: (payload: { workspacePath: string; type: string; archived: boolean }) =>
+      ipcRenderer.invoke('tracker-lifecycle:set-archived', payload) as Promise<{ success: boolean; error?: string }>,
   },
 
   // Plaintext recovery copies for collaborative content

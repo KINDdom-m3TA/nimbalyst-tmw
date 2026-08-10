@@ -21,17 +21,11 @@ export type CompletionSoundType = 'chime' | 'bell' | 'pop' | 'alert' | 'custom' 
 export type ReleaseChannel = 'stable' | 'alpha';
 export type PreferredTerminalShell = 'auto' | 'pwsh' | 'powershell' | 'git-bash' | 'wsl' | 'cmd';
 export type WorkspaceFileTreeFilter = 'all' | 'markdown' | 'known' | 'git-uncommitted' | 'git-worktree' | 'ai-read' | 'ai-written';
-export type TrackerSyncModeSetting = 'local' | 'shared' | 'hybrid';
 export type AttachmentStagingMode = 'temp' | 'workspace' | 'custom';
 export interface AttachmentStagingConfig {
   mode: AttachmentStagingMode;
   customPath?: string;
 }
-export interface TrackerSyncPolicySetting {
-  mode: TrackerSyncModeSetting;
-  scope?: 'project' | 'workspace';
-}
-
 export interface TeamManagementWindowState {
   bounds: { x: number; y: number; width: number; height: number };
   maximized: boolean;
@@ -506,7 +500,33 @@ export interface WorkspaceState {
     mergedUpdateBase64: string;
     updatedAt: number;
   }>;
-  trackerSyncPolicies?: Record<string, TrackerSyncModeSetting | TrackerSyncPolicySetting>;
+  /** Structured one-time summary consumed by the post-migration UI in a later slice. */
+  trackerSharingMigration?: {
+    version: 1;
+    migratedAt: number;
+    entries: Array<{
+      trackerType: string;
+      legacySchemaMode: 'local' | 'shared' | 'hybrid';
+      legacyItemMode: 'local' | 'shared' | 'hybrid' | null;
+      sharing: 'personal' | 'team';
+      draftByDefault: boolean;
+      diverged: boolean;
+    }>;
+    divergences: Array<{
+      trackerType: string;
+      legacySchemaMode: 'local' | 'shared' | 'hybrid';
+      legacyItemMode: 'local' | 'shared' | 'hybrid' | null;
+      sharing: 'personal' | 'team';
+      draftByDefault: boolean;
+      diverged: boolean;
+    }>;
+  };
+  /**
+   * When the user acknowledged the post-migration summary, compared against
+   * `trackerSharingMigration.migratedAt`. Kept outside the report because the
+   * report is rewritten until the legacy per-machine policies are finalized.
+   */
+  trackerSharingMigrationSeenAt?: number;
   // Per-project opt-out for agent tracker tools. When false, McpConfigService
   // omits the `nimbalyst-trackers` MCP server so the agent gets no tracker_*
   // tools in this project. Defaults to enabled (undefined === true).
@@ -707,6 +727,8 @@ function createDefaultWorkspaceState(workspacePath: string): WorkspaceState {
       customFolders: [],
     },
     collabPendingUpdates: {},
+    trackerSharingMigration: undefined,
+    trackerSharingMigrationSeenAt: undefined,
     localOrgBinding: undefined,
     issueKeyPrefix: deriveIssueKeyPrefix(workspacePath),
     lastUpdated: Date.now(),

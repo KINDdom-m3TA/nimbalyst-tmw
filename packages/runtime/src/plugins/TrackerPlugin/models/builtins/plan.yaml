@@ -8,9 +8,8 @@ modes:
   inline: true
   fullDocument: true
 
-sync:
-  mode: hybrid
-  scope: project
+sharing: team
+draftByDefault: true
 
 idPrefix: pln
 idFormat: ulid

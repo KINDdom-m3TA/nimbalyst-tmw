@@ -40,7 +40,6 @@ import type {
   TrackerTypeSummary,
   UpdateInput,
 } from './types.js';
-import { deriveIssueKeyPrefix, LOCAL_ISSUE_KEY_PREFIX } from './issueKeyPrefix.js';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 250;
@@ -414,26 +413,6 @@ export class DirectGateway implements TrackerGateway {
       .get({ ref: reference });
   }
 
-  /** Derive the prefix from an existing key, else from the project name. */
-  private issueKeyPrefix(db: DB, workspace: string): string {
-    try {
-      const row = db
-        .prepare(
-          `SELECT issue_key FROM tracker_items
-           WHERE workspace = ? AND issue_key IS NOT NULL AND issue_key != ''
-           ORDER BY issue_number DESC LIMIT 1`,
-        )
-        .get(workspace) as { issue_key: string } | undefined;
-      if (row?.issue_key) {
-        const idx = row.issue_key.lastIndexOf('-');
-        if (idx > 0) return row.issue_key.slice(0, idx);
-      }
-    } catch {
-      /* fall through to default */
-    }
-    return deriveIssueKeyPrefix(workspace);
-  }
-
   /** Mark a row pending iff it is already part of the sync set. Local-only items
    *  stay local (new items drain via the app's sync_id-IS-NULL backfill). */
   private markPendingIfSyncEligible(db: DB, row: any): void {
@@ -550,11 +529,11 @@ export class DirectGateway implements TrackerGateway {
     this.txn((db) => {
       db.prepare(
         `INSERT INTO tracker_items (
-          id, type, type_tags, data, workspace, document_path, line_number,
+          id, issue_number, issue_key, type, type_tags, data, workspace, document_path, line_number,
           created, updated, last_indexed, sync_status, content, archived,
           source, source_ref, body_version
         ) VALUES (
-          @id, @type, @typeTags, @data, @workspace, '', NULL,
+          @id, NULL, NULL, @type, @typeTags, @data, @workspace, '', NULL,
           @created, @updated, @lastIndexed, 'local', @content, 0,
           'native', NULL, @bodyVersion
         )`,
@@ -570,51 +549,6 @@ export class DirectGateway implements TrackerGateway {
         content: contentJson,
         bodyVersion,
       });
-
-      // Assign an issue key. In a workspace a tracker room owns, only the room
-      // may allocate a real issue number -- the CLI's rows drain through the
-      // app's sync_id-IS-NULL backfill, so a locally minted NIM key here would
-      // land in the room as a guess and diverge from what other members see.
-      // Those rows get a provisional LC-### key instead, which the ack
-      // replaces.
-      const roomOwned = db
-        .prepare(
-          `SELECT 1 FROM tracker_items
-           WHERE workspace = ? AND (sync_status = 'synced' OR sync_id IS NOT NULL)
-           LIMIT 1`,
-        )
-        .get(workspace) !== undefined;
-
-      if (roomOwned) {
-        const localRows = db
-          .prepare(
-            `SELECT issue_key AS k FROM tracker_items
-             WHERE workspace = ? AND issue_key LIKE '${LOCAL_ISSUE_KEY_PREFIX}-%'`,
-          )
-          .all(workspace) as { k: string }[];
-        let maxLocal = 0;
-        for (const row of localRows) {
-          const suffix = Number(row.k.slice(LOCAL_ISSUE_KEY_PREFIX.length + 1));
-          if (Number.isSafeInteger(suffix) && suffix > maxLocal) maxLocal = suffix;
-        }
-        db.prepare(`UPDATE tracker_items SET issue_key = ? WHERE id = ?`).run(
-          `${LOCAL_ISSUE_KEY_PREFIX}-${maxLocal + 1}`,
-          id,
-        );
-      } else {
-        // Solo workspace: no counterparty to disagree with. NULL issue_number
-        // on the new row is ignored by MAX, so this picks the next number.
-        const prefix = this.issueKeyPrefix(db, workspace);
-        const maxRow = db
-          .prepare(`SELECT MAX(issue_number) AS m FROM tracker_items WHERE workspace = ?`)
-          .get(workspace) as { m: number | null };
-        const nextNum = (maxRow?.m ?? 0) + 1;
-        db.prepare(`UPDATE tracker_items SET issue_number = ?, issue_key = ? WHERE id = ?`).run(
-          nextNum,
-          `${prefix}-${nextNum}`,
-          id,
-        );
-      }
 
       if (description && bodyVersion > 0) {
         db.prepare(

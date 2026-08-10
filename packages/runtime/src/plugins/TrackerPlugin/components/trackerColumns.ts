@@ -12,7 +12,7 @@ import type { TrackerSchemaRole, FieldDefinition } from '../models/TrackerDataMo
 import { globalRegistry } from '../models';
 import { defaultTrackerTypeColor, defaultTrackerTypeIcon } from '../models/trackerTypeIdentity';
 import { isDateOnlyValue, parseDate } from '../models/dateUtils';
-import { resolveRoleFieldName, getFieldByRole, getItemShareState } from '../trackerRecordAccessors';
+import { resolveRoleFieldName, getFieldByRole, getItemPublicationState } from '../trackerRecordAccessors';
 import { resolveCellEditor, READONLY_STRUCTURAL_COLUMNS, type CellEditorKind } from './trackerCellEditors';
 
 // ============================================================================
@@ -71,7 +71,9 @@ const STRUCTURAL_COLUMNS: TrackerColumnDef[] = [
   { id: 'createdBy', label: 'Created by', width: 140, minWidth: 100, sortable: true, render: 'avatar', defaultVisible: false, builtin: true, editable: false, edit: 'readonly' },
   { id: 'updatedBy', label: 'Updated by', width: 140, minWidth: 100, sortable: true, render: 'avatar', defaultVisible: false, builtin: true, editable: false, edit: 'readonly' },
   { id: 'module', label: 'Source', width: 150, minWidth: 100, sortable: true, render: 'module', defaultVisible: false, builtin: true, editable: false, edit: 'readonly' },
-  { id: 'shared', label: 'Shared', width: 90, minWidth: 70, sortable: true, render: 'badge', defaultVisible: false, builtin: true, editable: false, edit: 'readonly' },
+  // Label is the product vocabulary (Draft/Published); the id stays `shared`
+  // so saved views and typed `shared:` filter tokens keep resolving.
+  { id: 'shared', label: 'Publication', width: 90, minWidth: 70, sortable: true, render: 'badge', defaultVisible: false, builtin: true, editable: false, edit: 'readonly' },
 ];
 
 /**
@@ -398,7 +400,7 @@ export function getCellValue(record: TrackerRecord, columnId: string): any {
     }
     case 'archived': return record.archived;
     case 'module': return record.system.documentPath;
-    case 'shared': return getItemShareState(record);
+    case 'shared': return getItemPublicationState(record);
     default: return record.fields[columnId];
   }
 }

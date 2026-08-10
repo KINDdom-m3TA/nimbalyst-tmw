@@ -29,7 +29,7 @@
  *   specs drive tracker sync through it.
  */
 
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, dialog } from 'electron';
 import {
   TrackerSyncEngine,
   applyLabelDiff,
@@ -76,9 +76,9 @@ import {
   registerTrackerSavedViewFlushHandler,
 } from './TrackerSavedViewService';
 import { windows, windowStates } from '../window/windowState';
-import { getEffectiveTrackerSyncPolicy, decideBackfillAction } from './TrackerPolicyService';
+import { getEffectiveTrackerSharingPolicy, decideBackfillAction } from './TrackerPolicyService';
 import { rowToTrackerItem } from '../mcp/tools/trackerToolHandlers';
-import { getWorkspaceState } from '../utils/store';
+import { getWorkspaceState, updateWorkspaceState } from '../utils/store';
 import { AnalyticsService } from './analytics/AnalyticsService';
 import { sendTeamAnalyticsEvent } from './analytics/TeamAnalytics';
 import { CollaborationHealthAttemptTracker } from '../../shared/analytics/collaborationHealth';
@@ -153,6 +153,9 @@ const inflightInits = new Map<string, Promise<void>>();
 type StatusListener = (status: TrackerSyncStatus) => void;
 const statusListeners = new Set<StatusListener>();
 
+type AppliedItemListener = (workspacePath: string, applied: AppliedTrackerItem) => void;
+const appliedItemListeners = new Set<AppliedItemListener>();
+
 function notifyStatus(status: TrackerSyncStatus): void {
   for (const cb of statusListeners) {
     try { cb(status); } catch (err) { logger.main.warn('[TrackerSyncManager] status listener error:', err); }
@@ -200,6 +203,20 @@ export function onTrackerSyncStatusChange(listener: StatusListener): () => void 
 
 export function getTrackerSyncStatus(): TrackerSyncStatus {
   return currentAggregateStatus();
+}
+
+/**
+ * Observe items as the room acks them, from inside the main process.
+ *
+ * `emitItemApplied` already has the server-assigned `issueKey` in hand but only
+ * fans it out over IPC, which is useless to a main-process caller. The MCP
+ * publish/create path needs it: a published item has no key until the room
+ * assigns one, and main-process callers need to report that assignment without
+ * inventing a client-side placeholder.
+ */
+export function onTrackerItemApplied(listener: AppliedItemListener): () => void {
+  appliedItemListeners.add(listener);
+  return () => appliedItemListeners.delete(listener);
 }
 
 function currentAggregateStatus(): TrackerSyncStatus {
@@ -371,7 +388,14 @@ async function doInitializeTrackerSync(workspacePath: string): Promise<void> {
       if (entry) {
         entry.config = roomConfig;
       }
+      updateWorkspaceState(workspacePath, state => {
+        state.issueKeyPrefix = roomConfig.issueKeyPrefix;
+      });
       broadcastToAllWindows('tracker-sync:config-changed', { workspacePath, config: roomConfig });
+    },
+    onServerError: (error) => {
+      logger.main.warn('[TrackerSyncManager] server diagnostic for', workspacePath, 'code:', error.code, 'message:', error.message);
+      broadcastToAllWindows('tracker-sync:config-error', { workspacePath, error });
     },
     onRejection: (rejection) => {
       logger.main.warn('[TrackerSyncManager] onRejection for', workspacePath, 'itemId:', rejection.itemId, 'code:', rejection.rejection.code, 'message:', rejection.rejection.message);
@@ -476,8 +500,8 @@ const backfilledWorkspaces = new Set<string>();
 
 /**
  * Drop the once-per-engine backfill guard for a workspace and re-run the
- * scan immediately if an engine is connected. Called when the user flips
- * a tracker type's sync policy to `shared`/`hybrid` -- without this hook
+ * scan immediately if an engine is connected. Called when a tracker becomes
+ * team-shared -- without this hook
  * the items they already have locally would never make it to the room.
  *
  * Safe to call when no engine exists; it's a no-op until the engine
@@ -501,8 +525,8 @@ export async function requestTrackerBackfillForWorkspace(workspacePath: string):
  * nothing. The historical `sync_status='synced'` flag was set by the
  * previous sync system and means nothing to the new engine.
  *
- * We only push items whose effective policy is shared/hybrid (per the
- * workspace's per-type sync policy). Local-only items stay local.
+ * We only push published items from team trackers. Personal tracker items and
+ * drafts stay local.
  * Idempotent: the engine's `engines.has()` guard prevents repeats, and
  * once an item's `sync_id` is populated by `applyRemoteItem` (on
  * server-confirmed apply) it falls out of the candidate set.
@@ -545,14 +569,14 @@ async function backfillSharedLocalItems(workspacePath: string): Promise<void> {
   let skipped = 0;
   let deleted = 0;
   for (const row of candidates.rows) {
-    const policy = getEffectiveTrackerSyncPolicy(workspacePath, row.type as string);
+    const policy = getEffectiveTrackerSharingPolicy(workspacePath, row.type as string);
     const item = rowToTrackerItem(row) as TrackerItem;
-    // Per-item gate (NIM-876 / NIM-880): hybrid types sync ONLY flagged items.
-    //   - flagged/shared            -> upsert
-    //   - previously shared (sync_id set) but now UNFLAGGED -> delete from the
+    // Per-item gate (NIM-876 / NIM-880): team drafts sync only once published.
+    //   - published                  -> upsert
+    //   - previously published (sync_id set) but now draft -> delete from the
     //       room (propagates an offline unshare; previously this re-uploaded the
     //       item or left a stale copy behind)
-    //   - never shared + unflagged  -> skip (local-only, no leak)
+    //   - never published draft     -> skip (local-only, no leak)
     const previouslyShared = row.sync_id != null;
     const action = decideBackfillAction(policy, item, previouslyShared);
     if (action === 'skip') {
@@ -645,6 +669,14 @@ export async function unsyncTrackerItem(itemId: string, workspacePath?: string):
 // ============================================================================
 
 function emitItemApplied(workspacePath: string, applied: AppliedTrackerItem): void {
+  // Main-process subscribers first: they are waiting on this synchronously
+  // (see `awaitServerIssueKey`) and must not be gated behind the tombstone
+  // early-return or the async row read-back below.
+  for (const cb of appliedItemListeners) {
+    try { cb(workspacePath, applied); } catch (err) {
+      logger.main.warn('[TrackerSyncManager] applied-item listener threw:', err);
+    }
+  }
   if (applied.isTombstone) {
     broadcastToAllWindows('tracker-sync:item-deleted', {
       workspacePath,
@@ -707,6 +739,42 @@ function emitRejection(workspacePath: string, rejection: RejectedTrackerMutation
 // ============================================================================
 // IPC surface
 // ============================================================================
+
+export async function setTrackerIssueKeyPrefix(
+  workspacePath: string,
+  prefix: string,
+): Promise<{
+  success: boolean;
+  error?: string;
+  code?: string;
+  suggestedPrefix?: string;
+  conflictingProjectName?: string;
+}> {
+  const entry = engines.get(workspacePath);
+  if (!entry || entry.status !== 'connected') {
+    return { success: false, error: 'Tracker sync must be connected before changing the team project prefix.' };
+  }
+  const result = await entry.engine.setIssueKeyPrefix(prefix, 'explicit');
+  if (!result.success) {
+    if (entry.config) {
+      updateWorkspaceState(workspacePath, state => {
+        state.issueKeyPrefix = entry.config?.issueKeyPrefix;
+      });
+      broadcastToAllWindows('tracker-sync:config-changed', { workspacePath, config: entry.config });
+    }
+    return {
+      success: false,
+      error: result.message ?? 'The server rejected the issue-key prefix.',
+      code: result.code,
+      suggestedPrefix: result.suggestedPrefix,
+      conflictingProjectName: result.conflictingProjectName,
+    };
+  }
+  updateWorkspaceState(workspacePath, state => {
+    state.issueKeyPrefix = result.config?.issueKeyPrefix ?? prefix;
+  });
+  return { success: true };
+}
 
 export function registerTrackerSyncHandlers(): void {
   safeHandle('tracker-sync:get-status', async (_event, payload?: { workspacePath?: string }) => {
@@ -786,7 +854,7 @@ export function registerTrackerSyncHandlers(): void {
     }
   });
 
-  safeHandle('tracker-sync:set-config', async (_event, payload: {
+  safeHandle('tracker-sync:set-config', async (event, payload: {
     workspacePath: string;
     key: 'issueKeyPrefix';
     value: string;
@@ -794,12 +862,22 @@ export function registerTrackerSyncHandlers(): void {
     if (!payload?.workspacePath || payload.key !== 'issueKeyPrefix') {
       return { success: false, error: 'workspacePath and issueKeyPrefix required' };
     }
-    const entry = engines.get(payload.workspacePath);
-    if (!entry) {
-      return { success: false, error: 'No active tracker sync for workspace' };
+    const result = await setTrackerIssueKeyPrefix(payload.workspacePath, payload.value);
+    if (!result.success) {
+      const detail = result.suggestedPrefix
+        ? `${result.error ?? 'That prefix is unavailable'} Suggested prefix: ${result.suggestedPrefix}.`
+        : result.error ?? 'The server rejected that prefix.';
+      const parent = BrowserWindow.fromWebContents(event.sender);
+      const options = {
+        type: 'warning',
+        title: 'Issue Key Prefix Unavailable',
+        message: 'That issue-key prefix could not be assigned.',
+        detail,
+      } as const;
+      if (parent) await dialog.showMessageBox(parent, options);
+      else await dialog.showMessageBox(options);
     }
-    entry.engine.setIssueKeyPrefix(payload.value);
-    return { success: true };
+    return result;
   });
 
   // Test-only: bypass Stytch / TeamService / org-key-envelope unwrap and

@@ -11,6 +11,7 @@ export * from './trackerReleases';
 export * from './trackerReview';
 export * from './YAMLParser';
 export * from './schemaPatch';
+export * from './trackerLifecycle';
 export * from './schemaSyncPayload';
 export * from './IDGenerator';
 export * from './ModelLoader';

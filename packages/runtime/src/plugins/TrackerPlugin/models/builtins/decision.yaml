@@ -8,9 +8,8 @@ modes:
   inline: true
   fullDocument: true
 
-sync:
-  mode: shared
-  scope: project
+sharing: team
+draftByDefault: false
 
 idPrefix: dec
 idFormat: ulid

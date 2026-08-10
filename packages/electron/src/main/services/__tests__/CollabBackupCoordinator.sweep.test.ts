@@ -49,7 +49,7 @@ vi.mock('../TeamService', () => ({
 }));
 
 vi.mock('../TrackerPolicyService', () => ({
-  getEffectiveTrackerSyncPolicy: () => ({}),
+  getEffectiveTrackerSharingPolicy: () => ({ sharing: 'team', draftByDefault: false }),
   shouldSyncTrackerItem: () => false,
 }));
 

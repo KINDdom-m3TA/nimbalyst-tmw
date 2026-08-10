@@ -12,7 +12,13 @@ import type { SavedView } from './trackerSavedViews';
 import { WorkspaceSummaryHeader } from '../WorkspaceSummaryHeader';
 import { AlphaBadge } from '../common/AlphaBadge';
 import { FloatingPortal, useFloatingMenu, virtualElement } from '../../hooks/useFloatingMenu';
-import { buildTrackerNavigationTree } from './trackerNavigationTree';
+import {
+  buildTrackerNavigationTree,
+  partitionTrackerNavigationByOwnership,
+  type TrackerNavigationTree,
+} from './trackerNavigationTree';
+import type { TrackerTeam } from './useTrackerTeamMembers';
+import { TrackerOwnershipSectionHeader, type OwnershipMember } from '../common/TrackerOwnershipChip';
 import { trackerSyncConnectionAtom } from '../../store/atoms/trackerSync';
 import { trackerSnoozedUntilByItemIdAtom } from '../../store/atoms/trackerPersonalState';
 import { countInboxItems, type InboxSignals } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
@@ -60,6 +66,9 @@ interface TrackerSidebarProps {
   onToggleShareView: (view: SavedView) => void;
   onSaveNavigationEntry: (entry: TrackerNavigationEntry) => Promise<void>;
   onDeleteFolder: (folderId: string) => Promise<void>;
+  /** The workspace's team, or null for a solo user (no ownership sections at all). */
+  team: TrackerTeam | null;
+  teamMembers: OwnershipMember[];
 }
 
 interface SidebarCountProps {
@@ -189,6 +198,8 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
   onToggleShareView,
   onSaveNavigationEntry,
   onDeleteFolder,
+  team,
+  teamMembers,
 }) => {
   const trackerSyncConnection = useAtomValue(trackerSyncConnectionAtom);
   const isSharedLayout = !!workspacePath &&
@@ -224,6 +235,13 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
   const navigationTree = useMemo(
     () => buildTrackerNavigationTree(trackerTypes, navigationEntries),
     [trackerTypes, navigationEntries],
+  );
+  // Ownership is legible here or nowhere: this is where you pick what to work
+  // in. With no team there is nothing to distinguish, so the sections -- and
+  // every word about sharing -- stay away entirely.
+  const ownershipSections = useMemo(
+    () => partitionTrackerNavigationByOwnership(navigationTree, { hasTeam: team !== null }),
+    [navigationTree, team],
   );
 
   const saveEntry = (entry: TrackerNavigationEntry) => {
@@ -581,114 +599,23 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
             <span className="flex-1 text-left truncate">All</span>
           </button>
 
-          {navigationTree.folders.map(({ folder, trackerTypes: folderTypes }) => {
-            const expanded = expandedFolders.has(folder.folderId);
-            const renaming = renamingFolderId === folder.folderId;
-            return (
-              <React.Fragment key={folder.entryId}>
-                <div
-                  draggable={!renaming}
-                  data-testid="tracker-folder-row"
-                  data-folder-id={folder.folderId}
-                  className="group flex items-center gap-1 w-full px-1 py-1 rounded-md text-sm text-nim-muted hover:bg-nim-tertiary hover:text-nim"
-                  onDragStart={(event) => {
-                    setDraggedEntryId(folder.entryId);
-                    event.dataTransfer.effectAllowed = 'move';
-                    event.dataTransfer.setData('text/plain', folder.entryId);
-                  }}
-                  onDragEnd={() => setDraggedEntryId(null)}
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    if (draggedEntry?.kind === 'type-placement') {
-                      appendTypeToFolder(draggedEntry, folder.folderId);
-                      setExpandedFolders((current) => new Set(current).add(folder.folderId));
-                    } else if (draggedEntry?.kind === 'folder' && draggedEntry.entryId !== folder.entryId) {
-                      insertFolderBefore(draggedEntry, folder);
-                    }
-                    setDraggedEntryId(null);
-                  }}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    setContextPoint({ x: event.clientX, y: event.clientY });
-                    setContextFolder(folder);
-                  }}
-                >
-                  <button
-                    className="flex items-center justify-center w-4 h-5 shrink-0"
-                    title={expanded ? 'Collapse folder' : 'Expand folder'}
-                    onClick={() => setExpandedFolders((current) => {
-                      const next = new Set(current);
-                      if (expanded) next.delete(folder.folderId);
-                      else next.add(folder.folderId);
-                      return next;
-                    })}
-                  >
-                    <MaterialSymbol icon={expanded ? 'expand_more' : 'chevron_right'} size={15} />
-                  </button>
-                  <MaterialSymbol icon={expanded ? 'folder_open' : 'folder'} size={16} />
-                  {renaming ? (
-                    <input
-                      autoFocus
-                      value={renameValue}
-                      onChange={(event) => setRenameValue(event.target.value)}
-                      onKeyDown={(event) => {
-                        event.stopPropagation();
-                        if (event.key === 'Enter') commitRenameFolder(folder);
-                        if (event.key === 'Escape') setRenamingFolderId(null);
-                      }}
-                      onBlur={() => {
-                        setRenamingFolderId(null);
-                        setRenameValue('');
-                      }}
-                      className="min-w-0 flex-1 px-1 py-0.5 text-xs bg-nim border border-nim-focus rounded text-nim outline-none"
-                    />
-                  ) : (
-                    <button
-                      className="min-w-0 flex-1 text-left truncate"
-                      onClick={() => setExpandedFolders((current) => {
-                        const next = new Set(current);
-                        if (expanded) next.delete(folder.folderId);
-                        else next.add(folder.folderId);
-                        return next;
-                      })}
-                    >
-                      {folder.name}
-                    </button>
-                  )}
-                  <span className="text-[10px] font-semibold text-nim-faint min-w-[20px] text-right">
-                    <SidebarFolderCount
-                      types={folderTypes.map((row) => row.tracker.type)}
-                      activeFilters={activeFilters}
-                      tagFilter={tagFilter}
-                      sourceFilter={sourceFilter}
-                      currentIdentity={currentIdentity}
-                      favoriteItemIds={favoriteItemIds}
-                      viewedAtByItemId={viewedAtByItemId}
-                      personalStateHydrated={personalStateHydrated}
-                      recentlyViewedDays={recentlyViewedDays}
-                      columnFilters={columnFilters}
-                      nowMs={filterClockMs}
-                    />
-                  </span>
-                  <button
-                    className="opacity-0 group-hover:opacity-100 text-nim-faint hover:text-nim"
-                    title="Folder actions"
-                    onClick={(event) => {
-                      const rect = event.currentTarget.getBoundingClientRect();
-                      setContextPoint({ x: rect.right, y: rect.bottom });
-                      setContextFolder(folder);
-                    }}
-                  >
-                    <MaterialSymbol icon="more_horiz" size={14} />
-                  </button>
-                </div>
-                {expanded && folderTypes.map(({ tracker, placement }) => renderTypeRow(tracker, placement, true))}
-              </React.Fragment>
-            );
-          })}
-
-          {navigationTree.rootTypes.map(({ tracker, placement }) => renderTypeRow(tracker, placement))}
+          {ownershipSections === null
+            ? renderNavigationTree(navigationTree)
+            : ownershipSections.map((section) => (
+              <div
+                key={section.ownership}
+                className="tracker-ownership-section mt-2 first:mt-1"
+                data-testid="tracker-ownership-section"
+                data-ownership={section.ownership}
+              >
+                <TrackerOwnershipSectionHeader
+                  ownership={section.ownership}
+                  teamName={team?.name}
+                  members={teamMembers}
+                />
+                <div className="mt-1">{renderNavigationTree(section.tree)}</div>
+              </div>
+            ))}
         </div>
       </div>
 
@@ -730,4 +657,120 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
       )}
     </div>
   );
+
+  /** Folders and their trackers, rendered the same way inside or outside a section. */
+  function renderNavigationTree(tree: TrackerNavigationTree) {
+    return (
+      <>
+        {tree.folders.map(({ folder, trackerTypes: folderTypes }) => {
+          const expanded = expandedFolders.has(folder.folderId);
+          const renaming = renamingFolderId === folder.folderId;
+          return (
+            <React.Fragment key={folder.entryId}>
+              <div
+                draggable={!renaming}
+                data-testid="tracker-folder-row"
+                data-folder-id={folder.folderId}
+                className="group flex items-center gap-1 w-full px-1 py-1 rounded-md text-sm text-nim-muted hover:bg-nim-tertiary hover:text-nim"
+                onDragStart={(event) => {
+                  setDraggedEntryId(folder.entryId);
+                  event.dataTransfer.effectAllowed = 'move';
+                  event.dataTransfer.setData('text/plain', folder.entryId);
+                }}
+                onDragEnd={() => setDraggedEntryId(null)}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  if (draggedEntry?.kind === 'type-placement') {
+                    appendTypeToFolder(draggedEntry, folder.folderId);
+                    setExpandedFolders((current) => new Set(current).add(folder.folderId));
+                  } else if (draggedEntry?.kind === 'folder' && draggedEntry.entryId !== folder.entryId) {
+                    insertFolderBefore(draggedEntry, folder);
+                  }
+                  setDraggedEntryId(null);
+                }}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setContextPoint({ x: event.clientX, y: event.clientY });
+                  setContextFolder(folder);
+                }}
+              >
+                <button
+                  className="flex items-center justify-center w-4 h-5 shrink-0"
+                  title={expanded ? 'Collapse folder' : 'Expand folder'}
+                  onClick={() => setExpandedFolders((current) => {
+                    const next = new Set(current);
+                    if (expanded) next.delete(folder.folderId);
+                    else next.add(folder.folderId);
+                    return next;
+                  })}
+                >
+                  <MaterialSymbol icon={expanded ? 'expand_more' : 'chevron_right'} size={15} />
+                </button>
+                <MaterialSymbol icon={expanded ? 'folder_open' : 'folder'} size={16} />
+                {renaming ? (
+                  <input
+                    autoFocus
+                    value={renameValue}
+                    onChange={(event) => setRenameValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      event.stopPropagation();
+                      if (event.key === 'Enter') commitRenameFolder(folder);
+                      if (event.key === 'Escape') setRenamingFolderId(null);
+                    }}
+                    onBlur={() => {
+                      setRenamingFolderId(null);
+                      setRenameValue('');
+                    }}
+                    className="min-w-0 flex-1 px-1 py-0.5 text-xs bg-nim border border-nim-focus rounded text-nim outline-none"
+                  />
+                ) : (
+                  <button
+                    className="min-w-0 flex-1 text-left truncate"
+                    onClick={() => setExpandedFolders((current) => {
+                      const next = new Set(current);
+                      if (expanded) next.delete(folder.folderId);
+                      else next.add(folder.folderId);
+                      return next;
+                    })}
+                  >
+                    {folder.name}
+                  </button>
+                )}
+                <span className="text-[10px] font-semibold text-nim-faint min-w-[20px] text-right">
+                  <SidebarFolderCount
+                    types={folderTypes.map((row) => row.tracker.type)}
+                    activeFilters={activeFilters}
+                    tagFilter={tagFilter}
+                    sourceFilter={sourceFilter}
+                    currentIdentity={currentIdentity}
+                    favoriteItemIds={favoriteItemIds}
+                    viewedAtByItemId={viewedAtByItemId}
+                    personalStateHydrated={personalStateHydrated}
+                    recentlyViewedDays={recentlyViewedDays}
+                    columnFilters={columnFilters}
+                    nowMs={filterClockMs}
+                  />
+                </span>
+                <button
+                  className="opacity-0 group-hover:opacity-100 text-nim-faint hover:text-nim"
+                  title="Folder actions"
+                  onClick={(event) => {
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    setContextPoint({ x: rect.right, y: rect.bottom });
+                    setContextFolder(folder);
+                  }}
+                >
+                  <MaterialSymbol icon="more_horiz" size={14} />
+                </button>
+              </div>
+              {expanded && folderTypes.map(({ tracker, placement }) => renderTypeRow(tracker, placement, true))}
+            </React.Fragment>
+          );
+        })}
+
+        {tree.rootTypes.map(({ tracker, placement }) => renderTypeRow(tracker, placement))}
+      </>
+    );
+  }
 };

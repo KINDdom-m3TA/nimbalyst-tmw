@@ -27,7 +27,8 @@ export async function saveTrackerField(
       await window.electronAPI.documentService.updateTrackerItem({
         itemId: item.id,
         updates,
-        syncMode: globalRegistry.get(item.primaryType)?.sync?.mode ?? 'local',
+        sharing: globalRegistry.get(item.primaryType)?.sharing ?? 'personal',
+        draftByDefault: globalRegistry.get(item.primaryType)?.draftByDefault ?? false,
       });
     }
     window.electronAPI

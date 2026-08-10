@@ -8,9 +8,8 @@ modes:
   inline: true
   fullDocument: false
 
-sync:
-  mode: local
-  scope: project
+sharing: personal
+draftByDefault: false
 
 idPrefix: id
 idFormat: ulid

@@ -18,7 +18,10 @@ import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
 import { isFileBackedRecord, isNativeItem, resolveTrackerContentMode } from './trackerContentMode';
 import { globalRegistry } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
 import type { FieldDefinition } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/TrackerDataModel';
-import { getRecordTitle, getRecordStatus, getRecordPriority, getRecordField, isItemSharedWithTeam } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerRecordAccessors';
+import { getRecordTitle, getRecordStatus, getRecordPriority, getRecordField, isItemPublished as recordIsPublished, getItemPublicationState, type TrackerItemPublicationState } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerRecordAccessors';
+import { TrackerPublicationChip } from '@nimbalyst/runtime/plugins/TrackerPlugin/components/TrackerPublicationChip';
+import { resolveTrackerWriteAccess, TRACKER_UNASSIGNED_ISSUE_KEY_MESSAGE } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerLifecycle';
+import { isLocalIssueKey } from '../../../shared/localIssueKey';
 import { TrackerFieldEditor, type TeamMemberOption } from '@nimbalyst/runtime/plugins/TrackerPlugin/components/TrackerFieldEditor';
 import { TrackerFieldPills } from '@nimbalyst/runtime/plugins/TrackerPlugin/components/TrackerFieldPills';
 import { getTrackerTagsField, useTrackerChipFieldSections } from '@nimbalyst/runtime/plugins/TrackerPlugin/components/trackerChipFields';
@@ -493,7 +496,13 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
   const fieldSaveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const pendingFieldsRef = useRef<Set<string>>(new Set());
   const externalFieldBaselineRef = useRef<Record<string, unknown>>({});
-  const editable = item ? isEditable(item) : false;
+  // An archived tracker's items stay fully readable here -- everything below
+  // renders as usual -- but every write affordance is withdrawn.
+  const writeAccess = useMemo(
+    () => resolveTrackerWriteAccess(globalRegistry.get(item?.primaryType ?? '')),
+    [item?.primaryType],
+  );
+  const editable = item ? isEditable(item) && writeAccess.canWrite : false;
   const hasRichContent = item ? isNativeItem(item) : false; // Only native items have embedded Lexical content
 
   // Rich content editor state
@@ -652,25 +661,39 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
 
-  const syncMode = useMemo(() => {
+  const sharing = useMemo(() => {
     const tracker = globalRegistry.get(item?.primaryType ?? '');
-    return tracker?.sync?.mode || 'local';
+    return tracker?.sharing ?? 'personal';
   }, [item?.primaryType]);
 
-  // Whether THIS item is shared with the team. For `shared`-mode types every
-  // item is always shared; for `hybrid` it's per-item, driven by the `share`
-  // flag (surfaced under customFields by rowToTrackerItem). Legacy items that
+  // Whether THIS team-tracker item is published. The existing `share` flag
+  // carries Draft/Published (surfaced under customFields by rowToTrackerItem),
+  // while draftByDefault handles items without an explicit flag. Legacy items that
   // were pushed to the room before the explicit flag existed (sync_status
   // 'synced'/'pending') count as shared so they keep collaborating.
-  const isItemShared = useMemo(() => {
+  const isItemPublished = useMemo(() => {
     if (!item) return false;
-    // Single source of truth shared with the tracker table's "Shared" column.
-    return isItemSharedWithTeam(item);
+    // Single source of truth shared with the tracker table's Publication column.
+    return recordIsPublished(item);
   }, [item]);
 
+  // Draft / Published / n-a, in the same words the table and the chip use.
+  const publicationState = useMemo<TrackerItemPublicationState>(
+    () => (item ? getItemPublicationState(item) : 'n/a'),
+    [item],
+  );
+
+  // A provisional local key is not a key: per D2 only the room mints one, and
+  // presenting a leftover local one would promise a reference that resolves
+  // nowhere for anybody else.
+  const assignedIssueKey = useMemo(
+    () => (item?.issueKey && !isLocalIssueKey(item.issueKey) ? item.issueKey : undefined),
+    [item?.issueKey],
+  );
+
   const contentMode = useMemo(
-    () => resolveTrackerContentMode({ item, syncMode, isItemShared, teamOrgId }),
-    [item, syncMode, teamOrgId, isItemShared],
+    () => resolveTrackerContentMode({ item, sharing, isItemPublished, teamOrgId }),
+    [item, sharing, teamOrgId, isItemPublished],
   );
 
   const fileBackedDocumentPath = useMemo(() => {
@@ -721,16 +744,17 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
     onContentModeChange?.(contentMode);
   }, [contentMode, onContentModeChange]);
 
-  // The per-item "Share with team" toggle is offered only for hybrid native
-  // items in a workspace that has a team. `shared` types are always shared (no
-  // choice) and `local` types never sync.
+  // Publish is offered on any item of a team tracker whose state is Draft --
+  // NOT only where `draftByDefault` is set. A tracker that publishes by default
+  // can still hold drafts (a migrated item carrying an explicit private flag,
+  // or one returned to draft), and those have to be publishable too.
   // Native items + file-backed plans/decisions (frontmatter/import) can be
   // shared. Inline trackers (#bug[...]) are always local -- promote them first.
   const canToggleShare = Boolean(
     item &&
     editable &&
     (isNativeItem(item) || item.source === 'frontmatter' || item.source === 'import') &&
-    syncMode === 'hybrid' &&
+    sharing === 'team' &&
     typeof teamOrgId === 'string'
   );
   // File-backed plans/decisions can be UNSHARED safely (the row re-projects from
@@ -739,25 +763,30 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
   // shared native item's toggle is locked (share is one-way until the engine
   // gains a "remove from room, keep local" primitive).
   const isFileBacked = Boolean(item && isFileBackedRecord(item));
-  const unshareLocked = isItemShared && !isFileBacked;
+  const unshareLocked = isItemPublished && !isFileBacked;
   const [sharePending, setSharePending] = useState(false);
   const handleToggleShare = useCallback(async () => {
     if (!item || sharePending) return;
-    const next = !isItemShared;
+    const next = !isItemPublished;
     // Guard: never attempt to unshare a native item (would delete it).
     if (!next && !isFileBackedRecord(item)) return;
     setSharePending(true);
     try {
-      const res = await window.electronAPI.documentService.setTrackerItemShared({
+      const res = await window.electronAPI.documentService.setTrackerItemPublished({
         itemId: item.id,
-        shared: next,
+        published: next,
       });
       if (!res?.success) throw new Error(res?.error || 'Share toggle failed');
+      const publishedKey = res.item?.issueKey && !isLocalIssueKey(res.item.issueKey)
+        ? res.item.issueKey
+        : undefined;
       errorNotificationService.showInfo(
-        next ? 'Shared with team' : 'Made local',
+        next ? 'Published to your team' : 'Back to draft',
         next
-          ? 'This item is now in your team’s shared tracker.'
-          : 'This item is now local-only and was removed from the team tracker.',
+          ? publishedKey
+            ? `Your team can see this item. It is now ${publishedKey}.`
+            : 'Your team can see this item. Its key is being issued.'
+          : 'Only you can see this item again.',
         { duration: 3000 }
       );
     } catch (err) {
@@ -769,7 +798,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
     } finally {
       setSharePending(false);
     }
-  }, [item, isItemShared, sharePending]);
+  }, [item, isItemPublished, sharePending]);
 
   // Collaborative content editing for team-synced items. Dormant unless the
   // workspace actually has a team -- see useTrackerContentCollab for the
@@ -786,9 +815,9 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
     itemId,
     title: item?.issueKey || (item ? getRecordTitle(item) : itemId),
     workspacePath,
-    syncMode,
+    sharing,
     teamOrgId,
-    itemShared: isItemShared,
+    itemPublished: isItemPublished,
   });
 
   // Whether the collab provider has reached 'connected' for the CURRENT
@@ -890,7 +919,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
         await window.electronAPI.documentService.updateTrackerItem({
           itemId: item.id,
           updates,
-          syncMode,
+          sharing,
         });
       }
       // Refresh the derived relationship index for this item (Epic C Phase 2) so
@@ -902,7 +931,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
     } catch (err) {
       console.error('[TrackerItemDetail] Failed to save field:', err);
     }
-  }, [item?.id, item?.source, editable, syncMode]);
+  }, [item?.id, item?.source, editable, sharing]);
 
   /** Debounced save for a single text field. Per-field timers + pending-field
    *  tracking let the reconciliation effect distinguish "user is editing this
@@ -1318,8 +1347,32 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
                 Database
               </span>
             )}
-            {(item.issueKey || item.id) && (
-              <span className="text-[10px] text-nim-faint font-mono">{item.issueKey || item.id}</span>
+            {/*
+              A draft has no key at all (D2), and that is normal rather than
+              pending or broken -- so it says so in words instead of falling
+              back to the internal row id, which reads like a malformed key.
+            */}
+            {assignedIssueKey ? (
+              <span className="text-[10px] text-nim-faint font-mono">{assignedIssueKey}</span>
+            ) : (
+              <span
+                className="tracker-item-key-unassigned text-[10px] text-nim-faint"
+                title={TRACKER_UNASSIGNED_ISSUE_KEY_MESSAGE}
+                data-testid="tracker-item-key-unassigned"
+              >
+                No key yet
+              </span>
+            )}
+            <TrackerPublicationChip state={publicationState} />
+            {writeAccess.readOnlyReason && (
+              <span
+                className="tracker-item-read-only inline-flex items-center gap-1 text-[10px] font-semibold px-[7px] py-[2px] rounded-[10px] bg-[var(--nim-bg-tertiary)] text-[var(--nim-text-faint)]"
+                title={writeAccess.readOnlyReason}
+                data-testid="tracker-item-read-only"
+              >
+                <MaterialSymbol icon="inventory_2" size={11} />
+                Archived tracker · read-only
+              </span>
             )}
             {item.archived && (
               <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-[#6b728020] text-nim-faint">
@@ -1402,30 +1455,34 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
               <span>PR #{prReference.number}</span>
             </button>
           )}
-          {canToggleShare && (
+          {/*
+            Publishing is one action. A published item keeps the button only
+            while returning to Draft is actually possible (file-backed items);
+            a published native item shows its state in the chip above and has
+            nothing left to press.
+          */}
+          {canToggleShare && !(isItemPublished && unshareLocked) && (
             <button
-              className={`flex items-center gap-1 px-2 py-1 rounded text-[12px] font-medium ${
-                isItemShared
-                  ? 'bg-[var(--nim-primary)]/15 text-[var(--nim-primary)] hover:bg-[var(--nim-primary)]/25'
-                  : 'text-nim-muted hover:bg-nim-tertiary'
+              className={`tracker-publish-action flex items-center gap-1 px-2 py-1 rounded text-[12px] font-medium ${
+                isItemPublished
+                  ? 'text-nim-muted hover:bg-nim-tertiary'
+                  : 'bg-[var(--nim-primary)]/15 text-[var(--nim-primary)] hover:bg-[var(--nim-primary)]/25'
               } disabled:opacity-50`}
               onClick={handleToggleShare}
-              disabled={sharePending || unshareLocked}
+              disabled={sharePending}
               title={
-                unshareLocked
-                  ? 'Shared with your team. Unsharing native items from the UI isn’t supported yet.'
-                  : isItemShared
-                    ? 'Shared with your team — click to make this item local-only'
-                    : 'Share this item with your team so they can review it'
+                isItemPublished
+                  ? 'Return this item to a private draft'
+                  : 'Publish this item so your team can see it. It receives its issue key now.'
               }
               data-testid="tracker-share-toggle"
-              aria-pressed={isItemShared}
+              aria-pressed={isItemPublished}
             >
               <MaterialSymbol
-                icon={sharePending ? 'hourglass_empty' : isItemShared ? 'group' : 'group_add'}
+                icon={sharePending ? 'hourglass_empty' : isItemPublished ? 'lock' : 'group_add'}
                 size={16}
               />
-              <span>{isItemShared ? 'Shared' : 'Share'}</span>
+              <span>{isItemPublished ? 'Return to draft' : 'Publish'}</span>
             </button>
           )}
           {teamOrgId && (
@@ -1676,7 +1733,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
               window.electronAPI.documentService.updateTrackerItem({
                 itemId: item.id,
                 updates: { typeTags: newTags },
-                syncMode,
+                sharing,
               }).catch((err: any) => console.error('[TrackerItemDetail] Failed to save type tags:', err));
             }}
           />

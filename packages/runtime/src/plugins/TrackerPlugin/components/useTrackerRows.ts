@@ -13,6 +13,7 @@ import { usePostHog } from 'posthog-js/react';
 import type { TrackerRecord } from '../../../core/TrackerRecord';
 import type { TrackerItemType } from '../../../core/DocumentService';
 import { globalRegistry } from '../models';
+import { resolveTrackerWriteAccess } from '../models/trackerLifecycle';
 import { getMembersField, addMembersValue } from '../models/trackerCollections';
 import { getRecordTitle, resolveRoleFieldName } from '../trackerRecordAccessors';
 import {
@@ -175,6 +176,10 @@ export function useTrackerRows({
 
   /** Whether an item's fields can be edited inline */
   const isItemEditable = useCallback((item: TrackerRecord): boolean => {
+    // An archived tracker's items are retained and stay fully visible here --
+    // only writing is refused. This is the one chokepoint the table, the kanban
+    // board, bulk edits and the row context menu all share.
+    if (!resolveTrackerWriteAccess(globalRegistry.get(item.primaryType ?? '')).canWrite) return false;
     return item.source === 'native'
       || !item.system.documentPath
       || item.source === 'frontmatter'
@@ -329,11 +334,11 @@ export function useTrackerRows({
         }
       } else if (!item.system.documentPath || item.source === 'native') {
         const tracker = globalRegistry.get(item.primaryType);
-        const syncMode = tracker?.sync?.mode || 'local';
         result = await electronAPI.documentService.updateTrackerItem({
           itemId: item.id,
           updates,
-          syncMode,
+          sharing: tracker?.sharing ?? 'personal',
+          draftByDefault: tracker?.draftByDefault ?? false,
         });
       } else {
         return false;
