@@ -31,7 +31,7 @@ export const WorkspaceManagerOnboarding: React.FC<WorkspaceManagerOnboardingProp
       // Land them there deliberately instead — the welcome card's own CTA
       // retries and surfaces the error properly.
       try {
-        const result = await window.electronAPI.tutorial.start();
+        const result = await window.electronAPI.tutorial.start('onboarding');
         if (!result.success) {
           console.error('Failed to start tutorial from onboarding:', result.error);
         }

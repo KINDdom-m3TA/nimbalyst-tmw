@@ -15,7 +15,7 @@ import type {
 } from '@nimbalyst/runtime/sync';
 import type { ConversationSubscription } from '@nimbalyst/collab-protocol';
 import type { ConversationSetSubscriptionRequest } from '../shared/conversationDirectory.ts';
-import type { TutorialStartResult, TutorialStatusResult } from '../shared/tutorial.ts';
+import type { TutorialEntryPoint, TutorialStartResult, TutorialStatusResult } from '../shared/tutorial.ts';
 
 type StytchAuthFlowOptions = {
   intent: 'sign-in' | 'add-account' | 'reauth';
@@ -836,8 +836,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   tutorial: {
     getStatus: () =>
       ipcRenderer.invoke('tutorial:get-status') as Promise<TutorialStatusResult>,
-    start: () =>
-      ipcRenderer.invoke('tutorial:start') as Promise<TutorialStartResult>,
+    start: (entryPoint?: TutorialEntryPoint) =>
+      ipcRenderer.invoke('tutorial:start', entryPoint) as Promise<TutorialStartResult>,
   },
 
   // Project Migration (move/rename)

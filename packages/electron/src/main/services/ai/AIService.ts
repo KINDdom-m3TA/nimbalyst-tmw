@@ -145,6 +145,7 @@ import { onWorkspaceWindowAvailable } from '../../window/workspaceWindowAvailabi
 import { dispatchQueuedPromptToClaudeCli } from './claudeCliQueueDispatch';
 import { ensureClaudeCliSession, claudeCliSessionSupportsPlugins } from './claudeCliLauncherSingleton';
 import { supportsWorkspaceSlashWorkflowProvider } from '../../../shared/agentWorkflowProviders';
+import { captureTutorialMilestone } from '../tutorial/tutorialAnalytics';
 
 const execFileAsync = promisify(execFile);
 
@@ -2194,6 +2195,13 @@ export class AIService {
           messageCount: bucketCount(messageCount),
           ageInDays: bucketAgeInDays(createdAt)
         });
+
+        // Separates "opened the tutorial" from "actually used it". No-ops for
+        // every other workspace.
+        void captureTutorialMilestone(
+          session.workspacePath || workspacePath,
+          'session_opened'
+        );
       }
 
       // NOTE: Mobile message handling is done via startIndexListener() which watches

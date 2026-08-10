@@ -22,6 +22,10 @@ import { updateTrackerSchemaWorkspace } from '../services/TrackerSchemaService';
 import { getDialogDefaultPath, rememberDialogSelection } from '../utils/dialogPaths';
 import { windowReferencesWorkspace } from './windowState';
 import { TutorialProjectService } from '../services/tutorial/TutorialProjectService';
+import {
+  normalizeTutorialEntryPoint,
+  type TutorialEntryPoint,
+} from '../services/tutorial/tutorialAnalytics';
 import type { TutorialStartResult } from '../../shared/tutorial';
 import { windowControlsOverlayOptions } from './windowChrome';
 import {
@@ -98,8 +102,10 @@ function openOrFocusWorkspaceWindow(workspacePath: string): void {
  * Materializes (or reopens) the tutorial project and opens it in a window.
  * Shared by the `tutorial:start` IPC channel and the Help menu entry.
  */
-export function startTutorialProject(): Promise<TutorialStartResult> {
-  return tutorialProjectService.startTutorial();
+export function startTutorialProject(
+  entryPoint: TutorialEntryPoint = 'unknown'
+): Promise<TutorialStartResult> {
+  return tutorialProjectService.startTutorial(entryPoint);
 }
 
 async function hasSubfolders(workspacePath: string): Promise<boolean> {
@@ -259,8 +265,8 @@ export function setupWorkspaceManagerHandlers() {
     return tutorialProjectService.getStatus();
   });
 
-  safeHandle('tutorial:start', async () => {
-    return startTutorialProject();
+  safeHandle('tutorial:start', async (_event, entryPoint?: unknown) => {
+    return startTutorialProject(normalizeTutorialEntryPoint(entryPoint));
   });
 
   // Get recent workspaces with additional info

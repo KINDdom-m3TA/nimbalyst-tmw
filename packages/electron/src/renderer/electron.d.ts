@@ -597,7 +597,13 @@ interface ElectronAPI {
       | { success: true; exists: boolean; workspacePath?: string }
       | { success: false; exists: false; error: string }
     >;
-    start: () => Promise<
+    start: (
+      entryPoint?:
+        | 'onboarding'
+        | 'welcome_pane'
+        | 'project_manager_sidebar'
+        | 'help_menu'
+    ) => Promise<
       | { success: true; workspacePath: string; reused: boolean }
       | { success: false; error: string }
     >;

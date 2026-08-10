@@ -116,6 +116,7 @@ import {
 import { disableParentNotificationsAfterDirectTakeover } from './childSessionTakeover';
 import { installScopedProviderListener } from './providerListenerRegistry';
 import { shouldSettleUnterminatedTurn } from './sessionSettlePolicy';
+import { captureTutorialMilestone } from '../tutorial/tutorialAnalytics';
 import type Store from 'electron-store';
 import type { AIService } from './AIService';
 import type { HooklessAgentFileWatcher } from './HooklessAgentFileWatcher';
@@ -1205,6 +1206,10 @@ export class MessageStreamingHandler {
         slashCommandPackageId: slashCommandInfo.packageId,
       }),
     });
+
+    // Separates "opened the tutorial" from "actually used it". No-ops for every
+    // other workspace.
+    void captureTutorialMilestone(effectiveWorkspacePath, 'prompt_sent');
 
     // Mark session as running/active
     const stateManager = getSessionStateManager();
