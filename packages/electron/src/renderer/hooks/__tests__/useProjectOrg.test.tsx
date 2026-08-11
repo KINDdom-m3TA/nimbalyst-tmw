@@ -53,4 +53,25 @@ describe('useProjectOrg', () => {
 
     await waitFor(() => expect(screen.getByTestId('probe').textContent).toBe('Acme'));
   });
+
+  it('drops the previous answer while re-resolving, so a signed-out window never shows its old org', async () => {
+    let resolveLookup: (value: unknown) => void = () => {};
+    findForWorkspace
+      .mockResolvedValueOnce({ team: { orgId: 'org-1', name: 'Acme' } })
+      .mockReturnValueOnce(new Promise((resolve) => { resolveLookup = resolve; }));
+    const store = createStore();
+    store.set(activeWorkspacePathAtom, '/projects/plain-folder');
+
+    render(<Provider store={store}><Probe /></Provider>);
+    await waitFor(() => expect(screen.getByTestId('probe').textContent).toBe('Acme'));
+
+    store.set(projectOrgRevisionAtom, (revision) => revision + 1);
+
+    // Sign-out bumps the revision; holding "Acme" until the lookup answers is
+    // what left the org row standing in a signed-out window.
+    await waitFor(() => expect(screen.getByTestId('probe').textContent).toBe('loading'));
+
+    resolveLookup({ team: null });
+    await waitFor(() => expect(screen.getByTestId('probe').textContent).toBe('none'));
+  });
 });

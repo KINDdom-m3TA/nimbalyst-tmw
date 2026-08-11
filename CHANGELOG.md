@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Teammates appear by name rather than by email address when you `@`-mention them and in the notifications a mention produces.
 - Edits you make to a shared document on one of your own devices now appear live on your others, instead of only after a reload.
 - A failed sign-in on iPhone and iPad now explains what went wrong, instead of returning to the login screen with no message.
+- The profile menu now updates as soon as you sign in or out, instead of offering your previous organization until you reload.
 
 ### Removed
 <!-- Removed features go here -->

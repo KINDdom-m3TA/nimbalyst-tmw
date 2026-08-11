@@ -32,25 +32,27 @@ export interface ProjectOrgState {
 export function useProjectOrg(workspacePath?: string | null): ProjectOrgState {
   const activePathFromAtom = useAtomValue(activeWorkspacePathAtom);
   const activePath = activePathFromAtom ?? workspacePath ?? null;
-  // Creating an organization binds it to this workspace in the main process;
-  // nothing about the workspace path changes, so the revision is what tells the
-  // lookup to run again.
+  // Creating an organization binds it to this workspace in the main process,
+  // and signing out unbinds every one of them; nothing about the workspace path
+  // changes in either case, so the revision is what tells the lookup to run
+  // again.
   const revision = useAtomValue(projectOrgRevisionAtom);
   const [resolved, setResolved] = useState<{
     workspacePath: string | null;
+    revision: number;
     org: ProjectOrg | null;
   } | null>(null);
 
   useEffect(() => {
     if (!activePath) {
-      setResolved({ workspacePath: null, org: null });
+      setResolved({ workspacePath: null, revision, org: null });
       return;
     }
 
     const pending = (window as { electronAPI?: any })
       .electronAPI?.team?.findForWorkspace?.(activePath);
     if (!pending) {
-      setResolved({ workspacePath: activePath, org: null });
+      setResolved({ workspacePath: activePath, revision, org: null });
       return;
     }
 
@@ -61,19 +63,23 @@ export function useProjectOrg(workspacePath?: string | null): ProjectOrgState {
         const found = result?.team ?? result;
         setResolved({
           workspacePath: activePath,
+          revision,
           org: found?.orgId ? { orgId: found.orgId, name: found.name } : null,
         });
       })
       .catch(() => {
-        if (!cancelled) setResolved({ workspacePath: activePath, org: null });
+        if (!cancelled) setResolved({ workspacePath: activePath, revision, org: null });
       });
 
     return () => { cancelled = true; };
   }, [activePath, revision]);
 
-  // Report the switch as still in flight rather than the previous project's org,
-  // so a badge never briefly claims the wrong organization.
-  if (!resolved || resolved.workspacePath !== activePath) {
+  // Report a switch as still in flight rather than the previous answer, so a
+  // badge never briefly claims the wrong organization. The revision has to
+  // count for the same reason the path does: sign-out bumps it, and holding the
+  // old org until the lookup answers is what left the account popover offering
+  // an organization to a signed-out user.
+  if (!resolved || resolved.workspacePath !== activePath || resolved.revision !== revision) {
     return { org: null, loading: activePath !== null };
   }
   return { org: resolved.org, loading: false };
