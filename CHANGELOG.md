@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- Browse and triage GitHub issues beside pull requests, keeping your investigation status and notes local until you decide to adopt an issue as a tracker item.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
