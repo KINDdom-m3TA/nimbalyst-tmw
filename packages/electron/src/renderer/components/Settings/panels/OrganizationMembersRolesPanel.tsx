@@ -16,6 +16,7 @@ import { teamPresenceAtomFamily } from '../../../store/atoms/teamPresence';
 // this panel's module graph.
 import { DIALOG_IDS } from '../../../dialogs/registry';
 import { dialogRef } from '../../../contexts/DialogContext';
+import { requestConfirmation } from '../../../dialogs/requestConfirmation';
 import { queueOrgWindowGeneralRoute } from '../../TeamMode/onboarding/orgOnboardingStorage';
 
 interface Member {
@@ -69,21 +70,13 @@ export function OrganizationMembersRolesPanel({
     if (!orgId) return;
     const label = member.name || member.email || 'this member';
     const isPending = member.status === 'pending';
-    const confirmed = await new Promise<boolean>((resolve) => {
-      if (!dialogRef.current) {
-        resolve(false);
-        return;
-      }
-      dialogRef.current.open(DIALOG_IDS.CONFIRM, {
-        title: isPending ? 'Revoke invitation' : 'Remove member',
-        message: isPending
-          ? `Revoke the pending invitation for ${label}?`
-          : `Remove ${label} from this organization? They lose access to its shared documents and trackers, and would have to be invited again.`,
-        confirmLabel: isPending ? 'Revoke' : 'Remove',
-        destructive: true,
-        onConfirm: () => resolve(true),
-        onCancel: () => resolve(false),
-      });
+    const confirmed = await requestConfirmation({
+      title: isPending ? 'Revoke invitation' : 'Remove member',
+      message: isPending
+        ? `Revoke the pending invitation for ${label}?`
+        : `Remove ${label} from this organization? They lose access to its shared documents and trackers, and would have to be invited again.`,
+      confirmLabel: isPending ? 'Revoke' : 'Remove',
+      destructive: true,
     });
     if (!confirmed) return;
 

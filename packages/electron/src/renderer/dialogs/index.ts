@@ -29,9 +29,9 @@ export {
   registerDataDialogs,
   type ProjectSelectionData,
   type ErrorDialogData,
-  type ConfirmDialogData,
   type SessionImportData,
 } from './dataDialogs';
+export { registerConfirmDialog, type ConfirmDialogData } from './confirmDialogRegistration';
 export {
   registerOnboardingDialogs,
   type WindowsClaudeCodeWarningData,
