@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Bug fixes go here -->
 - Confirmation dialogs now close when you answer them, so removing a member no longer leaves the prompt stuck on screen.
 - Organization Messages opens on an organization you can actually use instead of stranding you on a screen waiting for a membership that never loads.
+- The slash-command palette shows each command and skill's own description again, along with its correct icon and grouping, instead of a generic placeholder.
+- Browser tabs now line up with their tab when the window is zoomed in or out, instead of painting the page in the wrong place and at the wrong size.
 
 ### Removed
 <!-- Removed features go here -->
