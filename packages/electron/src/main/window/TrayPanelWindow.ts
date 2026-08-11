@@ -4,6 +4,7 @@ import { safeHandle, safeOn } from '../utils/ipcRegistry';
 import { getPreloadPath } from '../utils/appPaths';
 import { getTheme, getTrayPanelWidth, setTrayPanelWidth } from '../utils/store';
 import { logger } from '../utils/logger';
+import { applyDockIcon } from '../utils/dockIcon';
 import {
   TRAY_PANEL_CHANNELS,
   emptyTrayPanelFeed,
@@ -148,14 +149,20 @@ function createTrayPanelWindow(bounds: Rectangle): BrowserWindow {
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   window.setAlwaysOnTop(true, 'floating');
 
-  // Guard the regression above. A window option that quietly demotes the app to
-  // an accessory is invisible until someone reaches for Cmd+Tab and finds
-  // Nimbalyst gone, so assert the policy rather than trusting the options.
-  // Unconditional because Electron exposes no `getActivationPolicy`; the call is
-  // idempotent, and nothing in the app ever wants a non-regular policy (the one
-  // `dock.hide()` is for ELECTRON_RUN_AS_NODE, which has no tray at all).
+  // Creating this window demotes the app to the accessory activation policy,
+  // which strips the Dock icon and the Cmd+Tab entry for the whole app --
+  // opening the panel made Nimbalyst unreachable from the app switcher. Dropping
+  // `type: 'panel'` was not enough on its own; some other option here still does
+  // it, so re-assert the policy. Electron exposes no `getActivationPolicy` to
+  // test against, and nothing in the app ever wants a non-regular policy (the
+  // one `dock.hide()` is for ELECTRON_RUN_AS_NODE, which has no tray at all).
+  //
+  // Setting a policy rebuilds the Dock tile and discards the runtime icon, so
+  // the icon has to go back immediately after or dev reverts to the stock
+  // Electron icon. The two calls belong together; neither works alone.
   if (process.platform === 'darwin') {
     app.setActivationPolicy('regular');
+    applyDockIcon();
   }
 
   window.on('blur', () => {

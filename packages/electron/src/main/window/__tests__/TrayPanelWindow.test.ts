@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 
-const { browserWindowCtor, appMock, screenMock } = vi.hoisted(() => {
+const { browserWindowCtor, appMock, screenMock, applyDockIconMock } = vi.hoisted(() => {
   const listeners = new Map<string, Function>();
   const instance = {
     listeners,
@@ -31,6 +31,7 @@ const { browserWindowCtor, appMock, screenMock } = vi.hoisted(() => {
       isPackaged: false,
       setActivationPolicy: vi.fn(),
     },
+    applyDockIconMock: vi.fn(),
     screenMock: { getDisplayNearestPoint: vi.fn(() => ({ workArea: { x: 0, y: 25, width: 1440, height: 875 } })) },
   };
 });
@@ -48,6 +49,7 @@ vi.mock('../../utils/store', () => ({
   setTrayPanelWidth: vi.fn(),
 }));
 vi.mock('../../utils/logger', () => ({ logger: { main: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } } }));
+vi.mock('../../utils/dockIcon', () => ({ applyDockIcon: applyDockIconMock }));
 
 import { closeTrayPanelWindow, computeTrayPanelPosition, toggleTrayPanelWindow } from '../TrayPanelWindow';
 import { emptyTrayPanelFeed } from '../../../shared/traySessions';
@@ -125,6 +127,7 @@ describe('tray panel activation policy', () => {
 
     closeTrayPanelWindow();
     vi.clearAllMocks();
+    applyDockIconMock.mockClear();
     browserWindowCtor.instance.isVisible.mockReturnValue(false);
     browserWindowCtor.instance.isDestroyed.mockReturnValue(false);
   });
@@ -136,12 +139,20 @@ describe('tray panel activation policy', () => {
     expect(browserWindowCtor.mock.calls[0][0]).not.toHaveProperty('type', 'panel');
   });
 
-  it('reasserts the regular activation policy after creating the panel', () => {
-    // Belt and braces: any future window option that flips the policy leaves the
-    // app switcher working instead of failing silently. Unconditional because
-    // Electron exposes no getter to compare against.
+  it('reasserts the regular activation policy and puts the Dock icon back', () => {
+    // Dropping `type: 'panel'` was not enough on its own -- creating this window
+    // still demotes the app, and without the re-assert Nimbalyst vanishes from
+    // Cmd+Tab the moment the panel opens.
+    //
+    // The icon call is not decoration. Setting an activation policy rebuilds the
+    // Dock tile and discards the runtime icon, so re-asserting the policy on its
+    // own swapped the Nimbalyst icon for the stock Electron one in dev. Asserting
+    // the order keeps the pair from being split up again.
     toggleTrayPanelWindow(trayBounds, emptyTrayPanelFeed);
 
     expect(appMock.setActivationPolicy).toHaveBeenCalledWith('regular');
+    expect(applyDockIconMock).toHaveBeenCalled();
+    expect(appMock.setActivationPolicy.mock.invocationCallOrder[0])
+      .toBeLessThan(applyDockIconMock.mock.invocationCallOrder[0]);
   });
 });
