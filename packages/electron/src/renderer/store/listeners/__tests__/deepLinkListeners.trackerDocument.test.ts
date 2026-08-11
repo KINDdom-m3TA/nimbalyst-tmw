@@ -11,6 +11,14 @@ import {
 } from '../../atoms/trackers';
 import { windowModeAtom } from '../../atoms/windowMode';
 import { initDeepLinkListeners } from '../deepLinkListeners';
+import { normalizeSettingsDestination } from '../../../components/Settings/settingsRoutes';
+
+/** What App.tsx actually navigates to for the currently-queued settings command. */
+function resolvedSettingsDestination() {
+  const command = store.get(openSettingsCommandAtom);
+  if (!command) return null;
+  return normalizeSettingsDestination({ category: command.category, scope: command.scope });
+}
 
 describe('tracker deep-link routing', () => {
   let cleanup: (() => void) | undefined;
@@ -179,7 +187,7 @@ describe('team-invitation deep-link handoff', () => {
     );
   });
 
-  it('sends an invitee with no matching account to account settings to sign in', async () => {
+  it('sends an invitee with no matching account to the account sign-in panel', async () => {
     pendingInvite = {
       status: 'sign-in-required',
       orgId: 'org-acme',
@@ -188,13 +196,25 @@ describe('team-invitation deep-link handoff', () => {
 
     cleanup = initDeepLinkListeners();
 
+    // Asserted through the resolver App.tsx feeds the command into, not on the
+    // raw command: a scope-less `{ category: 'account' }` normalizes all the way
+    // down to Application -> Notifications, which is where invitees were landing
+    // with nothing on screen to sign in with.
     await vi.waitFor(() => {
-      expect(store.get(openSettingsCommandAtom)).toMatchObject({ category: 'account' });
+      expect(resolvedSettingsDestination()).toEqual({ scope: 'account', category: 'account' });
     });
     expect(errorNotificationService.showWarning).toHaveBeenCalledWith(
       'Sign in to accept this invitation',
       expect.stringContaining('invitee@test.com'),
       expect.anything(),
     );
+
+    // The toast outlives the navigation behind it, so its button has to be able
+    // to re-issue the same destination.
+    const options = vi.mocked(errorNotificationService.showWarning).mock.calls.at(-1)?.[2];
+    expect(options?.action?.label).toBe('Sign in');
+    store.set(openSettingsCommandAtom, null);
+    options?.action?.onClick();
+    expect(resolvedSettingsDestination()).toEqual({ scope: 'account', category: 'account' });
   });
 });

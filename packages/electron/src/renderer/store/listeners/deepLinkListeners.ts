@@ -140,6 +140,19 @@ type TeamInviteOutcome =
   | { status: 'not-found'; orgId: string; email?: string }
   | { status: 'error'; orgId: string; message: string };
 
+/**
+ * Open the Accounts settings panel, which renders the first-sign-in form while
+ * signed out. `scope` is explicit: a scope-less link is resolved against the
+ * route table, and this must not depend on that lookup to reach the right page.
+ */
+function openAccountSignIn(): void {
+  store.set(openSettingsCommandAtom, {
+    category: 'account',
+    scope: 'account',
+    timestamp: Date.now(),
+  });
+}
+
 function applyTeamInviteOutcome(outcome: TeamInviteOutcome): void {
   if (!outcome?.status) return;
   void trackTeamInviteOutcome(outcome);
@@ -169,18 +182,17 @@ function applyTeamInviteOutcome(outcome: TeamInviteOutcome): void {
     case 'sign-in-required':
       // The common first-run path: they installed Nimbalyst because of the
       // invitation, so send them straight to the account settings that host
-      // sign-in and the pending-invite list.
+      // sign-in and the pending-invite list. The toast carries the same
+      // destination as a button — the navigation happens behind it, so without
+      // one the warning reads as a dead end.
       errorNotificationService.showWarning(
         'Sign in to accept this invitation',
         outcome.email
           ? `Sign in to Nimbalyst as ${outcome.email} to join this team.`
           : 'Sign in to Nimbalyst with the address the invitation was sent to.',
-        { duration: 10000 }
+        { duration: 10000, action: { label: 'Sign in', onClick: openAccountSignIn } }
       );
-      store.set(openSettingsCommandAtom, {
-        category: 'account',
-        timestamp: Date.now(),
-      });
+      openAccountSignIn();
       break;
     case 'not-found':
       errorNotificationService.showWarning(

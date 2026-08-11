@@ -64,6 +64,51 @@ export function OrganizationMembersRolesPanel({
   useEffect(() => { void refresh().catch((reason) => setError(String(reason))); }, [refresh]);
   const canAdminister = callerRole === 'owner' || callerRole === 'admin';
   const analyticsCallerRole = normalizeTeamAnalyticsCallerRole(callerRole);
+
+  const removeMember = useCallback(async (member: Member) => {
+    if (!orgId) return;
+    const label = member.name || member.email || 'this member';
+    const isPending = member.status === 'pending';
+    const confirmed = await new Promise<boolean>((resolve) => {
+      if (!dialogRef.current) {
+        resolve(false);
+        return;
+      }
+      dialogRef.current.open(DIALOG_IDS.CONFIRM, {
+        title: isPending ? 'Revoke invitation' : 'Remove member',
+        message: isPending
+          ? `Revoke the pending invitation for ${label}?`
+          : `Remove ${label} from this organization? They lose access to its shared documents and trackers, and would have to be invited again.`,
+        confirmLabel: isPending ? 'Revoke' : 'Remove',
+        destructive: true,
+        onConfirm: () => resolve(true),
+        onCancel: () => resolve(false),
+      });
+    });
+    if (!confirmed) return;
+
+    setError(null);
+    try {
+      const result = await window.electronAPI.organization.removeMember(orgId, member.memberId);
+      if (result?.success === false) throw new Error(result.error ?? 'Could not remove member');
+      trackTeamAnalyticsEvent('team_member_removed', {
+        surface: 'desktop',
+        callerRole: analyticsCallerRole,
+        memberState: isPending ? 'pending' : 'active',
+      });
+      await refresh();
+    } catch (reason) {
+      trackTeamAnalyticsEvent('team_operation_failed', {
+        surface: 'desktop',
+        operation: 'remove_member',
+        entryPoint: 'organization_manager',
+        callerRole: analyticsCallerRole,
+        errorCategory: categorizeTeamAnalyticsError('organization', reason),
+      });
+      setError(String(reason));
+    }
+  }, [orgId, analyticsCallerRole, refresh]);
+
   const selected = organizations.find((organization) => organization.orgId === orgId);
   const pending = organizations.filter((organization) => organization.membershipType && organization.membershipType !== 'active_member');
 
@@ -207,6 +252,20 @@ export function OrganizationMembersRolesPanel({
                   <option value="admin">Admin</option>
                   <option value="owner">Owner</option>
                 </select>}
+                {canAdminister && (
+                  <button
+                    type="button"
+                    className="member-remove-button rounded border border-[var(--nim-border)] bg-transparent p-1.5 text-[var(--nim-text-muted)] hover:border-[var(--nim-error)] hover:text-[var(--nim-error)]"
+                    data-testid="organization-member-remove"
+                    title={member.status === 'pending' ? 'Revoke invitation' : 'Remove from organization'}
+                    aria-label={member.status === 'pending'
+                      ? `Revoke invitation for ${member.name || member.email}`
+                      : `Remove ${member.name || member.email} from this organization`}
+                    onClick={() => { void removeMember(member); }}
+                  >
+                    <MaterialSymbol icon="person_remove" size={16} />
+                  </button>
+                )}
               </div>
             ))}
           </div>

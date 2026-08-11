@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Trackers are now plainly personal or your team's: your own lists stay on your machine, items in a team tracker stay private until you publish them, issue keys are assigned on publishing, and removing a field or status asks first and shows how many items it affects.
 - You can now read, write, and reply to comments on shared documents in the browser, and an `@`-mention reaches the person's inbox; teammates with read-only access can follow the discussion without being offered edits the server would refuse.
 - Signing in to a team now walks you into your organization's project, cloning the repository or binding a folder you already have, instead of leaving you at "No organization" when you are already a member.
+- Organization owners and admins can now remove a member or revoke a pending invitation from Members & Roles.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
@@ -36,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Edits you make to a shared document on one of your own devices now appear live on your others, instead of only after a reload.
 - A failed sign-in on iPhone and iPad now explains what went wrong, instead of returning to the login screen with no message.
 - The profile menu now updates as soon as you sign in or out, instead of offering your previous organization until you reload.
+- Opening a team invitation while signed out now takes you to the sign-in page and offers a Sign in button on the prompt, instead of stranding you on Notifications with nothing to click.
 
 ### Removed
 <!-- Removed features go here -->

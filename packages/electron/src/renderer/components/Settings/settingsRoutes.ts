@@ -244,7 +244,15 @@ export interface LegacySettingsLink {
 
 export function normalizeSettingsDestination(link: LegacySettingsLink): SettingsDestination | null {
   const legacyCategory = link.category;
-  const rawScope = link.scope ?? 'application';
+  // A scope-less link that names a real route must resolve to THAT route's
+  // scope. Defaulting straight to 'application' made any account- or
+  // project-scoped id fall through to the application default instead:
+  // `{ category: 'account' }` silently became Application -> Notifications,
+  // which is where the invite-deep-link sign-in prompt was sending people.
+  const routeScope = legacyCategory
+    ? settingsRoutes.find((route) => route.id === legacyCategory)?.scope
+    : undefined;
+  const rawScope = link.scope ?? routeScope ?? 'application';
 
   if (rawScope === 'organization') return null;
   if (
