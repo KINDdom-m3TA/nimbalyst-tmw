@@ -113,6 +113,7 @@ vi.mock('@nimbalyst/runtime', () => ({
 vi.mock('../../utils/store', () => ({
   getSessionSyncConfig: vi.fn(() => ({ serverUrl: 'https://sync.example' })),
   setSessionSyncConfig: vi.fn(),
+  clearOrgWalkPreferences: vi.fn(),
   getWorkspaceState: (workspacePath: string) => workspaceStates.get(workspacePath) ?? {},
   updateWorkspaceState: (workspacePath: string, updater: (state: any) => void) => {
     const state = workspaceStates.get(workspacePath) ?? {};

@@ -26,6 +26,7 @@ vi.mock('fs', () => ({
 vi.mock('../../utils/store', () => ({
   getSessionSyncConfig: vi.fn(() => ({ serverUrl: 'https://sync.example' })),
   setSessionSyncConfig: vi.fn(),
+  clearOrgWalkPreferences: vi.fn(),
 }));
 
 vi.mock('../../utils/logger', () => ({
@@ -69,6 +70,20 @@ function createJwt(payload: Record<string, unknown>): string {
     'signature',
   ].join('.');
 }
+
+// A "Not now" on the project walk used to outlive the account that dismissed
+// it, permanently silencing the walk -- for the next person to sign in on this
+// computer as much as for the one who dismissed it.
+describe('StytchAuthService sign-out clears organization preferences', () => {
+  it('forgets the dismissed walk and last selected org', async () => {
+    const { clearOrgWalkPreferences } = await import('../../utils/store');
+    (clearOrgWalkPreferences as ReturnType<typeof vi.fn>).mockClear();
+
+    await signOut();
+
+    expect(clearOrgWalkPreferences).toHaveBeenCalled();
+  });
+});
 
 describe('StytchAuthService personal JWT refresh', () => {
   beforeEach(async () => {

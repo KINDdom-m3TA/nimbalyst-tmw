@@ -21,14 +21,16 @@ import {
   serializeOrgWizardDraft,
   type OrgWizardState,
 } from './orgWizardModel';
+import { ORG_PROJECT_WALK_DISMISSED_SETTING_KEY } from '../../../../shared/orgProjectWalk';
 
 export const ORG_WIZARD_DRAFT_SETTING_KEY = 'orgWizardDraft';
 
 /**
  * Organizations whose post-sign-in project walk the user has closed. Dismissal
- * only silences the dialog; the "Join {Org} project" entry point stays.
+ * only silences the dialog; the "Join {Org} project" entry point stays. Main
+ * clears this on sign-out, so the key itself is declared in the shared module.
  */
-export const ORG_PROJECT_WALK_DISMISSED_SETTING_KEY = 'orgProjectWalkDismissedOrgIds';
+export { ORG_PROJECT_WALK_DISMISSED_SETTING_KEY };
 
 async function readSetting(key: string): Promise<unknown> {
   try {

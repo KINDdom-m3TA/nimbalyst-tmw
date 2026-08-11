@@ -539,7 +539,7 @@ export const NavigationGutter: React.FC<NavigationGutterProps> = ({
               accounts={accounts}
               projectOrg={projectOrg}
               projectOrgLoading={projectOrgLoading}
-              projectWalkOrg={projectWalk.org}
+              enterableOrgs={projectWalk.enterableOrgs}
               onJoinOrganizationProject={() => {
                 setUserMenuOpen(false);
                 openOrgProjectWalk();

@@ -11,6 +11,10 @@ import { AlphaFeatureTag, getDefaultAlphaFeatures, ALPHA_FEATURES } from '../../
 import { DeveloperFeatureTag, getDefaultDeveloperFeatures, DEVELOPER_FEATURES } from '../../shared/developerFeatures';
 import { BetaFeatureTag, getDefaultBetaFeatures, enableAllBetaFeatures as enableAllBetaFeaturesUtil, BETA_FEATURES } from '../../shared/betaFeatures';
 import { deriveIssueKeyPrefix } from '../../shared/trackerIssueKeyPrefix';
+import {
+  LAST_SELECTED_ORG_SETTING_KEY,
+  ORG_PROJECT_WALK_DISMISSED_SETTING_KEY,
+} from '../../shared/orgProjectWalk';
 import { normalizeCodexProviderConfig, omitModelsField } from '@nimbalyst/runtime/ai/server/utils/modelConfigUtils';
 
 // Theme can be a built-in theme or an extension theme ID (format: "extensionId:themeId")
@@ -2337,6 +2341,19 @@ export function getAppSetting<T>(key: string): T | undefined {
  */
 export function setAppSetting<T>(key: string, value: T): void {
   getAppStore().set(key as keyof AppStoreSchema, value as any);
+}
+
+/**
+ * Forget the signed-out user's organization preferences: which org's project
+ * walk they closed, and which org the org window last opened.
+ *
+ * These are statements about one person's current session, not properties of
+ * the machine. Leaving them behind meant a single "Not now" silenced the walk
+ * for good -- including for the next person to sign in on this computer.
+ */
+export function clearOrgWalkPreferences(): void {
+  getAppStore().delete(ORG_PROJECT_WALK_DISMISSED_SETTING_KEY as keyof AppStoreSchema);
+  getAppStore().delete(LAST_SELECTED_ORG_SETTING_KEY as keyof AppStoreSchema);
 }
 
 // Preferred Agent Language

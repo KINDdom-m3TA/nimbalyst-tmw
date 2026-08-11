@@ -612,6 +612,7 @@ describe('post-sign-in project walk', () => {
       await expect(resolveProjectWalkState()).resolves.toEqual({
         orgs: [{ orgId: 'org-1', name: 'Widgets Team' }],
         boundOrgIds: [],
+        thisWindowOrgId: null,
       });
     });
 
@@ -622,6 +623,24 @@ describe('post-sign-in project walk', () => {
       await expect(resolveProjectWalkState()).resolves.toEqual({
         orgs: [{ orgId: 'org-1', name: 'Widgets Team' }],
         boundOrgIds: ['org-1'],
+        thisWindowOrgId: null,
+      });
+    });
+
+    // Bound in ANY window is what stops the interruption; bound in THIS window
+    // is what stops offering this window a way in. Conflating them told a
+    // member with a second window open that they had no organization at all.
+    it('separates the asking window own org from what any window is bound to', async () => {
+      gitRemoteMock.mockResolvedValue(REMOTE);
+      openWindowOn('/projects/widgets');
+
+      await expect(resolveProjectWalkState('/projects/widgets')).resolves.toMatchObject({
+        boundOrgIds: ['org-1'],
+        thisWindowOrgId: 'org-1',
+      });
+      await expect(resolveProjectWalkState('/projects/unrelated')).resolves.toMatchObject({
+        boundOrgIds: ['org-1'],
+        thisWindowOrgId: null,
       });
     });
 

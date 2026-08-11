@@ -1,9 +1,9 @@
 /**
  * State for the post-sign-in project walk.
  *
- * `org` is the organization the account belongs to that has no folder on this
- * machine yet. It is what the persistent "Join {Org} project" entry point reads,
- * and it survives a dismissal — dismissing only clears `autoPresent`.
+ * `enterableOrgs` is every organization the account belongs to that this window
+ * is not already in. It is what the persistent "Join {Org} project" entry point
+ * reads, and it survives a dismissal — dismissing only clears `autoPresentOrg`.
  *
  * Written by `orgProjectWalkListeners`; components only read.
  */
@@ -13,8 +13,8 @@ import { atom } from 'jotai';
 import type { ProjectWalkPresentation } from '../../../shared/orgProjectWalk';
 
 export const orgProjectWalkAtom = atom<ProjectWalkPresentation>({
-  org: null,
-  autoPresent: false,
+  enterableOrgs: [],
+  autoPresentOrg: null,
 });
 
 /** Bumped to ask the listener to re-resolve (e.g. after the walk finishes). */

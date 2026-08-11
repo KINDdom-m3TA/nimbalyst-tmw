@@ -226,7 +226,7 @@ export function OrgSwitcher() {
               </button>
             )}
             <div className="border-t border-[var(--nim-border)] mt-1 pt-1">
-              {projectWalk.org && (
+              {projectWalk.enterableOrgs[0] && (
                 <button
                   className="org-switcher-join-project w-full flex items-center gap-2 px-3 py-2 text-[12px] text-[var(--nim-text)] hover:bg-[var(--nim-bg-secondary)]"
                   data-testid="org-switcher-join-project"
@@ -236,7 +236,7 @@ export function OrgSwitcher() {
                   }}
                 >
                   <MaterialSymbol icon="drive_folder_upload" size={14} />
-                  Join {projectWalk.org.name} project
+                  Join {projectWalk.enterableOrgs[0].name} project
                 </button>
               )}
               <button

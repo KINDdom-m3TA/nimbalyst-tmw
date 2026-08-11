@@ -1687,6 +1687,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // the auth broadcast reaches all of them.
     claimSignInAttribution: (key: string) =>
       ipcRenderer.invoke('team:claim-sign-in-attribution', key),
+    // And exactly one window opens the project walk, for the same reason. Main
+    // prefers the window the sign-in was started from and brings it forward.
+    claimProjectWalk: (key: string) =>
+      ipcRenderer.invoke('team:claim-project-walk', key),
     inspectProjectFolder: (payload: { orgId: string; teamProjectId: string; directoryPath: string }) =>
       ipcRenderer.invoke('team:inspect-project-folder', payload),
     joinProjectFolder: (payload: { orgId: string; teamProjectId: string; directoryPath: string }) =>

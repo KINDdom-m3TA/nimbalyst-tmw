@@ -122,6 +122,7 @@ import type { TeamDetails } from '../TeamService';
 import { registerTeamCustodyHandlers } from '../TeamCustodyService';
 import { registerOrgProjectWalkHandlers } from '../OrgProjectWalkService';
 import { registerSignInAttributionHandlers } from '../SignInAttribution';
+import { registerProjectWalkClaimHandlers } from '../ProjectWalkClaim';
 import { normalizeGitRemote } from '../../utils/gitUtils';
 
 const EXPECTED_TEAM_CHANNELS = [
@@ -183,6 +184,7 @@ describe('registerTeamHandlers channel registration', () => {
     registerTeamCustodyHandlers(); // owns team:get-key-custody-status
     registerOrgProjectWalkHandlers(); // owns the post-sign-in project walk channels
     registerSignInAttributionHandlers(); // owns team:claim-sign-in-attribution
+    registerProjectWalkClaimHandlers(); // owns team:claim-project-walk
 
     const preloadSource = await readFile(
       resolve(__dirname, '../../../preload/index.ts'),

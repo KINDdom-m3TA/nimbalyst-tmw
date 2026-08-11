@@ -101,7 +101,7 @@ describe('AccountInspectorPopover', () => {
       <AccountInspectorPopover
         accounts={[]}
         projectOrg={null}
-        projectWalkOrg={{ orgId: 'org-acme', name: 'Acme Corp' }}
+        enterableOrgs={[{ orgId: 'org-acme', name: 'Acme Corp' }]}
         anchorEl={anchor()}
         onClose={vi.fn()}
         onOpenAccount={vi.fn()}

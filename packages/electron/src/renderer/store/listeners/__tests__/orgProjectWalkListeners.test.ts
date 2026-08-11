@@ -35,6 +35,7 @@ describe('initOrgProjectWalkListeners', () => {
             orgs: [ACME],
             boundOrgIds: [],
           })),
+          claimProjectWalk: vi.fn(async () => true),
         },
       },
     };
@@ -46,17 +47,42 @@ describe('initOrgProjectWalkListeners', () => {
   });
 
   // Sign-in completes in an external browser, so the auth broadcast routinely
-  // lands while no window is the OS-key window. Dropping the walk there loses
-  // the whole point of the flow, for its most important entry point.
-  it('holds the walk until this window is focused instead of dropping it', async () => {
+  // lands while NO window is the OS-key window. Waiting for focus is what made
+  // the walk arrive minutes later, after the user had already given up looking
+  // for a way in; main arbitrates instead, so it lands with the sign-in.
+  it('presents as soon as sign-in lands, with no window focused', async () => {
     const store = createStore();
     store.set(windowFocusedAtom, false);
     store.set(stytchAuthAtom, { isAuthenticated: true, user: null });
 
     cleanup = initOrgProjectWalkListeners(store);
-    await vi.waitFor(() => expect(window.electronAPI.team.resolveProjectWalk).toHaveBeenCalled());
-    expect(openedDialogs()).toEqual([]);
+    await vi.waitFor(() => expect(openedDialogs()).toEqual(['org-project-walk']));
+  });
 
+  // Every window receives the auth broadcast, so exactly one may act on it.
+  it('stays quiet in a window whose claim main refused', async () => {
+    window.electronAPI.team.claimProjectWalk = vi.fn(async () => false);
+    const store = createStore();
+    store.set(windowFocusedAtom, false);
+    store.set(stytchAuthAtom, { isAuthenticated: true, user: null });
+
+    cleanup = initOrgProjectWalkListeners(store);
+    await vi.waitFor(() => expect(window.electronAPI.team.claimProjectWalk).toHaveBeenCalled());
+    expect(openedDialogs()).toEqual([]);
+  });
+
+  // A refused claim is not a dropped walk: the window that did win may have
+  // been closed before it could present, so a later focus retries.
+  it('retries a refused claim when the window is focused', async () => {
+    window.electronAPI.team.claimProjectWalk = vi.fn(async () => false);
+    const store = createStore();
+    store.set(windowFocusedAtom, false);
+    store.set(stytchAuthAtom, { isAuthenticated: true, user: null });
+
+    cleanup = initOrgProjectWalkListeners(store);
+    await vi.waitFor(() => expect(window.electronAPI.team.claimProjectWalk).toHaveBeenCalled());
+
+    window.electronAPI.team.claimProjectWalk = vi.fn(async () => true);
     store.set(windowFocusedAtom, true);
     await vi.waitFor(() => expect(openedDialogs()).toEqual(['org-project-walk']));
   });

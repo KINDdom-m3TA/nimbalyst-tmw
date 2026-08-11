@@ -23,7 +23,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from '../utils/logger';
 import { STYTCH_CONFIG, asPersonalJwt, asPersonalMemberId, type PersonalJwt, type PersonalMemberId } from '@nimbalyst/runtime';
-import { getSessionSyncConfig, setSessionSyncConfig } from '../utils/store';
+import { clearOrgWalkPreferences, getSessionSyncConfig, setSessionSyncConfig } from '../utils/store';
 import { AnalyticsService } from './analytics/AnalyticsService';
 import { reconcilePersonalUserId } from './auth/personalUserIdReconcile';
 import { describeTransportError, isTransportError, type PersonalRefreshFailureReason } from './auth/personalJwtFailure';
@@ -1570,6 +1570,7 @@ export async function signOut(): Promise<void> {
   accounts.clear();
   syncAccountId = null;
   saveAllAccounts();
+  clearOrgWalkPreferences();
   updateAuthState({
     isAuthenticated: false,
     user: null,
@@ -1632,6 +1633,10 @@ export async function removeAccount(targetOrgId: string): Promise<void> {
         personalSessionJwt: null,
       });
       clearStytchCredentials();
+      // Nobody is signed in any more, so the org preferences left behind belong
+      // to no one -- and a stale dismissal would silence the walk for whoever
+      // signs in next.
+      clearOrgWalkPreferences();
       logger.main.info('[StytchAuthService] All accounts removed, user signed out');
     }
   }

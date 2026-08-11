@@ -63,8 +63,21 @@ export function onProjectWalkFinished(
  * someone who dismissed it or signed in before it existed.
  */
 export function openOrgProjectWalk(targetStore: Store = store): void {
-  const { org } = targetStore.get(orgProjectWalkAtom);
+  const [org] = targetStore.get(orgProjectWalkAtom).enterableOrgs;
   if (!org) return;
+  presentWalk(org, targetStore);
+}
+
+/**
+ * Open the walk for a named organization.
+ *
+ * Settings lists every membership, so the org is already chosen by the row the
+ * user clicked; nothing here has to guess which of them they meant.
+ */
+export function openOrgProjectWalkFor(
+  org: { orgId: string; name: string },
+  targetStore: Store = store,
+): void {
   presentWalk(org, targetStore);
 }
 
@@ -86,27 +99,39 @@ export function initOrgProjectWalkListeners(targetStore: Store = store): () => v
   /** A walk that was due while this window could not show it. */
   let deferred = false;
 
-  const present = (org: { orgId: string; name: string }) => {
-    // Every project window receives the auth broadcast, so only the OS-key
-    // window opens the walk (`windowFocusedAtom`, not `document.hasFocus()`,
-    // which is true in every window while the app is frontmost -- NIM-849).
-    // Sign-in finishes in an external browser, so at that moment usually NO
-    // window is key: hold the walk rather than dropping it, and re-resolve when
-    // this window is focused so a walk another window already completed, or the
-    // user dismissed, is not presented again.
-    if (!targetStore.get(windowFocusedAtom) || !dialogRef.current) {
+  const present = async (org: { orgId: string; name: string }): Promise<void> => {
+    if (!dialogRef.current) {
+      deferred = true;
+      return;
+    }
+    if (dialogRef.current.isOpen(DIALOG_IDS.ORG_PROJECT_WALK)) return;
+
+    // Every project window receives the auth broadcast, so exactly one may act
+    // on it. Focus cannot pick that one: sign-in finishes in an external
+    // browser, so at that moment NO window is key and every window declines --
+    // which is why the walk used to arrive whenever the user next happened to
+    // focus the app, long after they had given up looking for a way in. Main
+    // sees all the windows, so it arbitrates and prefers the window the
+    // sign-in was started from.
+    const granted = await window.electronAPI?.team?.claimProjectWalk?.(
+      `project-walk:${org.orgId}`,
+    );
+    if (disposed) return;
+    if (!granted) {
+      // Not a dropped walk: the window that won may have been closed before it
+      // could present, and after the originator's grace period any window may
+      // claim. A later focus retries.
       deferred = true;
       return;
     }
     deferred = false;
-    if (dialogRef.current.isOpen(DIALOG_IDS.ORG_PROJECT_WALK)) return;
     presentWalk(org, targetStore);
   };
 
   const resolve = async (): Promise<void> => {
     const auth = targetStore.get(stytchAuthAtom);
     if (!auth?.isAuthenticated) {
-      targetStore.set(orgProjectWalkAtom, { org: null, autoPresent: false });
+      targetStore.set(orgProjectWalkAtom, { enterableOrgs: [], autoPresentOrg: null });
       return;
     }
     const state = await window.electronAPI?.team?.resolveProjectWalk?.();
@@ -119,15 +144,16 @@ export function initOrgProjectWalkListeners(targetStore: Store = store): () => v
     const presentation = resolveProjectWalkPresentation({
       orgs: state.orgs ?? [],
       boundOrgIds: state.boundOrgIds ?? [],
+      thisWindowOrgId: state.thisWindowOrgId ?? null,
       dismissedOrgIds: await readOrgProjectWalkDismissals(),
     });
     if (disposed) return;
     targetStore.set(orgProjectWalkAtom, presentation);
 
-    // Deliberately not closing an open walk when `org` goes null: the dialog's
-    // own success step is what makes it null, and closing it there would snatch
-    // the confirmation away as it appeared.
-    if (presentation.org && presentation.autoPresent) present(presentation.org);
+    // Deliberately not closing an open walk when the org goes away: the
+    // dialog's own success step is what removes it, and closing it there would
+    // snatch the confirmation away as it appeared.
+    if (presentation.autoPresentOrg) await present(presentation.autoPresentOrg);
     // Nothing left to hold, so focus changes stop costing a re-resolve.
     else deferred = false;
   };

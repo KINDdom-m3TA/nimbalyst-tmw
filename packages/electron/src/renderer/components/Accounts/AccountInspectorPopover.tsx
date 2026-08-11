@@ -30,12 +30,13 @@ interface AccountInspectorPopoverProps {
   /** True while the organization lookup is still in flight. */
   projectOrgLoading?: boolean;
   /**
-   * An organization the account belongs to that has no folder on this machine.
-   * Its presence is what turns the misleading "No organization — Set up" row
-   * into a way back into the post-sign-in project walk.
+   * Organizations the account belongs to that this window is not already in.
+   * Any of them turns the misleading "No organization — Set up" row into a way
+   * back into the post-sign-in project walk; the row names the first, and
+   * Settings → Account is where several are chosen between.
    */
-  projectWalkOrg?: ProjectOrganization | null;
-  /** Resume the project walk for `projectWalkOrg`. */
+  enterableOrgs?: readonly ProjectOrganization[];
+  /** Resume the project walk for the named organization. */
   onJoinOrganizationProject?: (orgId: string) => void;
   anchorEl: HTMLElement | null;
   onClose: () => void;
@@ -61,7 +62,7 @@ export function AccountInspectorPopover({
   accounts,
   projectOrg,
   projectOrgLoading = false,
-  projectWalkOrg = null,
+  enterableOrgs = [],
   onJoinOrganizationProject,
   anchorEl,
   onClose,
@@ -95,7 +96,7 @@ export function AccountInspectorPopover({
   const orgRow = resolveAccountOrgRow({
     projectOrg,
     projectOrgLoading,
-    walkOrg: projectWalkOrg,
+    enterableOrgs,
   });
 
   return (

@@ -20,43 +20,66 @@ export interface ProjectWalkOrg {
   name: string;
 }
 
+/**
+ * App-settings keys holding one user's organization preferences. They are
+ * written by the renderer and cleared by main on sign-out, so the names live
+ * here rather than being spelled twice across the process boundary.
+ */
+export const ORG_PROJECT_WALK_DISMISSED_SETTING_KEY = 'orgProjectWalkDismissedOrgIds';
+export const LAST_SELECTED_ORG_SETTING_KEY = 'lastSelectedOrgId';
+
 export interface ProjectWalkInput {
   /** Active-member organizations on the account. An invitation is not membership. */
   orgs: readonly ProjectWalkOrg[];
-  /** Organizations an already-open workspace resolves to. */
+  /** Organizations an already-open workspace — in ANY window — resolves to. */
   boundOrgIds: readonly string[];
+  /** The organization THIS window's own workspace resolves to, if any. */
+  thisWindowOrgId?: string | null;
   /** Organizations whose walk the user closed. */
   dismissedOrgIds?: readonly string[];
 }
 
 export interface ProjectWalkPresentation {
-  /** The organization to walk into, or null when nothing needs walking. */
-  org: ProjectWalkOrg | null;
-  /** Whether to present the walk unprompted. */
-  autoPresent: boolean;
+  /**
+   * Every organization the user could enter from this window. Suppressed only
+   * by this window's own binding, never by another window's.
+   */
+  enterableOrgs: ProjectWalkOrg[];
+  /** The organization to walk into unprompted, or null to stay quiet. */
+  autoPresentOrg: ProjectWalkOrg | null;
 }
 
 /**
- * One open workspace bound to any of the account's organizations is enough to
- * stay quiet: the user already has a working project window, and the walk would
- * be an interruption rather than a rescue.
+ * Two decisions that used to be one, and had to be separated because they
+ * disagree.
  *
- * A dismissal clears `autoPresent` but never `org` — the persistent "Join {Org}
- * project" entry point reads `org`, and it is what replaces the misleading
- * "No organization — Set up" row for someone who is in fact a member.
+ * "Should we interrupt?" is answered across the whole app: one open workspace
+ * bound to any of the account's organizations means the user already has a
+ * working project window, so the walk would be an interruption rather than a
+ * rescue. A dismissal silences it too.
+ *
+ * "Can the user get in from here?" is answered per window. Applying the
+ * app-wide suppression to it is what told a member of three organizations they
+ * had none: their other window was bound, so the window they were looking at —
+ * whose folder matched nothing — offered only "No organization — Set up", and
+ * the persistent entry point that was supposed to rescue them was suppressed by
+ * the same rule. `enterableOrgs` therefore drops only the organization THIS
+ * window is already in, and keeps every membership rather than the first.
  */
 export function resolveProjectWalkPresentation(
   input: ProjectWalkInput,
 ): ProjectWalkPresentation {
+  const enterableOrgs = input.orgs.filter((org) => org.orgId !== input.thisWindowOrgId);
+
   const bound = new Set(input.boundOrgIds);
   if (input.orgs.some((org) => bound.has(org.orgId))) {
-    return { org: null, autoPresent: false };
+    return { enterableOrgs, autoPresentOrg: null };
   }
-  const org = input.orgs[0] ?? null;
-  if (!org) return { org: null, autoPresent: false };
+  const org = enterableOrgs[0] ?? null;
+  if (!org) return { enterableOrgs, autoPresentOrg: null };
   return {
-    org,
-    autoPresent: !(input.dismissedOrgIds ?? []).includes(org.orgId),
+    enterableOrgs,
+    autoPresentOrg: (input.dismissedOrgIds ?? []).includes(org.orgId) ? null : org,
   };
 }
 
@@ -70,15 +93,24 @@ export type AccountOrgRow =
   /** Genuinely no organization — offer to create one. */
   | { kind: 'setUp' };
 
+/**
+ * `setUp` is reserved for an account with no memberships at all. Offering org
+ * creation to someone who is already a member is the dead end this row is here
+ * to avoid, so anything enterable outranks it.
+ *
+ * With several enterable organizations the row names the first; Settings →
+ * Account lists them all, and is the surface for choosing between them.
+ */
 export function resolveAccountOrgRow(input: {
   projectOrg: ProjectWalkOrg | null;
   projectOrgLoading: boolean;
-  /** The unbound organization from `resolveProjectWalkPresentation`, if any. */
-  walkOrg: ProjectWalkOrg | null;
+  /** Unbound organizations from `resolveProjectWalkPresentation`. */
+  enterableOrgs: readonly ProjectWalkOrg[];
 }): AccountOrgRow {
   if (input.projectOrgLoading) return { kind: 'loading' };
   if (input.projectOrg) return { kind: 'organization', org: input.projectOrg };
-  if (input.walkOrg) return { kind: 'joinProject', org: input.walkOrg };
+  const org = input.enterableOrgs[0];
+  if (org) return { kind: 'joinProject', org };
   return { kind: 'setUp' };
 }
 

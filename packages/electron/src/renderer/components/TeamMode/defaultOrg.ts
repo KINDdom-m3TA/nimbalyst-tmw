@@ -7,6 +7,8 @@
  * `__tests__/defaultOrg.test.ts`.
  */
 
+import { LAST_SELECTED_ORG_SETTING_KEY } from '../../../shared/orgProjectWalk';
+
 export interface OrgChoice {
   orgId: string;
   name: string;
@@ -40,8 +42,11 @@ export function resolveDefaultOrgId(
   return active[0]?.orgId ?? null;
 }
 
-/** app-settings key holding the org an untargeted open falls back to. */
-export const LAST_SELECTED_ORG_SETTING_KEY = 'lastSelectedOrgId';
+/**
+ * app-settings key holding the org an untargeted open falls back to. Main
+ * clears it on sign-out, so the key itself is declared in the shared module.
+ */
+export { LAST_SELECTED_ORG_SETTING_KEY };
 
 export async function readLastSelectedOrgId(): Promise<string | null> {
   try {

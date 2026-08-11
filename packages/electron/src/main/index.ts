@@ -238,6 +238,7 @@ import {
 } from './services/TeamService';
 import { registerOrgProjectWalkHandlers } from './services/OrgProjectWalkService';
 import { registerSignInAttributionHandlers } from './services/SignInAttribution';
+import { registerProjectWalkClaimHandlers } from './services/ProjectWalkClaim';
 import { windowStates, windows, resolveActiveWorkspacePath } from './window/windowState';
 import { getRecentItems } from './utils/store';
 import { registerTeamCustodyHandlers } from './services/TeamCustodyService';
@@ -1812,6 +1813,7 @@ app.whenReady().then(async () => {
     registerTeamHandlers();
     registerOrgProjectWalkHandlers();
     registerSignInAttributionHandlers();
+    registerProjectWalkClaimHandlers();
     registerTeamInboxHandlers({
         openInboxSource: openInboxSourceFromDeepLink,
     });

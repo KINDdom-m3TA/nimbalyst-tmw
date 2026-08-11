@@ -16,6 +16,7 @@
  * See nimbalyst-local/plans/simpler-org-signup-flow.md.
  */
 
+import { BrowserWindow } from 'electron';
 import { spawn, type ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import { readdir, rm, stat } from 'fs/promises';
@@ -37,7 +38,11 @@ import {
 import { getNormalizedGitRemote } from '../utils/gitUtils';
 import { safeHandle } from '../utils/ipcRegistry';
 import { logger } from '../utils/logger';
-import { listOpenWorkspacePaths } from '../window/windowState';
+import {
+  getWindowIdForWindow,
+  listOpenWorkspacePaths,
+  resolveActiveWorkspacePathForWindowId,
+} from '../window/windowState';
 import {
   bindWorkspaceToSharedProject,
   broadcastWorkspaceOrgChanged,
@@ -49,6 +54,8 @@ import {
 export interface ProjectWalkStateResult {
   orgs: ProjectWalkOrg[];
   boundOrgIds: string[];
+  /** The organization the asking window's own workspace resolves to, if any. */
+  thisWindowOrgId: string | null;
 }
 
 /** Progress pushed to the window that started a clone. */
@@ -59,28 +66,39 @@ function hashRemote(remote: string): string {
 }
 
 /**
- * The account's active-member organizations, plus which of them an already-open
- * workspace resolves to.
+ * The account's active-member organizations, which of them an already-open
+ * workspace resolves to, and which one the asking window is itself in.
  *
  * `findTeamForWorkspace` is the same lookup every org surface uses, so a folder
  * counted as bound here is exactly a folder those surfaces will resolve.
+ *
+ * The asking window's own organization is reported separately because the two
+ * facts drive opposite decisions: any window being bound is a reason not to
+ * interrupt, while only THIS window being bound is a reason to stop offering it
+ * a way in. `thisWindowPath` is read out of the same batch of matches rather
+ * than looked up again, so it costs no extra git spawn.
  */
-export async function resolveProjectWalkState(): Promise<ProjectWalkStateResult> {
+export async function resolveProjectWalkState(
+  thisWindowPath?: string | null,
+): Promise<ProjectWalkStateResult> {
   const teams = await listTeams();
   const orgs = teams
     .filter((team) => !team.membershipType || team.membershipType === 'active_member')
     .map((team) => ({ orgId: team.orgId, name: team.name }));
 
   const boundOrgIds = new Set<string>();
+  let thisWindowOrgId: string | null = null;
   const openPaths = listOpenWorkspacePaths();
   const matches = await Promise.all(
     openPaths.map((path) => findTeamForWorkspace(path).catch(() => null)),
   );
-  for (const match of matches) {
-    if (match?.orgId) boundOrgIds.add(match.orgId);
+  for (const [index, match] of matches.entries()) {
+    if (!match?.orgId) continue;
+    boundOrgIds.add(match.orgId);
+    if (thisWindowPath && openPaths[index] === thisWindowPath) thisWindowOrgId = match.orgId;
   }
 
-  return { orgs, boundOrgIds: [...boundOrgIds] };
+  return { orgs, boundOrgIds: [...boundOrgIds], thisWindowOrgId };
 }
 
 /**
@@ -348,9 +366,13 @@ export function cancelOrgProjectClone(cloneId: string): boolean {
 // ============================================================================
 
 export function registerOrgProjectWalkHandlers(): void {
-  safeHandle('team:resolve-project-walk', async () => {
+  safeHandle('team:resolve-project-walk', async (event) => {
     try {
-      return { success: true, ...(await resolveProjectWalkState()) };
+      // Which window is asking decides what it may still be offered, so the
+      // answer is per caller rather than one app-wide verdict.
+      const windowId = getWindowIdForWindow(BrowserWindow.fromWebContents(event.sender));
+      const thisWindowPath = resolveActiveWorkspacePathForWindowId(windowId) ?? null;
+      return { success: true, ...(await resolveProjectWalkState(thisWindowPath)) };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
     }

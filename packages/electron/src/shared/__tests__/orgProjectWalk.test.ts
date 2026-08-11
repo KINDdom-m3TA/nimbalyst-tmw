@@ -19,27 +19,53 @@ const OTHER = { orgId: 'org-other', name: 'Other Corp' };
 describe('resolveProjectWalkPresentation', () => {
   it('offers the walk to a member whose open workspaces resolve to no org', () => {
     expect(resolveProjectWalkPresentation({ orgs: [ACME], boundOrgIds: [] }))
-      .toEqual({ org: ACME, autoPresent: true });
+      .toEqual({ enterableOrgs: [ACME], autoPresentOrg: ACME });
   });
 
-  it('stays quiet once any open workspace already resolves to one of the orgs', () => {
+  it('stops interrupting once any open workspace already resolves to one of the orgs', () => {
     expect(resolveProjectWalkPresentation({ orgs: [ACME, OTHER], boundOrgIds: ['org-other'] }))
-      .toEqual({ org: null, autoPresent: false });
+      .toMatchObject({ autoPresentOrg: null });
+  });
+
+  // The bug behind "I can't figure out how to get into my project or org and
+  // work!": another window being bound erased the entry point in THIS window,
+  // whose own folder matched nothing, leaving only "No organization — Set up".
+  it('still lets this window enter an org that only another window is bound to', () => {
+    expect(resolveProjectWalkPresentation({
+      orgs: [ACME, OTHER],
+      boundOrgIds: ['org-other'],
+      thisWindowOrgId: null,
+    }).enterableOrgs).toEqual([ACME, OTHER]);
+  });
+
+  it('drops only the org this window is already in', () => {
+    expect(resolveProjectWalkPresentation({
+      orgs: [ACME, OTHER],
+      boundOrgIds: ['org-acme'],
+      thisWindowOrgId: 'org-acme',
+    }).enterableOrgs).toEqual([OTHER]);
+  });
+
+  // `orgs[0]` made every membership past the first unreachable by construction.
+  it('keeps every membership, not just the first', () => {
+    const THIRD = { orgId: 'org-third', name: 'Third Corp' };
+    expect(resolveProjectWalkPresentation({ orgs: [ACME, OTHER, THIRD], boundOrgIds: [] })
+      .enterableOrgs).toEqual([ACME, OTHER, THIRD]);
   });
 
   it('stays quiet for an account with no organizations at all', () => {
     expect(resolveProjectWalkPresentation({ orgs: [], boundOrgIds: [] }))
-      .toEqual({ org: null, autoPresent: false });
+      .toEqual({ enterableOrgs: [], autoPresentOrg: null });
   });
 
-  // Dismissal silences the dialog, never the org. The persistent entry point
-  // reads `org`, so it must survive a dismissal that clears `autoPresent`.
-  it('keeps the org after a dismissal but stops presenting it unprompted', () => {
+  // Dismissal silences the dialog, never the way in. The entry point reads
+  // `enterableOrgs`, so it must survive a dismissal that clears the interrupt.
+  it('keeps the org enterable after a dismissal but stops presenting it unprompted', () => {
     expect(resolveProjectWalkPresentation({
       orgs: [ACME],
       boundOrgIds: [],
       dismissedOrgIds: ['org-acme'],
-    })).toEqual({ org: ACME, autoPresent: false });
+    })).toEqual({ enterableOrgs: [ACME], autoPresentOrg: null });
   });
 
   it('ignores a dismissal recorded for a different organization', () => {
@@ -47,7 +73,7 @@ describe('resolveProjectWalkPresentation', () => {
       orgs: [ACME],
       boundOrgIds: [],
       dismissedOrgIds: ['org-other'],
-    }).autoPresent).toBe(true);
+    }).autoPresentOrg).toEqual(ACME);
   });
 });
 
@@ -56,22 +82,22 @@ describe('resolveAccountOrgRow', () => {
     expect(resolveAccountOrgRow({
       projectOrg: null,
       projectOrgLoading: false,
-      walkOrg: ACME,
+      enterableOrgs: [ACME],
     })).toEqual({ kind: 'joinProject', org: ACME });
   });
 
   it('still offers setup to an account with no organizations', () => {
-    expect(resolveAccountOrgRow({ projectOrg: null, projectOrgLoading: false, walkOrg: null }))
+    expect(resolveAccountOrgRow({ projectOrg: null, projectOrgLoading: false, enterableOrgs: [] }))
       .toEqual({ kind: 'setUp' });
   });
 
   it('shows the resolved organization once the workspace matches one', () => {
-    expect(resolveAccountOrgRow({ projectOrg: ACME, projectOrgLoading: false, walkOrg: null }))
+    expect(resolveAccountOrgRow({ projectOrg: ACME, projectOrgLoading: false, enterableOrgs: [] }))
       .toEqual({ kind: 'organization', org: ACME });
   });
 
   it('reports an unfinished lookup rather than guessing at it', () => {
-    expect(resolveAccountOrgRow({ projectOrg: null, projectOrgLoading: true, walkOrg: ACME }))
+    expect(resolveAccountOrgRow({ projectOrg: null, projectOrgLoading: true, enterableOrgs: [ACME] }))
       .toEqual({ kind: 'loading' });
   });
 });
