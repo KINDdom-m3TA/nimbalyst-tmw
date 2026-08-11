@@ -28,6 +28,7 @@ import { WebContentsView, BrowserWindow, session as electronSession } from 'elec
 import { EventEmitter } from 'events';
 import { logger } from '../utils/logger';
 import { ensureNimPreviewProtocolForSession } from '../protocols/nimPreviewProtocol';
+import { PAGE_INFO_SCRIPT } from './browserPageInfoScript';
 import { installMicrophoneGate } from '../mediaPermissionGate';
 
 export interface BrowserSessionInitOptions {
@@ -494,40 +495,13 @@ export class BrowserSessionService extends EventEmitter {
    * indexed list of interactive elements. Each interactive element is tagged
    * in-page with `data-nim-idx` so a follow-up `click({ index })` can target it
    * without the agent needing CSS selectors.
+   *
+   * Form-control values are deliberately absent from the result -- see the
+   * header of `browserPageInfoScript.ts` for why.
    */
   public async getPageInfo(sessionId: string): Promise<unknown> {
     const entry = this.requireEntry(sessionId);
-    const script = `(() => {
-      const sel = 'a[href], button, input, textarea, select, [role=button], [role=link], [onclick], [contenteditable=""], [contenteditable="true"]';
-      const isVisible = (el) => {
-        const r = el.getBoundingClientRect();
-        if (r.width <= 0 || r.height <= 0) return false;
-        const s = getComputedStyle(el);
-        return s.visibility !== 'hidden' && s.display !== 'none';
-      };
-      const els = [...document.querySelectorAll(sel)].filter(isVisible);
-      const interactive = els.slice(0, 200).map((el, i) => {
-        el.setAttribute('data-nim-idx', String(i));
-        const r = el.getBoundingClientRect();
-        return {
-          index: i,
-          tag: el.tagName.toLowerCase(),
-          type: el.getAttribute('type') || undefined,
-          role: el.getAttribute('role') || undefined,
-          text: (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim().slice(0, 120),
-          href: el.getAttribute('href') || undefined,
-          rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
-        };
-      });
-      return {
-        url: location.href,
-        title: document.title,
-        text: (document.body ? document.body.innerText : '').trim().slice(0, 5000),
-        interactive,
-        truncated: els.length > 200,
-      };
-    })()`;
-    return await entry.view.webContents.executeJavaScript(script, true);
+    return await entry.view.webContents.executeJavaScript(PAGE_INFO_SCRIPT, true);
   }
 
   /**
