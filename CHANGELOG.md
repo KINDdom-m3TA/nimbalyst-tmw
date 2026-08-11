@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 <!-- Changes to existing functionality go here -->
 - View mode, grouping, and ordering now live together in the tracker's Display Settings panel.
+- The tracker sidebar's personal and team groups collapse under compact one-line headers, team first, and both the groups and folders remember their state across restarts.
 
 ### Fixed
 <!-- Bug fixes go here -->

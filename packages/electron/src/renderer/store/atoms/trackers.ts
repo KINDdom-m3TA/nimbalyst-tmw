@@ -144,6 +144,8 @@ export async function initTrackerPanelLayout(workspacePath: string): Promise<voi
         ),
         documentRightPanelMode: normalizeDocumentPanelMode(savedModeLayout.documentRightPanelMode),
         documentChatSessions: normalizeDocumentChatSessions(savedModeLayout.documentChatSessions),
+        collapsedOwnershipSections: normalizeCollapsedOwnershipSections(savedModeLayout.collapsedOwnershipSections),
+        expandedNavFolders: normalizeExpandedNavFolders(savedModeLayout.expandedNavFolders),
         viewModeMigrated: true,
       };
 
@@ -200,6 +202,11 @@ import {
   type TrackerGroupBy,
 } from '../../components/TrackerMode/trackerSavedViews';
 import type { TrackerViewMode } from '../../components/TrackerMode/trackerViewModes';
+import type { TrackerOwnership } from '../../components/TrackerMode/trackerNavigationTree';
+import {
+  normalizeCollapsedOwnershipSections,
+  normalizeExpandedNavFolders,
+} from '../../components/TrackerMode/trackerSidebarCollapse';
 
 export interface TrackerModeLayout {
   /** Selected type filter in sidebar ('all' or specific type) */
@@ -271,6 +278,10 @@ export interface TrackerModeLayout {
    * same way as {@link TrackerModeLayout.itemViews}.
    */
   documentChatSessions: Record<string, string>;
+  /** Sidebar ownership groups the user has collapsed. */
+  collapsedOwnershipSections: TrackerOwnership[];
+  /** Sidebar navigation folders the user has expanded. */
+  expandedNavFolders: string[];
   /**
    * Set to `true` once the one-shot `'table' -> 'list'` rewrite has run for
    * this workspace. Future loads pass `viewMode` through untouched so users
@@ -301,6 +312,8 @@ const DEFAULT_MODE_LAYOUT: TrackerModeLayout = {
   documentRightPanelWidth: 380,
   documentRightPanelMode: 'chat',
   documentChatSessions: {},
+  collapsedOwnershipSections: [],
+  expandedNavFolders: [],
   viewModeMigrated: true,
 };
 
@@ -420,6 +433,16 @@ export const trackerModeViewModeAtom = atom(
 /** Currently selected item ID in tracker mode (opens detail panel). */
 export const trackerModeSelectedItemIdAtom = atom(
   (get) => get(trackerModeLayoutAtom).selectedItemId
+);
+
+/** Sidebar ownership groups the user has collapsed. */
+export const trackerSidebarCollapsedSectionsAtom = atom(
+  (get) => get(trackerModeLayoutAtom).collapsedOwnershipSections
+);
+
+/** Sidebar navigation folders the user has expanded. */
+export const trackerSidebarExpandedFoldersAtom = atom(
+  (get) => get(trackerModeLayoutAtom).expandedNavFolders
 );
 
 let modeLayoutPersistTimer: ReturnType<typeof setTimeout> | null = null;

@@ -29,7 +29,9 @@ export function trackerOwnershipOf(tracker: TrackerDataModel): TrackerOwnership 
 }
 
 /**
- * Split the navigation tree into "mine" and "the team's".
+ * Split the navigation tree into "the team's" and "mine", in that display
+ * order — the team's trackers are the shared source of truth and carry most of
+ * the data, so they lead.
  *
  * Returns null when the workspace has no team: a solo user gets no sections and
  * no ownership language at all, just the flat tree they already had. The
@@ -47,7 +49,7 @@ export function partitionTrackerNavigationByOwnership(
   if (!options.hasTeam) return null;
 
   const sections: TrackerOwnershipSection[] = [];
-  for (const ownership of ['personal', 'team'] as const) {
+  for (const ownership of ['team', 'personal'] as const) {
     const mine = (row: { tracker: TrackerDataModel }) => trackerOwnershipOf(row.tracker) === ownership;
     const folders = tree.folders
       .map((node) => ({ folder: node.folder, trackerTypes: node.trackerTypes.filter(mine) }))

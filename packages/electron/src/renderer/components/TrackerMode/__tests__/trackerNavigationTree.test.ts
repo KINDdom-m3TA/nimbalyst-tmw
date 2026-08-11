@@ -5,6 +5,11 @@ import {
   buildTrackerNavigationTree,
   partitionTrackerNavigationByOwnership,
 } from '../trackerNavigationTree';
+import {
+  normalizeCollapsedOwnershipSections,
+  normalizeExpandedNavFolders,
+  toggleListEntry,
+} from '../trackerSidebarCollapse';
 
 const model = (type: string): TrackerDataModel => ({
   type,
@@ -65,14 +70,14 @@ describe('partitionTrackerNavigationByOwnership', () => {
     )).toBeNull();
   });
 
-  it('splits trackers by ownership, treating an absent sharing bit as personal', () => {
+  it('splits trackers by ownership, team first, treating an absent sharing bit as personal', () => {
     const sections = partitionTrackerNavigationByOwnership(
       treeOf([model('plan'), teamModel('bug'), model('reading')]),
       { hasTeam: true },
     );
     expect(sections?.map((s) => [s.ownership, s.tree.rootTypes.map((r) => r.tracker.type)])).toEqual([
-      ['personal', ['plan', 'reading']],
       ['team', ['bug']],
+      ['personal', ['plan', 'reading']],
     ]);
   });
 
@@ -85,8 +90,8 @@ describe('partitionTrackerNavigationByOwnership', () => {
       s.ownership,
       s.tree.folders.map((f) => f.trackerTypes.map((r) => r.tracker.type)),
     ])).toEqual([
-      ['personal', [['plan']]],
       ['team', [['bug']]],
+      ['personal', [['plan']]],
     ]);
   });
 
@@ -97,5 +102,23 @@ describe('partitionTrackerNavigationByOwnership', () => {
     );
     expect(sections?.map((s) => s.ownership)).toEqual(['team']);
     expect(sections?.[0].tree.folders).toHaveLength(1);
+  });
+});
+
+describe('tracker sidebar collapse persistence', () => {
+  it('loads state written by builds without the keys (or with junk) as sane defaults', () => {
+    expect(normalizeCollapsedOwnershipSections(undefined)).toEqual([]);
+    expect(normalizeCollapsedOwnershipSections('team')).toEqual([]);
+    expect(normalizeCollapsedOwnershipSections(['team', 'nonsense', 'team', 42])).toEqual(['team']);
+    expect(normalizeExpandedNavFolders(undefined)).toEqual([]);
+    expect(normalizeExpandedNavFolders({ a: true })).toEqual([]);
+    expect(normalizeExpandedNavFolders(['f1', 7, 'f1', 'f2'])).toEqual(['f1', 'f2']);
+  });
+
+  it('toggleListEntry adds once and removes cleanly', () => {
+    expect(toggleListEntry(['a'], 'b', true)).toEqual(['a', 'b']);
+    expect(toggleListEntry(['a', 'b'], 'b', true)).toEqual(['a', 'b']);
+    expect(toggleListEntry(['a', 'b'], 'a', false)).toEqual(['b']);
+    expect(toggleListEntry([], 'a', false)).toEqual([]);
   });
 });

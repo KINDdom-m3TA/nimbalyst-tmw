@@ -49,6 +49,19 @@ export function trackerOwnershipDescription(
     : everyone;
 }
 
+/**
+ * The compressed form for surfaces that can't afford the full sentence — the
+ * sidebar section header shows this inline and carries
+ * {@link trackerOwnershipDescription} in its tooltip.
+ */
+export function trackerOwnershipShortDescription(
+  ownership: TrackerOwnership,
+  memberCount?: number,
+): string {
+  if (ownership === 'personal') return 'Local only';
+  return memberCount && memberCount > 1 ? `Shared · ${memberCount} people` : 'Shared with the team';
+}
+
 export const TrackerOwnershipChip: React.FC<{
   ownership: TrackerOwnership;
   teamName?: string | null;
@@ -123,28 +136,41 @@ function ownershipInitials(member: OwnershipMember): string {
 /**
  * Section header for an ownership group. Same shape wherever a surface splits
  * its navigation into mine/the team's, so the split reads as one idea.
+ *
+ * One compact row — chevron, name in the same muted style as the sibling
+ * section headers, then the ownership's status affordance (avatar stack or
+ * lock) right-aligned. The short subtitle sits under the name; the full
+ * explanation lives in the row's tooltip.
  */
 export const TrackerOwnershipSectionHeader: React.FC<{
   ownership: TrackerOwnership;
   teamName?: string | null;
   members?: OwnershipMember[];
-}> = ({ ownership, teamName, members = [] }) => {
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
+}> = ({ ownership, teamName, members = [], collapsed = false, onToggleCollapsed }) => {
   const isTeam = ownership === 'team';
+  const memberCount = isTeam ? members.length : undefined;
   return (
-    <div className="tracker-ownership-section-header px-2 pt-1" data-ownership={ownership}>
-      <div
-        className={`flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider ${
-          isTeam ? 'text-[var(--nim-primary)]' : 'text-[var(--nim-text-faint)]'
-        }`}
+    <div className="tracker-ownership-section-header pt-1" data-ownership={ownership}>
+      {/* py-1.5 + leading-5 matches the 32px type rows so the click target is the same size. */}
+      <button
+        className="flex w-full items-center gap-1 rounded-md px-1 py-1.5 text-left text-[var(--nim-text-faint)] hover:bg-[var(--nim-bg-tertiary)] hover:text-[var(--nim-text-muted)]"
+        onClick={onToggleCollapsed}
+        title={trackerOwnershipDescription(ownership, memberCount)}
+        aria-expanded={!collapsed}
+        data-testid="tracker-ownership-section-toggle"
       >
-        <MaterialSymbol icon={trackerOwnershipIcon(ownership)} size={13} />
-        <span className="min-w-0 flex-1 truncate">
-          {isTeam ? trackerOwnershipLabel(ownership, teamName) : 'My trackers'}
+        <MaterialSymbol icon={collapsed ? 'chevron_right' : 'expand_more'} size={15} className="shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-[10px] leading-5 font-semibold uppercase tracking-wider">
+          {trackerOwnershipLabel(ownership, teamName)}
         </span>
-        {isTeam && <TrackerOwnershipAvatars members={members} />}
-      </div>
-      <div className="mt-0.5 pl-[19px] text-[10px] leading-snug text-[var(--nim-text-faint)]">
-        {trackerOwnershipDescription(ownership, isTeam ? members.length : undefined)}
+        {isTeam
+          ? <TrackerOwnershipAvatars members={members} />
+          : <MaterialSymbol icon={trackerOwnershipIcon(ownership)} size={12} className="shrink-0" />}
+      </button>
+      <div className="pl-[25px] text-[10px] leading-snug text-[var(--nim-text-faint)]">
+        {trackerOwnershipShortDescription(ownership, memberCount)}
       </div>
     </div>
   );
