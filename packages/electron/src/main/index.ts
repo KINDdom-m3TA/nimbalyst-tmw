@@ -36,6 +36,7 @@ import {
 } from './utils/appActionLinks';
 import { createWorkspaceManagerWindow, setupWorkspaceManagerHandlers, wasWorkspaceManagerManuallyClosed } from './window/WorkspaceManagerWindow.ts';
 import { setupTeamManagementHandlers } from './window/TeamManagementWindow';
+import { setupTrayPanelHandlers } from './window/TrayPanelWindow';
 import { showSplashScreen, closeSplashScreen } from './window/SplashScreen';
 import { registerFileHandlers } from './ipc/FileHandlers';
 import { registerWorkspaceHandlers } from './ipc/WorkspaceHandlers.ts';
@@ -1745,6 +1746,16 @@ app.whenReady().then(async () => {
             const workspacePath = await findWorkspaceForOrgId(orgId);
             if (!workspacePath) return [];
             return documentServices.get(workspacePath)?.listTrackerItems() ?? [];
+        },
+    });
+    setupTrayPanelHandlers({
+        getFeed: () => TrayManager.getInstance().buildPanelFeed(),
+        onSelectSession: (sessionId, workspacePath) =>
+            TrayManager.getInstance().handleSessionClick(sessionId, workspacePath),
+        onNewSession: () => TrayManager.getInstance().handleNewSession(),
+        onOpenApp: () => TrayManager.getInstance().handleOpenApp(),
+        onClearAllUnread: () => {
+            void TrayManager.getInstance().clearAllUnreadSessions();
         },
     });
     setupSessionFileHandlers();

@@ -90,6 +90,9 @@ interface AppStoreSchema {
   lastSelectedOrgId?: string;
   // Bounds for the single global organization-management window.
   teamManagementWindowState?: TeamManagementWindowState;
+  // Width of the tray sessions panel. Height is fixed (the list scrolls), and
+  // the position is always recomputed from the tray icon, so only width persists.
+  trayPanelWidth?: number;
   // Default AI model for new sessions (format: "provider:model" e.g., "claude-code:sonnet")
   defaultAIModel?: string;
   // Defaults for the composer's effort / extended-thinking selectors. Both are
@@ -899,6 +902,14 @@ export function saveTeamManagementWindowState(state: TeamManagementWindowState):
     bounds: { ...state.bounds },
     maximized: state.maximized,
   });
+}
+
+export function getTrayPanelWidth(): number | undefined {
+  return getAppStore().get('trayPanelWidth');
+}
+
+export function setTrayPanelWidth(width: number): void {
+  getAppStore().set('trayPanelWidth', width);
 }
 
 export function getTheme(): AppTheme {

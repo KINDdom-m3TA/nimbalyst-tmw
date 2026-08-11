@@ -131,6 +131,12 @@ initMonacoEditor();
 // This must happen before React renders to avoid flash
 initializeTheme();
 
+// The tray panel window is transparent so macOS vibrancy shows through. Mark it
+// before the first paint, otherwise the opaque root flashes over the material.
+if (new URLSearchParams(window.location.search).get('mode') === 'tray-panel') {
+  document.documentElement.classList.add('tray-panel-window');
+}
+
 // Expose offscreen renderer on window for main process access
 (window as any).offscreenEditorRenderer = offscreenEditorRenderer;
 

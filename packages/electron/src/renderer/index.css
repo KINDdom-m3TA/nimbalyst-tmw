@@ -40,6 +40,15 @@ body {
   overflow: hidden;
 }
 
+/* Menu-bar sessions panel window (`?mode=tray-panel`). The BrowserWindow is
+   created with `transparent: true` + `vibrancy: 'popover'`, so nothing in the
+   root chain may paint an opaque backdrop or the native material is hidden. */
+html.tray-panel-window,
+html.tray-panel-window body,
+html.tray-panel-window #root {
+  background: transparent;
+}
+
 /* =============================================================================
    Floating surfaces must opt out of the window drag region
    =============================================================================

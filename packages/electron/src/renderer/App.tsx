@@ -151,6 +151,7 @@ import { TrackerMode } from './components/TrackerMode';
 import { PullRequestMode, type PullRequestModeRef } from './components/PullRequestMode';
 import { CollabMode, type CollabModeRef } from './components/CollabMode';
 import { TeamManagementApp } from './components/TeamMode';
+import { TrayPanelApp } from './components/TrayPanel/TrayPanelApp';
 import { TerminalBottomPanel } from './components/TerminalBottomPanel';
 import { SessionLaunchPopup } from './components/UnifiedAI/SessionLaunchPopup';
 import { ProjectRail } from './components/ProjectRail';
@@ -533,6 +534,11 @@ export default function App() {
   // (2026-07-17 decision-log correction). TeamManagementApp sets its own title.
   if (windowMode === 'team-management') {
     return <TeamManagementApp />;
+  }
+
+  // Menu-bar sessions panel. A frameless tray-anchored window with no title.
+  if (windowMode === 'tray-panel') {
+    return <TrayPanelApp />;
   }
 
   // IMPORTANT: These are refs, not state, to prevent re-renders when the active file changes.
