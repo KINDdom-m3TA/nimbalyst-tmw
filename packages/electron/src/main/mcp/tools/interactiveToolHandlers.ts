@@ -5,7 +5,6 @@ import {
 } from "@nimbalyst/runtime";
 import { getSessionStateManager } from "@nimbalyst/runtime/ai/server/SessionStateManager";
 import { notificationService } from "../../services/NotificationService";
-import { TrayManager } from "../../tray/TrayManager";
 import { findWindowIdForWorkspacePath } from "../mcpWorkspaceResolver";
 import { setSessionPendingPrompt } from "../../services/ai/pendingPromptPersistence";
 import { getGitSubprocessEnv } from "../../services/gitEnv";
@@ -295,10 +294,17 @@ export async function handleAskUserQuestion(
   // "Thinking…" suppressed for the rest of the turn. Broadcasting ai:askUserQuestion
   // here sets the flag (and feeds voice mode) exactly while the question is pending;
   // the settle below broadcasts ai:askUserQuestionAnswered to clear it. Sent to all
-  // windows (the renderer handler keys by sessionId); handleAskUserQuestion only
-  // runs for the MCP-routed CLI path, so SDK sessions are unaffected.
-  if (isCliSession && sessionId) {
+  // windows (the renderer handler keys by sessionId).
+  //
+  // The broadcast stays CLI-only for the reason above. The pending bit does NOT:
+  // this handler serves the MCP AskUserQuestion tool for every provider, and an
+  // SDK session waiting on this question is exactly as blocked as a CLI one.
+  // Guarding it meant neither the sidebar nor the menu bar knew, and the tray
+  // panel filed those sessions under "Running".
+  if (sessionId) {
     void setSessionPendingPrompt(sessionId, true);
+  }
+  if (isCliSession && sessionId) {
     for (const w of BrowserWindow.getAllWindows()) {
       if (!w.isDestroyed()) {
         w.webContents.send("ai:askUserQuestion", {
@@ -358,6 +364,11 @@ export async function handleAskUserQuestion(
       // NIM-806: mirror the start write — the external CLI never emits a
       // tool_result block, so persist a synthetic one to flip the widget out of
       // its pending state (ClaudeCliPromptSurface drops answered prompts).
+      // Symmetric with the set above: clear for every provider, so an answered
+      // question cannot leave a session stuck showing "awaiting input".
+      if (sessionId) {
+        void setSessionPendingPrompt(sessionId, false);
+      }
       if (isCliSession && sessionId) {
         void persistInteractivePromptToolResult({
           sessionId,
@@ -371,12 +382,11 @@ export async function handleAskUserQuestion(
           isError: cancelled,
         });
 
-        // NIM-850: clear the pending-interactive-prompt flag the moment the prompt
-        // settles (answered or cancelled). For claude-code-cli the renderer otherwise
-        // never clears it mid-turn — session:streaming intentionally doesn't, and
-        // there was no resolved broadcast — so "Thinking…" stayed suppressed until
-        // the turn ended. Mirrors PromptForUserInput's ai:requestUserInputResolved.
-        void setSessionPendingPrompt(sessionId, false);
+        // NIM-850: the resolved broadcast. For claude-code-cli the renderer
+        // otherwise never clears the flag mid-turn — session:streaming
+        // intentionally doesn't, and there was no resolved broadcast — so
+        // "Thinking…" stayed suppressed until the turn ended. Mirrors
+        // PromptForUserInput's ai:requestUserInputResolved.
         for (const w of BrowserWindow.getAllWindows()) {
           if (!w.isDestroyed()) {
             w.webContents.send("ai:askUserQuestionAnswered", {
@@ -650,13 +660,19 @@ export async function handleToolPermission(
           isCliSession,
           stateManager: getSessionStateManager(),
         }).catch(() => {});
+        // Symmetric with notifyBlocked below.
+        void setSessionPendingPrompt(sid, false);
       },
       savePattern: async (wp, pattern) => {
         await ClaudeSettingsManager.getInstance().addAllowedTool(wp, pattern);
       },
       notifyBlocked: ({ sessionId: sid, workspacePath: wp }) => {
         notificationService.showBlockedNotification(sid, sessionTitle, "permission", wp ?? "");
-        TrayManager.getInstance().onPromptCreated(sid);
+        // A permission prompt blocks the session exactly like a question does.
+        // This previously only told the tray, so the sidebar and mobile showed a
+        // CLI session waiting on a permission as merely running -- the mirror of
+        // the AskUserQuestion gap. Persisting also notifies the tray.
+        void setSessionPendingPrompt(sid, true);
       },
       log: (m) => console.log(`[MCP Server] ${m}`),
     },
@@ -881,9 +897,7 @@ export async function handleGitCommitProposal(
       console.warn("[MCP Server] No commitWindow found to send IPC event");
     }
 
-    // Notify tray of pending prompt
-    TrayManager.getInstance().onPromptCreated(targetSessionId);
-    // Persist pending-prompt bit + push to mobile
+    // Persist pending-prompt bit + push to mobile (this also notifies the tray)
     void setSessionPendingPrompt(targetSessionId, true);
   } catch (error) {
     console.error("[MCP Server] Failed to persist git commit proposal:", error);
@@ -1536,7 +1550,6 @@ export async function handleRequestUserInput(
       "question",
       workspacePath ?? "",
     );
-    TrayManager.getInstance().onPromptCreated(sessionId);
   }
 
   // NIM-1981: track this waiter so the session-scoped fallback can be accepted
@@ -1571,8 +1584,7 @@ export async function handleRequestUserInput(
           isCliSession,
           stateManager: getSessionStateManager(),
         }).catch(() => {});
-        TrayManager.getInstance().onPromptResolved(sessionId);
-        // Persist resolved state + push to mobile.
+        // Persist resolved state + push to mobile (this also notifies the tray).
         void setSessionPendingPrompt(sessionId, false);
         // Notify renderer to clear the pending indicator and remove from atom.
         try {

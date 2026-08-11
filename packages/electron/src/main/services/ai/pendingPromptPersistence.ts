@@ -11,10 +11,17 @@
  * Callers: every place that opens or resolves an interactive prompt
  * (AskUserQuestion, ExitPlanMode, ToolPermission, GitCommitProposal,
  * RequestUserInput / PromptForUserInput).
+ *
+ * This also notifies `TrayManager`, so the menu bar can never disagree with the
+ * sidebar about whether a session is blocked. It used to be a second call every
+ * callsite had to remember, and the MCP AskUserQuestion path made neither call
+ * for SDK sessions -- a session waiting on a question showed as "Running" in the
+ * menu bar panel. Notify here and there is nothing left to forget.
  */
 
 import { AISessionsRepository } from '@nimbalyst/runtime';
 import { getSyncProvider } from '../SyncManager';
+import { TrayManager } from '../../tray/TrayManager';
 import { logger } from '../../utils/logger';
 
 /**
@@ -44,6 +51,14 @@ export async function setSessionPendingPrompt(
   hasPendingPrompt: boolean,
 ): Promise<void> {
   if (!sessionId) return;
+
+  // Before the awaits: the tray is in-memory, so a slow or failed row update
+  // must not leave the menu bar showing a blocked session as merely running.
+  if (hasPendingPrompt) {
+    TrayManager.getInstance().onPromptCreated(sessionId);
+  } else {
+    TrayManager.getInstance().onPromptResolved(sessionId);
+  }
 
   try {
     await AISessionsRepository.updateMetadata(sessionId, {

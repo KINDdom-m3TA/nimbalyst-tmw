@@ -40,7 +40,13 @@ const STATE_STYLES: Record<TrayPanelSectionState, { label: string; colorClass: s
 /** Unread is the bucket that historically ran the menu off the screen. */
 const UNREAD_COLLAPSE_AT = 6;
 
-function TrayStatusIndicator({ session }: { session: TrayPanelSession }) {
+function TrayStatusIndicator({
+  session,
+  state,
+}: {
+  session: TrayPanelSession;
+  state: TrayPanelSectionState;
+}) {
   if (session.hasError) {
     return (
       <div className="flex h-5 w-5 items-center justify-center text-[var(--nim-error)]" title="Session error">
@@ -55,10 +61,20 @@ function TrayStatusIndicator({ session }: { session: TrayPanelSession }) {
       </div>
     );
   }
-  if (session.isStreaming) {
+  // Every row in the Running section spins, not just the ones mid-stream:
+  // `isStreaming` is only true between streaming events, so a session waiting on
+  // a tool call rendered as a bare row with no indicator at all.
+  if (state === 'running') {
     return (
-      <div className="flex h-5 w-5 items-center justify-center text-[var(--nim-primary)] opacity-80" title="Processing...">
+      <div className="flex h-5 w-5 items-center justify-center text-[var(--nim-primary)] opacity-80" title="Running">
         <MaterialSymbol icon="progress_activity" size={14} className="animate-spin" />
+      </div>
+    );
+  }
+  if (state === 'unread') {
+    return (
+      <div className="flex h-5 w-5 items-center justify-center text-[var(--nim-primary)]" title="Unread response">
+        <MaterialSymbol icon="circle" size={8} fill />
       </div>
     );
   }
@@ -174,7 +190,7 @@ export function TrayPanelApp() {
                   updatedAt={session.updatedAt}
                   workspaceName={session.workspaceName}
                   onSelect={handleSelect}
-                  statusSlot={<TrayStatusIndicator session={session} />}
+                  statusSlot={<TrayStatusIndicator session={session} state={state} />}
                 />
               ))}
               {collapsed && (

@@ -119,7 +119,7 @@ function toMillis(value: unknown): number {
 
 // ─── Grouping ───────────────────────────────────────────────────────────────
 
-function toPanelSession(session: TraySessionInfo): TrayPanelSession {
+function toPanelSession(session: TraySessionInfo, hasPendingPrompt: boolean): TrayPanelSession {
   return {
     sessionId: session.sessionId,
     title: session.title || 'Untitled Session',
@@ -129,7 +129,7 @@ function toPanelSession(session: TraySessionInfo): TrayPanelSession {
     ...(session.model ? { model: session.model } : {}),
     updatedAt: session.updatedAt ?? session.completedAt ?? 0,
     isStreaming: session.isStreaming,
-    hasPendingPrompt: session.hasPendingPrompt,
+    hasPendingPrompt,
     hasError: session.status === 'error',
   };
 }
@@ -143,6 +143,10 @@ function toPanelSession(session: TraySessionInfo): TrayPanelSession {
  * workspace (the menu bar is global), and `status === 'error'` counts as needing
  * attention, which the in-app popover has no equivalent for.
  *
+ * `hasPendingPrompt` is kept in step with the persisted bit by
+ * `setSessionPendingPrompt`, which notifies this class as it writes -- see the
+ * header of pendingPromptPersistence.ts for why that is a single call.
+ *
  * Exported as a free function so the grouping is testable without the singleton.
  */
 export function groupTraySessions(sessions: Iterable<TraySessionInfo>): TrayPanelFeed {
@@ -154,11 +158,11 @@ export function groupTraySessions(sessions: Iterable<TraySessionInfo>): TrayPane
 
   for (const session of visible) {
     if (session.hasPendingPrompt || session.status === 'error') {
-      feed.needsAttention.push(toPanelSession(session));
+      feed.needsAttention.push(toPanelSession(session, session.hasPendingPrompt));
     } else if (session.status === 'running') {
-      feed.running.push(toPanelSession(session));
+      feed.running.push(toPanelSession(session, false));
     } else if (session.hasUnread) {
-      feed.unread.push(toPanelSession(session));
+      feed.unread.push(toPanelSession(session, false));
     }
   }
 

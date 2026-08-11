@@ -72,7 +72,6 @@ import { extractFilePath } from './tools/extractFilePath';
 import { SoundNotificationService } from '../SoundNotificationService';
 import { notificationService } from '../NotificationService';
 import { composeNotificationTitle } from '../../../shared/notificationTitle';
-import { TrayManager } from '../../tray/TrayManager';
 import { logger } from '../../utils/logger';
 import { windowStates, findWindowByWorkspace } from '../../window/WindowManager';
 import { sessionFileTracker } from '../SessionFileTracker';
@@ -885,7 +884,6 @@ export class MessageStreamingHandler {
       logger.main.info('[AIService] ExitPlanMode confirmation requested:', data.requestId);
       safeSend(event, 'ai:exitPlanModeConfirm', { ...data, workspacePath: effectiveWorkspacePath });
       syncPendingPrompt(data.sessionId, true);
-      TrayManager.getInstance().onPromptCreated(data.sessionId);
 
       // Update session status so all windows show the pending indicator
       getSessionStateManager().updateActivity({
@@ -922,7 +920,6 @@ export class MessageStreamingHandler {
     }) => {
       logger.main.info('[AIService] ExitPlanMode resolved:', data.requestId, 'approved=', data.approved);
       syncPendingPrompt(data.sessionId, false);
-      TrayManager.getInstance().onPromptResolved(data.sessionId);
 
       getSessionStateManager().updateActivity({
         sessionId: data.sessionId,
@@ -939,7 +936,6 @@ export class MessageStreamingHandler {
       // logger.main.info('[AIService] AskUserQuestion requested:', data.questionId);
       safeSend(event, 'ai:askUserQuestion', { ...data, workspacePath: effectiveWorkspacePath });
       syncPendingPrompt(data.sessionId, true);
-      TrayManager.getInstance().onPromptCreated(data.sessionId);
 
       // Update session status to waiting_for_input so all windows show the pending indicator
       getSessionStateManager().updateActivity({
@@ -965,7 +961,6 @@ export class MessageStreamingHandler {
       // logger.main.info('[AIService] AskUserQuestion answered:', data.questionId);
       safeSend(event, 'ai:askUserQuestionAnswered', { ...data, workspacePath: effectiveWorkspacePath });
       syncPendingPrompt(data.sessionId, false);
-      TrayManager.getInstance().onPromptResolved(data.sessionId);
 
       // Update session status back to running so all windows clear the pending indicator
       getSessionStateManager().updateActivity({
@@ -981,7 +976,6 @@ export class MessageStreamingHandler {
       logger.main.info('[AIService] Tool permission requested:', data.requestId);
       safeSend(event, 'ai:toolPermission', data);
       syncPendingPrompt(data.sessionId, true);
-      TrayManager.getInstance().onPromptCreated(data.sessionId);
 
       // Update session status so all windows show the pending indicator
       getSessionStateManager().updateActivity({
@@ -1011,7 +1005,6 @@ export class MessageStreamingHandler {
       logger.main.info('[AIService] Tool permission resolved:', data.requestId);
       safeSend(event, 'ai:toolPermissionResolved', { ...data, workspacePath: effectiveWorkspacePath });
       syncPendingPrompt(data.sessionId, false);
-      TrayManager.getInstance().onPromptResolved(data.sessionId);
 
       // Update session status back to running so all windows clear the pending indicator
       getSessionStateManager().updateActivity({
