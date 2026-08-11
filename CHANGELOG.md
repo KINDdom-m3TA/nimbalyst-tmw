@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - Confirmation dialogs now close when you answer them, so removing a member no longer leaves the prompt stuck on screen.
+- Organization Messages opens on an organization you can actually use instead of stranding you on a screen waiting for a membership that never loads.
 
 ### Removed
 <!-- Removed features go here -->

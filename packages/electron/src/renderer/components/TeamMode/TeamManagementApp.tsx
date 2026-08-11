@@ -21,7 +21,7 @@ import {
 import {
   persistLastSelectedOrgId,
   readLastSelectedOrgId,
-  resolveDefaultOrgId,
+  resolveOrgWindowTargetId,
   type OrgChoice,
 } from './defaultOrg';
 import './TeamManagementWindow.css';
@@ -113,14 +113,18 @@ export function TeamManagementApp() {
         const organizations: OrgChoice[] = directory?.success && Array.isArray(directory.teams)
           ? directory.teams
           : hydratedOrganizations;
-        // The pending hand-off is an explicit destination. Keep targeting it
-        // even while team:list is empty or partial; silently choosing the first
-        // visible org would route an invited member into the wrong tenant.
-        const resolvedOrgId = pendingRoute?.orgId
-          ?? resolveDefaultOrgId(lastSelectedOrgId, organizations);
+        // The pending hand-off is an explicit destination, kept even while
+        // team:list is empty or partial — silently choosing the first visible
+        // org would route an invited member into the wrong tenant — but only
+        // while the directory does not positively say it is unopenable.
+        const resolvedOrgId = resolveOrgWindowTargetId(
+          pendingRoute?.orgId,
+          lastSelectedOrgId,
+          organizations,
+        );
         setSelectedOrgId(resolvedOrgId);
-        if (pendingRoute?.orgId) {
-          void persistLastSelectedOrgId(pendingRoute.orgId);
+        if (resolvedOrgId && resolvedOrgId === pendingRoute?.orgId) {
+          void persistLastSelectedOrgId(resolvedOrgId);
         }
       })
       .catch(() => {

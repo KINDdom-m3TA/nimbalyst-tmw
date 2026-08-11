@@ -5,9 +5,14 @@ import { trackerItemToRecord } from '@nimbalyst/runtime/core/TrackerRecord';
 import { replaceAllTrackerItemsAtom } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerDataAtoms';
 import { useAtom, useAtomValue, useStore } from 'jotai';
 
-// The one administration panel this window still hosts: its unbound arm, where
-// there is no organization to open the management dialog against.
-import { OrganizationMembersRolesPanel } from '../Settings/panels/OrganizationMembersRolesPanel';
+// Accept an invitation / create an organization: what is left to do on the
+// unbound arm, where there is no organization to open the management dialog
+// against. Administration itself is that dialog, never this window.
+import { OrganizationOnboardingChoices } from '../Settings/panels/OrganizationOnboardingChoices';
+// Narrow imports: the `dialogs` barrel would drag every dialog component into
+// the org window's module graph.
+import { DIALOG_IDS } from '../../dialogs/registry';
+import { dialogRef } from '../../contexts/DialogContext';
 import { AlphaBadge } from '../common/AlphaBadge';
 import { TEAM_BETA_TOOLTIP, TeamBetaNotice } from '../common/TeamBetaNotice';
 import { selectedOrgIdAtom } from '../../store/atoms/orgScope';
@@ -225,21 +230,40 @@ export function TeamMode({ workspacePath, isActive = true }: { workspacePath?: s
                 administer but no way to reach them. */}
             <div className="team-mode-organization-choices mb-3 flex flex-col gap-2" data-testid="team-mode-organization-choices">
               {activeOrganizations(organizations).map((organization) => (
-                <button
+                <div
                   key={organization.orgId}
-                  type="button"
-                  className="team-mode-organization-choice flex items-center justify-between rounded-md border border-[var(--nim-border)] bg-[var(--nim-bg-secondary)] px-3 py-2 text-left text-sm text-[var(--nim-text)] hover:bg-[var(--nim-bg-hover)]"
-                  data-testid="team-mode-organization-choice"
-                  data-org-id={organization.orgId}
-                  onClick={() => selectOrganization(organization.orgId)}
+                  className="team-mode-organization-row org-window-no-drag flex items-center gap-2 rounded-md border border-[var(--nim-border)] bg-[var(--nim-bg-secondary)] pr-2"
                 >
-                  <span className="min-w-0 flex-1 truncate">{organization.name}</span>
-                  {organization.role && (
-                    <span className="ml-2 shrink-0 text-[11px] capitalize text-[var(--nim-text-muted)]">
-                      {organization.role}
-                    </span>
-                  )}
-                </button>
+                  <button
+                    type="button"
+                    className="team-mode-organization-choice flex min-w-0 flex-1 items-center justify-between rounded-md px-3 py-2 text-left text-sm text-[var(--nim-text)] hover:bg-[var(--nim-bg-hover)]"
+                    data-testid="team-mode-organization-choice"
+                    data-org-id={organization.orgId}
+                    onClick={() => selectOrganization(organization.orgId)}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{organization.name}</span>
+                    {organization.role && (
+                      <span className="ml-2 shrink-0 text-[11px] capitalize text-[var(--nim-text-muted)]">
+                        {organization.role}
+                      </span>
+                    )}
+                  </button>
+                  {/* Administration is the dialog, which this window hosts through
+                      its own DialogProvider — not a screen of its own here. */}
+                  <button
+                    type="button"
+                    className="team-mode-organization-settings shrink-0 rounded p-1.5 text-[var(--nim-text-muted)] hover:bg-[var(--nim-bg-hover)] hover:text-[var(--nim-text)]"
+                    data-testid="team-mode-organization-settings"
+                    data-org-id={organization.orgId}
+                    title={`Organization settings for ${organization.name}`}
+                    aria-label={`Organization settings for ${organization.name}`}
+                    onClick={() => dialogRef.current?.open(DIALOG_IDS.ORG_MANAGEMENT, {
+                      orgId: organization.orgId,
+                    })}
+                  >
+                    <MaterialSymbol icon="settings" size={16} />
+                  </button>
+                </div>
               ))}
             </div>
             {selectedOrgId && (
@@ -260,7 +284,23 @@ export function TeamMode({ workspacePath, isActive = true }: { workspacePath?: s
                 </button>
               </div>
             )}
-            {!selectedOrgId && <OrganizationMembersRolesPanel orgId="" />}
+            <OrganizationOnboardingChoices
+              organizations={organizations}
+              onChanged={() => setOrganizationReloadNonce((value) => value + 1)}
+              onError={setOrganizationLoadError}
+              // The header above already carries the disclosure.
+              showBetaNotice={false}
+            />
+            {/* With a preserved destination the recovery card above already
+                states it; without one this is the only place an error shows. */}
+            {!selectedOrgId && organizationLoadError && (
+              <p
+                className="team-mode-organization-error m-0 select-text text-sm text-[var(--nim-error)]"
+                data-testid="team-mode-organization-error"
+              >
+                {organizationLoadError}
+              </p>
+            )}
           </div>
         </main>
       </section>

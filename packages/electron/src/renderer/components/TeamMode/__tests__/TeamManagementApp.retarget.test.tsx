@@ -120,6 +120,8 @@ describe('TeamManagementApp retargeting', () => {
 
   it('preserves a replayed invite destination across restart instead of choosing the first org', async () => {
     window.history.replaceState({}, '', '/?mode=team-management');
+    // The membership the invite created has not reached team:list yet.
+    listOrganizations.mockResolvedValue({ success: true, teams: [] });
     settings.set(
       ORG_WINDOW_PENDING_ROUTE_SETTING_KEY,
       pendingGeneralRoute('org-invite'),
@@ -137,6 +139,27 @@ describe('TeamManagementApp retargeting', () => {
     await waitFor(() => expect(store.get(selectedOrgIdAtom)).toBe('org-invite'));
     expect(settings.get(ORG_WINDOW_PENDING_ROUTE_SETTING_KEY)).toEqual(
       pendingGeneralRoute('org-invite'),
+    );
+  });
+
+  it('opens a working organization when the queued destination is not a membership', async () => {
+    // The hand-off is only consumed once its room hydrates, so a destination the
+    // user cannot open would otherwise win every open, for good.
+    window.history.replaceState({}, '', '/?mode=team-management');
+    settings.set(
+      ORG_WINDOW_PENDING_ROUTE_SETTING_KEY,
+      pendingGeneralRoute('org-never-joined'),
+    );
+    settings.set(LAST_SELECTED_ORG_SETTING_KEY, 'org-b');
+    const store = createStore();
+
+    render(<Provider store={store}><TeamManagementApp /></Provider>);
+
+    await waitFor(() => expect(store.get(selectedOrgIdAtom)).toBe('org-b'));
+    // The destination is kept, not deleted: it still replays if the membership
+    // is activated later.
+    expect(settings.get(ORG_WINDOW_PENDING_ROUTE_SETTING_KEY)).toEqual(
+      pendingGeneralRoute('org-never-joined'),
     );
   });
 });
