@@ -33,6 +33,11 @@ import {
   createWorkspaceManagerRendererQuery,
   type WorkspaceManagerWindowOptions,
 } from './workspaceManagerRendererQuery';
+import {
+  isStartupCohortWindow,
+  notifyStartupWindowRevealed,
+  registerStartupWindow,
+} from './StartupActivation';
 
 let workspaceManagerWindow: BrowserWindow | null = null;
 
@@ -202,9 +207,22 @@ export function createWorkspaceManagerWindow(options: WorkspaceManagerWindowOpti
     }, 1000);
   });
 
+  if (options.startupReveal) {
+    registerStartupWindow(workspaceManagerWindow, { frontmost: true });
+  }
+
   // Show window when ready
   workspaceManagerWindow.once('ready-to-show', () => {
-    workspaceManagerWindow?.show();
+    const window = workspaceManagerWindow;
+    if (!window || window.isDestroyed()) return;
+    if (isStartupCohortWindow(window)) {
+      // Launch reveals without activating; the app is foregrounded once, at
+      // the end of startup.
+      window.showInactive();
+      notifyStartupWindowRevealed(window);
+    } else {
+      window.show();
+    }
   });
 
   // Handle renderer process crashes

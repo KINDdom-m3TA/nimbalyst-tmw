@@ -20,6 +20,7 @@ import {
 } from '@nimbalyst/runtime';
 import { navigationHistoryService } from '../services/NavigationHistoryService';
 import { revealReadyWindow } from './revealReadyWindow';
+import { registerStartupWindow } from './StartupActivation';
 import { signalFirstWindowLoaded } from '../services/startupMaintenanceGate';
 import { AnalyticsService } from '../services/analytics/AnalyticsService';
 import { FeatureTrackingService } from '../services/analytics/FeatureTrackingService';
@@ -168,8 +169,13 @@ export function getFocusedOrNewWindow(): BrowserWindow {
 export interface CreateWindowOptions {
     /** Show the window without activating the app (no focus steal). */
     showInactive?: boolean;
-    /** Keep a restored window hidden if the user switched away during startup. */
-    deferShowUntilAppActive?: boolean;
+    /**
+     * This window is part of app launch: reveal it without activating and let
+     * StartupActivation foreground the app once, at the end of startup.
+     */
+    startupReveal?: boolean;
+    /** Among the startup windows, the one that should end up frontmost. */
+    startupFrontmost?: boolean;
 }
 
 export function createWindow(
@@ -284,6 +290,12 @@ export function createWindow(
         const window = new BrowserWindow(windowOptions);
         if (isWorkspaceMode) {
             registerCustomTitleBarWindow(window);
+        }
+
+        // Join the startup cohort before ready-to-show can fire, so launch
+        // knows to wait for this window before foregrounding the app once.
+        if (options?.startupReveal) {
+            registerStartupWindow(window, { frontmost: options.startupFrontmost });
         }
 
         // Generate a unique window ID

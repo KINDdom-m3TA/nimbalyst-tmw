@@ -22,6 +22,7 @@ import {
     findWindowByWorkspace,
     getMostRecentlyFocusedWorkspaceWindow,
 } from './window/WindowManager';
+import { beginStartupActivation, finishStartupWindowCreation } from './window/StartupActivation';
 import { loadFileIntoWindow } from './file/FileOperations';
 import { createApplicationMenu } from './menu/ApplicationMenu';
 import { updateNativeTheme, updateWindowTitleBars } from './theme/ThemeManager';
@@ -37,6 +38,7 @@ import {
 import { createWorkspaceManagerWindow, setupWorkspaceManagerHandlers, wasWorkspaceManagerManuallyClosed } from './window/WorkspaceManagerWindow.ts';
 import { setupTeamManagementHandlers } from './window/TeamManagementWindow';
 import { setupTrayPanelHandlers } from './window/TrayPanelWindow';
+import { applyDockIcon } from './utils/dockIcon';
 import { showSplashScreen, closeSplashScreen } from './window/SplashScreen';
 import { registerFileHandlers } from './ipc/FileHandlers';
 import { registerWorkspaceHandlers } from './ipc/WorkspaceHandlers.ts';
@@ -1385,10 +1387,14 @@ async function openFileWithWorkspaceDetection(filePath: string): Promise<void> {
             await loadFileIntoWindow(workspaceWindow, filePath);
         } else {
             // Create new workspace window for this workspace
-            workspaceWindow = createWindow(false, true, workspacePath);
+            workspaceWindow = createWindow(false, true, workspacePath, undefined, {
+                startupReveal: true,
+                startupFrontmost: true,
+            });
             updateTrackerSchemaWorkspace(workspacePath);
+            // createWindow reveals the window itself — inactive while this runs
+            // during launch, activating for a file opened later.
             workspaceWindow.once('ready-to-show', async () => {
-                workspaceWindow!.show();
                 // Window state is already set by createWindow with workspace path
                 // Just load the file
                 await loadFileIntoWindow(workspaceWindow!, filePath);
@@ -1407,10 +1413,12 @@ async function openFileWithWorkspaceDetection(filePath: string): Promise<void> {
             if (suggestedWorkspace && suggestedWorkspace !== path.dirname(filePath)) {
                 logger.main.info(`Opening suggested workspace: ${suggestedWorkspace}`);
                 addToRecentItems('workspaces', suggestedWorkspace, path.basename(suggestedWorkspace));
-                const newWindow = createWindow(false, true, suggestedWorkspace);
+                const newWindow = createWindow(false, true, suggestedWorkspace, undefined, {
+                    startupReveal: true,
+                    startupFrontmost: true,
+                });
                 updateTrackerSchemaWorkspace(suggestedWorkspace);
                 newWindow.once('ready-to-show', async () => {
-                    newWindow.show();
                     await loadFileIntoWindow(newWindow, filePath);
                 });
             } else {
@@ -1418,10 +1426,12 @@ async function openFileWithWorkspaceDetection(filePath: string): Promise<void> {
                 const fileDir = path.dirname(filePath);
                 logger.main.info(`Using file directory as workspace: ${fileDir}`);
                 addToRecentItems('workspaces', fileDir, path.basename(fileDir));
-                const newWindow = createWindow(false, true, fileDir);
+                const newWindow = createWindow(false, true, fileDir, undefined, {
+                    startupReveal: true,
+                    startupFrontmost: true,
+                });
                 updateTrackerSchemaWorkspace(fileDir);
                 newWindow.once('ready-to-show', async () => {
-                    newWindow.show();
                     await loadFileIntoWindow(newWindow, filePath);
                 });
             }
@@ -1486,6 +1496,14 @@ function activationLog(msg: string) {
     // logger.main.info(`[ACTIVATION +${elapsed}ms] ${msg}`);
 }
 
+app.on('did-become-active', () => {
+    activationLog('app did-become-active');
+});
+
+app.on('did-resign-active', () => {
+    activationLog('app did-resign-active');
+});
+
 app.on('browser-window-focus', (_event, win) => {
     activationLog(`browser-window-focus: window id=${win.id} title="${win.getTitle()}"`);
 });
@@ -1521,6 +1539,10 @@ BrowserWindow.prototype.focus = function(this: BrowserWindow) {
 // App ready handler
 app.whenReady().then(async () => {
     checkpoint('app-ready');
+
+    // Windows opened from here on are revealed without activating; the app is
+    // foregrounded exactly once, after the last of them is on screen.
+    beginStartupActivation();
 
     // The default renderer session may use the microphone after Voice Mode has
     // explicitly obtained the OS grant. Non-default sessions are deny-always.
@@ -1705,20 +1727,9 @@ app.whenReady().then(async () => {
         return;
     }
 
-    // Set dock icon for macOS
-    if (process.platform === 'darwin' && app.dock) {
-        // icon.png is at the package root in both dev and packaged builds
-        // (included in electron-builder's `files` array, so it's inside the ASAR at the root)
-        const iconPath = join(app.getAppPath(), 'icon.png');
-
-        if (existsSync(iconPath)) {
-            const dockIcon = nativeImage.createFromPath(iconPath);
-            app.dock.setIcon(dockIcon);
-            // logger.main.info('Dock icon set successfully from:', iconPath);
-        } else {
-            logger.main.warn(`icon not found at: ${iconPath}`);
-        }
-    }
+    // Set dock icon for macOS. Shared with TrayPanelWindow, which has to
+    // re-apply it after setting the activation policy.
+    applyDockIcon();
 
     // Register all IPC handlers
     markStart('ipc-handlers');
@@ -2771,7 +2782,8 @@ app.whenReady().then(async () => {
     // where it has direct access to the ai-settings store that owns this value.
 
     // Close splash screen now that initialization is done and a real window is about to show.
-    // The last restored window activates the app via its own ready-to-show handler.
+    // Restored windows reveal themselves without activating; StartupActivation
+    // brings Nimbalyst to the front once, after the last of them has painted.
     closeSplashScreen();
 
     if (pendingWorkspacePath) {
@@ -2867,7 +2879,10 @@ app.whenReady().then(async () => {
             }
         }
 
-        const window = createWindow(false, true, workspacePath);
+        const window = createWindow(false, true, workspacePath, undefined, {
+            startupReveal: true,
+            startupFrontmost: true,
+        });
 
         setTimeout(() => {
             // Yield before background workspace initialization so CLI opens don't
@@ -2878,7 +2893,8 @@ app.whenReady().then(async () => {
         }, 0);
 
         window.once('ready-to-show', () => {
-            window.show();
+            // createWindow already revealed the window; showing it again here
+            // would activate the app ahead of the single startup foregrounding.
             // Notify renderer to ensure workspace UI syncs with the selected path
             window.webContents.send('open-workspace-from-cli', workspacePath);
 
@@ -2897,9 +2913,9 @@ app.whenReady().then(async () => {
             unifiedOnboardingCompleted: onboardingState.unifiedOnboardingCompleted,
             launchCount: getLaunchCount(),
         })) {
-            createWorkspaceManagerWindow({ showOnboarding: true, safeMode: safeModeRequested });
+            createWorkspaceManagerWindow({ showOnboarding: true, safeMode: safeModeRequested, startupReveal: true });
         } else {
-            createWorkspaceManagerWindow({ safeMode: safeModeRequested });
+            createWorkspaceManagerWindow({ safeMode: safeModeRequested, startupReveal: true });
         }
     } else if (pendingFilePath) {
         // Handle pending file with workspace detection
@@ -2914,6 +2930,10 @@ app.whenReady().then(async () => {
         pendingDeepLinkUrl = null;
         await handleDeepLink(urlToHandle);
     }
+
+    // Every window launch intends to open has been requested. Nimbalyst comes
+    // to the front once, as soon as the last of them has painted.
+    finishStartupWindowCreation();
 
     // Community popup fallback for passive users:
     // show on launch 5+ if success-moment trigger (3 tool sessions) has not fired.

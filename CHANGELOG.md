@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - Repositories with more than a page of open pull requests no longer show only the first page, and accented characters in PR titles no longer come through garbled.
+- Nimbalyst comes to the front once when launch finishes, instead of sometimes staying hidden behind other apps after a slow start.
 
 ### Removed
 <!-- Removed features go here -->
