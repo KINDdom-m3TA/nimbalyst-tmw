@@ -116,6 +116,7 @@ vi.mock('../../utils/store', () => ({
 // exercising the `setContextMenu` path they were written against.
 vi.mock('../../window/TrayPanelWindow', () => ({
   isTrayPanelSupported: vi.fn(() => false),
+  isTrayPanelWindow: vi.fn(() => false),
   toggleTrayPanelWindow: vi.fn(),
   pushTrayPanelFeed: vi.fn(),
   closeTrayPanelWindow: vi.fn(),

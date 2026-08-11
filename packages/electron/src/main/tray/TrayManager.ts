@@ -22,6 +22,7 @@ import { updateSleepPrevention, resolvePreventSleepMode, getSyncProvider } from 
 import {
   closeTrayPanelWindow,
   isTrayPanelSupported,
+  isTrayPanelWindow,
   pushTrayPanelFeed,
   toggleTrayPanelWindow,
 } from '../window/TrayPanelWindow';
@@ -71,6 +72,20 @@ interface TrayUnreadClearPayload {
 
 const MENU_REBUILD_DEBOUNCE_MS = 300;
 const COMPLETED_LINGER_MS = 60_000; // Keep completed sessions visible for 1 minute
+
+/**
+ * Project windows only.
+ *
+ * The tray panel is a BrowserWindow too, so it appears in `getAllWindows()`.
+ * Focusing it in response to "Open Nimbalyst" would be a no-op from the user's
+ * point of view, and counting it as a visible foreground window makes the app
+ * look focused whenever the panel is open.
+ */
+function projectWindows(): BrowserWindow[] {
+  return BrowserWindow.getAllWindows().filter(
+    (window) => !window.isDestroyed() && !isTrayPanelWindow(window),
+  );
+}
 
 // ─── Row helpers ────────────────────────────────────────────────────────────
 
@@ -406,9 +421,10 @@ export class TrayManager {
           session.hasPendingPrompt = false; // Session done -- can't be blocked
           session.completedAt = Date.now();
 
-          // Check if app is backgrounded -- if so, mark as unread
-          const allWindows = BrowserWindow.getAllWindows();
-          const hasVisibleFocusedWindow = allWindows.some(w => w.isVisible() && w.isFocused());
+          // Check if app is backgrounded -- if so, mark as unread. The tray
+          // panel does not count: the user opening it to check on sessions must
+          // not suppress the unread flag on everything that finishes meanwhile.
+          const hasVisibleFocusedWindow = projectWindows().some(w => w.isVisible() && w.isFocused());
           if (!hasVisibleFocusedWindow) {
             session.hasUnread = true;
           }
@@ -828,7 +844,7 @@ export class TrayManager {
   // ─── Session click handling ────────────────────────────────────────────
 
   handleNewSession(): void {
-    const windows = BrowserWindow.getAllWindows();
+    const windows = projectWindows();
     if (windows.length > 0) {
       const win = windows[0];
       win.show();
@@ -840,7 +856,7 @@ export class TrayManager {
 
   /** Focus any project window. Shared by the native menu item and the panel footer. */
   handleOpenApp(): void {
-    const windows = BrowserWindow.getAllWindows();
+    const windows = projectWindows();
     if (windows.length > 0) {
       windows[0].show();
       windows[0].focus();
@@ -860,7 +876,7 @@ export class TrayManager {
       targetWindow.webContents.send('tray:navigate-to-session', { sessionId, workspacePath });
     } else {
       // No window for this workspace -- just show any window
-      const windows = BrowserWindow.getAllWindows();
+      const windows = projectWindows();
       if (windows.length > 0) {
         windows[0].show();
         windows[0].focus();

@@ -128,10 +128,15 @@ function createTrayPanelWindow(bounds: Rectangle): BrowserWindow {
     roundedCorners: true,
     vibrancy: 'popover',
     visualEffectState: 'active',
-    // A panel floats above full-screen apps without making Nimbalyst the active
-    // application, which is what keeps the tray click from yanking focus off
-    // whatever the user was doing. Electron types this as a bare string.
-    type: 'panel',
+    // NOT `type: 'panel'`. An NSPanel would float over full-screen apps without
+    // activating Nimbalyst, but Electron puts NSApp into the accessory
+    // activation policy to do it -- which strips the Dock icon and the Cmd+Tab
+    // entry for the whole app. Because this window is created on the first tray
+    // click, opening the panel made Nimbalyst unreachable from the app switcher,
+    // with the panel's own "Open Nimbalyst" button the only way back to a
+    // project window. `alwaysOnTop` at the floating level plus
+    // `visibleOnFullScreen` below covers the float-over behaviour; the panel
+    // activating the app when opened is the accepted cost.
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -142,6 +147,16 @@ function createTrayPanelWindow(bounds: Rectangle): BrowserWindow {
 
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   window.setAlwaysOnTop(true, 'floating');
+
+  // Guard the regression above. A window option that quietly demotes the app to
+  // an accessory is invisible until someone reaches for Cmd+Tab and finds
+  // Nimbalyst gone, so assert the policy rather than trusting the options.
+  // Unconditional because Electron exposes no `getActivationPolicy`; the call is
+  // idempotent, and nothing in the app ever wants a non-regular policy (the one
+  // `dock.hide()` is for ELECTRON_RUN_AS_NODE, which has no tray at all).
+  if (process.platform === 'darwin') {
+    app.setActivationPolicy('regular');
+  }
 
   window.on('blur', () => {
     if (window.isDestroyed() || !window.isVisible()) return;
@@ -207,6 +222,18 @@ export function pushTrayPanelFeed(feed: TrayPanelFeed): void {
   latestFeed = feed;
   if (!trayPanelWindow || trayPanelWindow.isDestroyed()) return;
   trayPanelWindow.webContents.send(TRAY_PANEL_CHANNELS.sessions, feed);
+}
+
+/**
+ * Whether this is the tray panel.
+ *
+ * The panel is a `BrowserWindow`, so it shows up in `getAllWindows()` alongside
+ * project windows. Anything that means "a window the user works in" -- picking a
+ * window to focus, deciding whether the app is in the foreground -- has to
+ * exclude it, or the panel answers for the app.
+ */
+export function isTrayPanelWindow(window: BrowserWindow): boolean {
+  return !!trayPanelWindow && !trayPanelWindow.isDestroyed() && window === trayPanelWindow;
 }
 
 export function hideTrayPanelWindow(): void {
