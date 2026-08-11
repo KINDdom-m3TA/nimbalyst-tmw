@@ -76,6 +76,17 @@ fields:
       - release
     multiValue: true
 
+  # Goal membership. Written directly, or by inverse propagation when an item
+  # is added from a goal's `contributes` field.
+  - name: goal
+    type: relationship
+    relationshipTypeKey: contributed-by
+    inverseRelationshipTypeKey: contributes-to
+    inverseFieldId: contributes
+    targetTrackerTypes:
+      - goal
+    multiValue: true
+
   - name: tags
     type: array
     itemType: string

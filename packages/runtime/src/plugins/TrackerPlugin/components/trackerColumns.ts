@@ -54,8 +54,6 @@ export interface TypeColumnConfig {
   visibleColumns: string[];
   /** Custom column widths (overrides defaults) */
   columnWidths: Record<string, number>;
-  /** Grouping field (null = no grouping) */
-  groupBy: string | null;
 }
 
 // ============================================================================
@@ -207,7 +205,7 @@ export function getDefaultColumnConfig(type: string): TypeColumnConfig {
     }
   }
 
-  return { visibleColumns, columnWidths: {}, groupBy: null };
+  return { visibleColumns, columnWidths: {} };
 }
 
 // Keep the old name exported for backward compat

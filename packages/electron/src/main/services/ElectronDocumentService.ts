@@ -10,7 +10,8 @@ import type {
   MetadataChangeEvent,
   TrackerItem,
   TrackerItemChangeEvent,
-  TrackerItemType
+  TrackerItemType,
+  TrackerDerivedSignal,
 } from '@nimbalyst/runtime';
 import crypto from 'crypto';
 import { getCurrentIdentity } from './TrackerIdentityService';
@@ -21,10 +22,15 @@ import { fromDbBoolean } from './tracker/trackerDbValue';
 import {
   getBacklinks as getRelationshipBacklinks,
   reindexItemRelationships,
+  reindexItemsRelationships,
   rebuildWorkspaceRelationshipIndex,
 } from './tracker/trackerRelationshipIndexStore';
 import { propagateInverseRelationships } from './tracker/inverseRelationshipWrites';
 import { applyRelationshipFieldWrites } from './tracker/relationshipFieldWrite';
+import {
+  validateRelationshipReindexPayload,
+  validateTrackerItemBatchPayload,
+} from './tracker/trackerBatchRequests';
 import {
   nestRelationshipFieldsIntoCustomFields,
   readStoredFieldValue,
@@ -32,7 +38,12 @@ import {
 } from './tracker/relationshipFieldStorage';
 import { projectionWouldChange } from './tracker/projectionUpdateGuard';
 import { extractFrontmatter, extractCommonFields } from '../utils/frontmatterReader';
-import { VIRTUAL_DOCS, isVirtualPath } from '@nimbalyst/runtime';
+import {
+  PLAN_INVALID_STATUS_SIGNAL_KIND,
+  VIRTUAL_DOCS,
+  isVirtualPath,
+  normalizePlanStatusForProjection,
+} from '@nimbalyst/runtime';
 import {
   updateTrackerInFrontmatter,
   updateInlineTrackerItem,
@@ -119,6 +130,46 @@ interface ExistingInlineTrackerRow {
 interface ResolvedFullDocumentFrontmatter {
   trackerType: string;
   trackerData: Record<string, any>;
+  derivedSignals?: TrackerDerivedSignal[];
+}
+
+function normalizeResolvedFullDocumentFrontmatter(
+  resolved: ResolvedFullDocumentFrontmatter,
+): ResolvedFullDocumentFrontmatter {
+  if (resolved.trackerType !== 'plan' || typeof resolved.trackerData.status !== 'string') {
+    return resolved;
+  }
+
+  const model = globalRegistry.get(resolved.trackerType);
+  const statusFieldName = model?.roles?.workflowStatus ?? 'status';
+  const validStatuses = model?.fields
+    ?.find((field) => field.name === statusFieldName)
+    ?.options
+    ?.map((option) => option.value) ?? [];
+  const normalization = normalizePlanStatusForProjection(
+    resolved.trackerData.status,
+    validStatuses,
+  );
+
+  if (!normalization.valid) {
+    return {
+      ...resolved,
+      derivedSignals: [{
+        kind: PLAN_INVALID_STATUS_SIGNAL_KIND,
+        reason: 'unrecognized-status',
+        status: normalization.status,
+        validStatuses: [...validStatuses],
+      }],
+    };
+  }
+  if (!normalization.normalizedFrom) return resolved;
+  return {
+    ...resolved,
+    trackerData: {
+      ...resolved.trackerData,
+      status: normalization.status,
+    },
+  };
 }
 
 function resolveFullDocumentFrontmatter(
@@ -130,10 +181,10 @@ function resolveFullDocumentFrontmatter(
     if (frontmatter[extKey] && typeof frontmatter[extKey] === 'object') {
       const extData = frontmatter[extKey] as Record<string, any>;
       const { [extKey]: _ext, trackerStatus: _ts, ...topLevel } = frontmatter;
-      return {
+      return normalizeResolvedFullDocumentFrontmatter({
         trackerType: extType,
         trackerData: { ...topLevel, ...extData },
-      };
+      });
     }
   }
 
@@ -143,20 +194,20 @@ function resolveFullDocumentFrontmatter(
       ? trackerStatus.type.trim()
       : 'plan';
     const { trackerStatus: _ts, ...topLevel } = frontmatter;
-    return {
+    return normalizeResolvedFullDocumentFrontmatter({
       trackerType,
       trackerData: { ...trackerStatus, ...topLevel },
-    };
+    });
   }
 
   for (const [legacyKey, legacyType] of Object.entries(LEGACY_KEY_TO_TYPE)) {
     if (frontmatter[legacyKey] && typeof frontmatter[legacyKey] === 'object') {
       const legacyData = frontmatter[legacyKey] as Record<string, any>;
       const { [legacyKey]: _legacy, trackerStatus: _ts, ...topLevel } = frontmatter;
-      return {
+      return normalizeResolvedFullDocumentFrontmatter({
         trackerType: legacyType,
         trackerData: { ...legacyData, ...topLevel },
-      };
+      });
     }
   }
 
@@ -1234,6 +1285,9 @@ export class ElectronDocumentService implements DocumentService {
         if (!coreFieldKeys.has(key) && value !== undefined) {
           customFields[key] = value;
         }
+      }
+      if (resolved.derivedSignals?.length) {
+        customFields.derivedSignals = resolved.derivedSignals;
       }
 
       items.push({
@@ -2486,6 +2540,16 @@ export class ElectronDocumentService implements DocumentService {
     const sourceRef = row.source_ref;
     const documentPath = row.document_path;
     const trackerType = row.type;
+    const fieldDefs = globalRegistry.get(trackerType)?.fields ?? [];
+
+    // Keep the source-file representation flat, but run relationship values
+    // through the same canonicalization and validation as native/store-backed
+    // writes before either persistence path observes them.
+    const fileUpdates = { ...updates };
+    const relationshipWrite = applyRelationshipFieldWrites(fileUpdates, fieldDefs, itemId);
+    if (!relationshipWrite.ok) {
+      throw new Error(`Invalid relationship field "${relationshipWrite.field}": ${relationshipWrite.errors.join('; ')}`);
+    }
 
     // Determine the file path -- inline items use document_path, frontmatter uses source_ref
     const relativePath = source === 'inline' ? documentPath : (sourceRef || documentPath);
@@ -2515,7 +2579,7 @@ export class ElectronDocumentService implements DocumentService {
         // Inline items: rewrite #type[...] metadata in the line. Markers without
         // an explicit id: are located via the row's line + title, since the id is
         // a deterministic hash that never reaches the file (GitHub #404).
-        const result = updateInlineTrackerItem(fileContent, itemId, updates, {
+        const result = updateInlineTrackerItem(fileContent, itemId, fileUpdates, {
           lineNumber: row.line_number != null ? Number(row.line_number) : undefined,
           title: typeof row.title === 'string' ? row.title : undefined,
         });
@@ -2524,7 +2588,7 @@ export class ElectronDocumentService implements DocumentService {
         }
         updatedContent = result;
       } else {
-        const { description, ...frontmatterUpdates } = updates;
+        const { description, ...frontmatterUpdates } = fileUpdates;
         updatedContent = Object.keys(frontmatterUpdates).length > 0
           ? updateTrackerInFrontmatter(fileContent, trackerType, frontmatterUpdates)
           : fileContent;
@@ -2557,11 +2621,14 @@ export class ElectronDocumentService implements DocumentService {
     let item: TrackerItem;
     if (resolvedRow) {
       const existingData = typeof resolvedRow.data === 'string' ? JSON.parse(resolvedRow.data) : (resolvedRow.data || {});
-      const mergedData = { ...existingData, ...updates };
-      const normalizedDescription = typeof updates.description === 'string'
-        ? updates.description.replace(/\\n/g, '\n')
+      const mergedData = { ...existingData, ...fileUpdates };
+      nestRelationshipFieldsIntoCustomFields(mergedData, fieldDefs, {
+        writtenFields: Object.keys(fileUpdates),
+      });
+      const normalizedDescription = typeof fileUpdates.description === 'string'
+        ? fileUpdates.description.replace(/\\n/g, '\n')
         : undefined;
-      if ((source === 'frontmatter' || source === 'import') && updates.description !== undefined) {
+      if ((source === 'frontmatter' || source === 'import') && fileUpdates.description !== undefined) {
         delete mergedData.description;
         const contentJson = normalizedDescription != null ? JSON.stringify(normalizedDescription) : null;
         const versionResult = await database.query<{ body_version: string | number | null }>(
@@ -2655,47 +2722,13 @@ export class ElectronDocumentService implements DocumentService {
       return { item: null, skipped: false, error: 'No valid frontmatter found' };
     }
 
-    // Resolve tracker frontmatter. Keep this in sync with
-    // `detectTrackerFromFrontmatter` / `resolveTrackerFrontmatter` so import
-    // accepts extension-owned keys, canonical trackerStatus docs, and older
-    // legacy per-type keys like `planStatus`. Otherwise import rejects files
-    // that the tracker UI still considers valid tracker documents.
-    let trackerData: Record<string, any> | null = null;
-    let trackerType = 'plan'; // default
-
-    for (const [extKey, extType] of Object.entries(EXTENSION_OWNED_KEYS)) {
-      if (frontmatter[extKey] && typeof frontmatter[extKey] === 'object') {
-        const extData = frontmatter[extKey] as Record<string, any>;
-        const { [extKey]: _ext, trackerStatus: _ts, ...topLevel } = frontmatter;
-        trackerType = extType;
-        trackerData = { ...topLevel, ...extData };
-        break;
-      }
-    }
-
-    if (!trackerData && frontmatter.trackerStatus && typeof frontmatter.trackerStatus === 'object') {
-      const ts = frontmatter.trackerStatus as Record<string, any>;
-      trackerType = (ts.type as string) || 'plan';
-      // Top-level fields are canonical, trackerStatus holds only type
-      const { trackerStatus: _, ...topLevel } = frontmatter;
-      trackerData = { ...ts, ...topLevel };
-    }
-
-    if (!trackerData) {
-      for (const [legacyKey, legacyType] of Object.entries(LEGACY_KEY_TO_TYPE)) {
-        if (frontmatter[legacyKey] && typeof frontmatter[legacyKey] === 'object') {
-          const legacyData = frontmatter[legacyKey] as Record<string, any>;
-          const { [legacyKey]: _, trackerStatus: _ts, ...topLevel } = frontmatter;
-          trackerType = legacyType;
-          trackerData = { ...legacyData, ...topLevel };
-          break;
-        }
-      }
-    }
-
-    if (!trackerData) {
+    // Use the same frontmatter resolver as live projection so imports accept
+    // every supported frontmatter shape and apply the same status validation.
+    const resolved = resolveFullDocumentFrontmatter(frontmatter);
+    if (!resolved) {
       return { item: null, skipped: false, error: 'No tracker frontmatter found' };
     }
+    const { trackerData, trackerType } = resolved;
 
     // Extract markdown body (everything after frontmatter)
     const bodyMatch = fileContent.match(/^---\s*\n[\s\S]*?\n---\s*\n([\s\S]*)$/);
@@ -3785,13 +3818,18 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
     }
   });
 
-  // Update tracker item fields
-  safeHandle('document-service:update-tracker-item', async (event, payload: {
+  /**
+   * Update one tracker item's stored fields, then sync, propagate inverse
+   * relationships, and record the mutation. Shared by the single-item handler and
+   * the batch handler so a bulk board action cannot take a different write path
+   * than a single edit.
+   */
+  async function applyTrackerItemUpdate(event: IpcMainInvokeEvent, payload: {
     itemId: string;
     updates: Record<string, any>;
     sharing?: 'personal' | 'team';
     draftByDefault?: boolean;
-  }) => {
+  }): Promise<{ success: boolean; item?: TrackerItem; error?: string }> {
     try {
       // console.log('[DocumentService] update-tracker-item:', {
       //   itemId: payload.itemId,
@@ -3874,7 +3912,15 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
       console.error('[DocumentService] update-tracker-item failed:', error);
       return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
-  });
+  }
+
+  // Update tracker item fields
+  safeHandle('document-service:update-tracker-item', async (event, payload: {
+    itemId: string;
+    updates: Record<string, any>;
+    sharing?: 'personal' | 'team';
+    draftByDefault?: boolean;
+  }) => applyTrackerItemUpdate(event, payload));
 
   // Manual one-shot: promote items that were already shared under an `fm:` id.
   // Deliberately not a startup sweep -- see
@@ -4028,11 +4074,14 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
     }
   });
 
-  // Update tracker item in source file (frontmatter)
-  safeHandle('document-service:tracker-item-update-in-file', async (event, payload: {
+  /**
+   * Update one file-backed tracker item's frontmatter, then propagate inverse
+   * relationships. Shared by the single-item handler and the batch handler.
+   */
+  async function applyTrackerItemUpdateInFile(event: IpcMainInvokeEvent, payload: {
     itemId: string;
     updates: Record<string, any>;
-  }) => {
+  }): Promise<{ success: boolean; item?: TrackerItem; error?: string }> {
     try {
       const svc = requireDocumentService(event);
 
@@ -4073,6 +4122,53 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
       console.error('[DocumentService] tracker-item-update-in-file failed:', error);
       return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  // Update tracker item in source file (frontmatter)
+  safeHandle('document-service:tracker-item-update-in-file', async (event, payload: {
+    itemId: string;
+    updates: Record<string, any>;
+  }) => applyTrackerItemUpdateInFile(event, payload));
+
+  /**
+   * Update many tracker items in one call.
+   *
+   * A bulk board action (assign fifty plans to a milestone) would otherwise be
+   * one IPC round trip per item, each one paying the renderer-to-main hop for a
+   * write main was going to do anyway. Each entry names its own routing, so a
+   * batch may mix frontmatter-backed and store-backed items. The per-item writes
+   * stay sequential: they hit the same tables, the same collection's inverse
+   * field, and -- for file-backed items -- the same document pipeline.
+   */
+  safeHandle('document-service:update-tracker-items', async (event, payload: unknown) => {
+    const validation = validateTrackerItemBatchPayload(payload);
+    if (!validation.ok) return { success: false, error: validation.error };
+
+    const results: Array<{ itemId: string; success: boolean; error?: string }> = [];
+    for (const entry of validation.value) {
+      const failures: string[] = [];
+      if (entry.fileUpdates && Object.keys(entry.fileUpdates).length > 0) {
+        const result = await applyTrackerItemUpdateInFile(event, {
+          itemId: entry.itemId,
+          updates: entry.fileUpdates,
+        });
+        if (!result.success) failures.push(result.error ?? 'file update failed');
+      }
+      if (entry.storeUpdates && Object.keys(entry.storeUpdates).length > 0) {
+        const result = await applyTrackerItemUpdate(event, {
+          itemId: entry.itemId,
+          updates: entry.storeUpdates,
+          sharing: entry.sharing,
+          draftByDefault: entry.draftByDefault,
+        });
+        if (!result.success) failures.push(result.error ?? 'store update failed');
+      }
+      results.push(failures.length === 0
+        ? { itemId: entry.itemId, success: true }
+        : { itemId: entry.itemId, success: false, error: failures.join('; ') });
+    }
+
+    return { success: results.every(result => result.success), results };
   });
 
   // Import tracker item from file
@@ -4343,18 +4439,30 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
     }
   });
 
-  // Incremental reindex of one item's outgoing relationship edges. Called by the
+  // Incremental reindex of an item's outgoing relationship edges. Called by the
   // renderer after a relationship field changes so backlinks update without a
-  // full workspace rebuild. Idempotent.
-  safeHandle('document-service:tracker-item-reindex-relationships', async (_event, payload: { itemId: string }) => {
+  // full workspace rebuild. Idempotent. Accepts `itemIds` so a bulk board action
+  // reindexes its whole selection in one call.
+  safeHandle('document-service:tracker-item-reindex-relationships', async (_event, payload: unknown) => {
+    const validation = validateRelationshipReindexPayload(payload);
+    if (!validation.ok) return { success: false, error: validation.error };
+    const itemIds = validation.value;
     try {
-      const row = await database.query<any>(`SELECT id, type, data, workspace, updated FROM tracker_items WHERE id = $1`, [payload.itemId]);
-      if (row.rows.length === 0) return { success: false, error: 'Item not found' };
-      const r = row.rows[0];
-      const data = typeof r.data === 'string' ? JSON.parse(r.data) : (r.data || {});
-      const defs = globalRegistry.get(r.type)?.fields ?? [];
-      const updatedAt = typeof r.updated === 'string' ? r.updated : (r.updated ? new Date(r.updated).toISOString() : null);
-      await reindexItemRelationships(r.workspace, r.id, data, defs, updatedAt, database as any);
+      const placeholders = itemIds.map((_, index) => `$${index + 1}`).join(', ');
+      const rows = await database.query<any>(
+        `SELECT id, type, data, workspace, updated FROM tracker_items WHERE id IN (${placeholders})`,
+        itemIds,
+      );
+      if (rows.rows.length === 0) return { success: false, error: 'Item not found' };
+      await reindexItemsRelationships(rows.rows.map((r: any) => ({
+        workspace: r.workspace,
+        sourceItemId: r.id,
+        fields: parseJsonColumn<Record<string, unknown>>(r.data) ?? {},
+        fieldDefs: globalRegistry.get(r.type)?.fields ?? [],
+        sourceUpdatedAt: typeof r.updated === 'string'
+          ? r.updated
+          : (r.updated ? new Date(r.updated).toISOString() : null),
+      })), database as any);
       return { success: true };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };

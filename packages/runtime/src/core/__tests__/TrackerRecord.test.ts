@@ -100,6 +100,33 @@ describe('trackerItemToRecord', () => {
     expect(record.system.documentId).toBe('doc-1');
   });
 
+  it('exposes plan status drift as a derived, read-only system signal', () => {
+    const item = makeTrackerItem({
+      id: 'fm:plan:nimbalyst-local/plans/example.md',
+      type: 'plan',
+      typeTags: ['plan'],
+      status: 'draft',
+      linkedSessions: ['session-1'],
+      linkedCommits: [{
+        sha: 'abc123',
+        message: 'feat: ship plan work',
+        sessionId: 'session-1',
+        timestamp: '2026-08-10T12:00:00.000Z',
+      }],
+    });
+
+    const record = trackerItemToRecord(item);
+
+    expect(record.system.derivedSignals).toEqual([{
+      kind: 'plan-status-drift',
+      reason: 'linked-session-committed',
+      status: 'draft',
+      committedSessionIds: ['session-1'],
+      commitShas: ['abc123'],
+    }]);
+    expect(JSON.parse(recordToDbParams(record).data).derivedSignals).toBeUndefined();
+  });
+
   it('does not fabricate now for missing created/updated (NIM-1559)', () => {
     // A frontmatter plan with no dates but a stable file mtime in lastIndexed.
     const mtime = new Date('2026-06-19T18:29:37.000Z');

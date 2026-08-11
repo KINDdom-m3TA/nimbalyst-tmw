@@ -9,6 +9,12 @@
 import type { TrackerIdentity, TrackerActivity, TrackerItem, TrackerItemSource, TrackerOrigin } from './DocumentService';
 import type { TrackerCommentEntry as TrackerComment } from '../sync/trackerProtocol';
 import { fromDbBoolean } from './dbBoolean';
+import {
+  derivePlanStatusSignals,
+  type TrackerDerivedSignal,
+} from '../plugins/TrackerPlugin/models/planStatusIntegrity';
+
+export type { TrackerDerivedSignal } from '../plugins/TrackerPlugin/models/planStatusIntegrity';
 
 // Re-exported so hosts reading tracker rows share one coercion (NIM-2280).
 export { fromDbBoolean } from './dbBoolean';
@@ -50,6 +56,8 @@ export interface TrackerRecordSystem {
   linkedSessions?: string[];
   linkedCommitSha?: string;
   linkedCommits?: LinkedCommit[];
+  /** Read-only signals derived from fields and linked evidence; never persisted. */
+  derivedSignals?: TrackerDerivedSignal[];
   linkedPullRequests?: LinkedPullRequest[];
   documentId?: string;
   activity?: TrackerActivity[];
@@ -81,6 +89,21 @@ export interface TrackerRecord {
   fields: Record<string, unknown>;
 }
 
+function attachDerivedSignals(record: TrackerRecord): TrackerRecord {
+  const derivedSignals = derivePlanStatusSignals({
+    primaryType: record.primaryType,
+    status: record.fields.status,
+    linkedCommits: record.system.linkedCommits,
+  });
+  if (derivedSignals.length > 0) {
+    record.system.derivedSignals = [
+      ...(record.system.derivedSignals ?? []),
+      ...derivedSignals,
+    ];
+  }
+  return record;
+}
+
 // ---------------------------------------------------------------------------
 // Fields that live in `system`, NOT in `fields`
 // ---------------------------------------------------------------------------
@@ -99,6 +122,7 @@ const SYSTEM_KEYS = new Set([
   'origin',
   'triagedAt',
   'triagedBy',
+  'derivedSignals',
   // also pulled from row-level columns, not from data JSONB
   'assigneeId',
   'reporterId',
@@ -227,7 +251,7 @@ export function trackerItemToRecord(item: TrackerItem): TrackerRecord {
     }
   }
 
-  return record;
+  return attachDerivedSignals(record);
 }
 
 /**
@@ -373,7 +397,7 @@ export function dbRowToRecord(row: any): TrackerRecord {
   const systemValue = (key: string): unknown =>
     data[key] !== undefined ? data[key] : nestedCustomFields?.[key];
 
-  return {
+  const record: TrackerRecord = {
     id: row.id,
     primaryType: row.type,
     typeTags,
@@ -407,6 +431,8 @@ export function dbRowToRecord(row: any): TrackerRecord {
     },
     fields,
   };
+
+  return attachDerivedSignals(record);
 }
 
 /**

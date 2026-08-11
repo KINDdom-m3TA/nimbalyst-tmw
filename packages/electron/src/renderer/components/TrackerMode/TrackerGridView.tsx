@@ -63,6 +63,7 @@ import {
   type TrackerFilterEvaluationContext,
   type TrackerFieldFilter,
   type TrackerFilterSet,
+  type TrackerGroupBy,
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
 import {
   buildGridActionsColumn,
@@ -91,6 +92,7 @@ interface TrackerGridViewProps {
   filterType?: TrackerItemType | 'all';
   sortBy?: string;
   sortDirection?: 'asc' | 'desc';
+  groupBy?: TrackerGroupBy;
   onItemSelect?: (itemId: string) => void;
   onDetailClose?: () => void;
   selectedItemId?: string | null;
@@ -129,6 +131,7 @@ export function TrackerGridView({
   filterType = 'all',
   sortBy = 'lastIndexed',
   sortDirection = 'desc',
+  groupBy = 'none',
   onItemSelect,
   onDetailClose,
   selectedItemId,
@@ -410,16 +413,16 @@ export function TrackerGridView({
       ...row,
       [ROW_GROUP_LABEL]: getTrackerGroupLabel(
         sortedItems[index],
-        effectiveColumnConfig.groupBy,
+        groupBy,
       ),
     })),
-    [effectiveColumnConfig.groupBy, sortedItems, visibleColumnDefs],
+    [groupBy, sortedItems, visibleColumnDefs],
   );
   const gridGrouping = useMemo(
-    () => effectiveColumnConfig.groupBy
+    () => groupBy !== 'none'
       ? { props: [ROW_GROUP_LABEL], expandedAll: true }
       : undefined,
-    [effectiveColumnConfig.groupBy],
+    [groupBy],
   );
 
   const resolveGridRowItem = useCallback(async (rowIndex: number): Promise<TrackerRecord | null> => {
@@ -693,7 +696,7 @@ export function TrackerGridView({
     // A mouse focus opens details as before. Keyboard focus only changes the
     // row while browsing; once details are open, it keeps the panel in sync.
     if (onItemSelect && (!keyboardFocused || selectedItemId)) {
-      if (!effectiveColumnConfig.groupBy) {
+      if (groupBy === 'none') {
         const item = sortedItemsRef.current[rowIndex];
         if (item) onItemSelect(item.id);
         return;
@@ -702,7 +705,7 @@ export function TrackerGridView({
         if (item) onItemSelect(item.id);
       });
     }
-  }, [effectiveColumnConfig.groupBy, onItemSelect, resolveGridRowItem, selectedItemId]);
+  }, [groupBy, onItemSelect, resolveGridRowItem, selectedItemId]);
 
   const handleBeforeSorting = useCallback((
     event: RevoGridCustomEvent<BeforeSortingDetail>,

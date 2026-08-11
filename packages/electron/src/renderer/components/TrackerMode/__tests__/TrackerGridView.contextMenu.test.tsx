@@ -68,7 +68,7 @@ function renderGrid(overrides: Record<string, unknown> = {}) {
     <TrackerGridView
       filterType="bug"
       overrideItems={ITEMS}
-      columnConfig={{ visibleColumns: ['title', 'status'], columnWidths: {}, groupBy: null }}
+      columnConfig={{ visibleColumns: ['title', 'status'], columnWidths: {} }}
       {...overrides}
     />,
   );

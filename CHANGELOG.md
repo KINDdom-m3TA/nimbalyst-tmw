@@ -10,9 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- Group the tracker board into lanes by milestone, goal, or any other field, placing work by dragging a card, using the chip on it, or selecting several at once.
+- A Timeline view lays tracker work out over time, grouped the same way the board is.
+- Plans still marked draft after a linked session committed now carry a chip naming the commits that disagree.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- View mode, grouping, and ordering now live together in the tracker's Display Settings panel.
 
 ### Fixed
 <!-- Bug fixes go here -->

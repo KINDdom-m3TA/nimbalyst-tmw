@@ -7,7 +7,7 @@ import type { TrackerDataModel, TrackerFilterSet } from '@nimbalyst/runtime/plug
 import { generateKeyBetween } from '@nimbalyst/runtime/utils/fractionalIndex';
 import type { TrackerNavigationEntry, TrackerNavigationFolder, TrackerTypePlacement } from '@nimbalyst/runtime/sync';
 import type { TrackerFilterChip } from '../../store/atoms/trackers';
-import type { ViewMode } from './TrackerMainView';
+import type { TrackerViewMode } from './trackerViewModes';
 import type { SavedView } from './trackerSavedViews';
 import { WorkspaceSummaryHeader } from '../WorkspaceSummaryHeader';
 import { AlphaBadge } from '../common/AlphaBadge';
@@ -51,9 +51,13 @@ interface TrackerSidebarProps {
   personalStateHydrated: boolean;
   recentlyViewedDays: 7 | 30 | 90 | null;
   columnFilters: TrackerFilterSet | null;
-  viewMode: ViewMode;
+  /**
+   * The chosen mode, which may be one this shortcut row has no button for
+   * (`timeline`) -- Display Settings is the full control surface.
+   */
+  viewMode: TrackerViewMode;
   onSelectType: (type: string | 'all') => void;
-  onViewModeChange: (mode: ViewMode) => void;
+  onViewModeChange: (mode: TrackerViewMode) => void;
   /** Saved views for this workspace (NIM-788). */
   savedViews: SavedView[];
   /** View currently represented by the main header. */

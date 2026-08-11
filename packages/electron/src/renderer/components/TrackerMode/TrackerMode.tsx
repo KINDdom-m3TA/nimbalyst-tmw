@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useCallback } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { globalRegistry, loadBuiltinTrackers } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
-import { getDefaultColumnConfig } from '@nimbalyst/runtime/plugins/TrackerPlugin';
 import { TrackerSidebar } from './TrackerSidebar';
-import { TrackerMainView, type ViewMode } from './TrackerMainView';
+import { TrackerMainView } from './TrackerMainView';
+import { type TrackerViewMode } from './trackerViewModes';
 import { useTrackerTeamOwnership } from './useTrackerTeamMembers';
 import { ResizablePanel } from '../AgenticCoding/ResizablePanel';
 import type { TrackerIdentity, TrackerItemType } from '@nimbalyst/runtime';
@@ -20,7 +20,6 @@ import {
 import {
   legacyFilterChipsToClauses,
   hasSavableViewState,
-  normalizeTrackerGroupBy,
   type SavedView,
   type SavedViewDefinition,
 } from './trackerSavedViews';
@@ -56,6 +55,7 @@ function savedViewMatchesCurrent(
     'selectedType',
     'viewMode',
     'groupBy',
+    'ordering',
     'sortBy',
     'sortDirection',
     'recentlyViewedDays',
@@ -182,15 +182,14 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
     setModeLayout({
       selectedType: type,
       selectedItemId: null,
-      groupBy: normalizeTrackerGroupBy(modeLayout.typeColumnConfigs[type]?.groupBy),
     });
-  }, [modeLayout.typeColumnConfigs, setModeLayout]);
+  }, [setModeLayout]);
 
   const handleClearFilters = useCallback(() => {
     setModeLayout({ activeFilters: [] });
   }, [setModeLayout]);
 
-  const handleViewModeChange = useCallback((mode: ViewMode) => {
+  const handleViewModeChange = useCallback((mode: TrackerViewMode) => {
     setModeLayout({ viewMode: mode });
   }, [setModeLayout]);
 
@@ -209,9 +208,8 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
     activeFilters: modeLayout.activeFilters,
     viewMode: modeLayout.viewMode,
     tagFilter,
-    groupBy: normalizeTrackerGroupBy(
-      modeLayout.typeColumnConfigs[modeLayout.selectedType]?.groupBy ?? modeLayout.groupBy,
-    ),
+    groupBy: modeLayout.groupBy,
+    ordering: modeLayout.ordering,
     sortBy: modeLayout.sortBy,
     sortDirection: modeLayout.sortDirection,
     recentlyViewedDays: modeLayout.recentlyViewedDays,
@@ -267,21 +265,12 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
 
   const handleApplyView = useCallback((view: SavedView) => {
     const def = view.definition;
-    const currentConfig = modeLayout.typeColumnConfigs[def.selectedType]
-      ?? getDefaultColumnConfig(def.selectedType === 'all' ? '' : def.selectedType);
-    const capturedConfig = def.columnConfig
-      ? {
-          ...def.columnConfig,
-          groupBy: def.groupBy === 'none' ? def.columnConfig.groupBy : def.groupBy,
-        }
-      : def.groupBy === 'none'
-        ? null
-        : { ...currentConfig, groupBy: def.groupBy };
     setModeLayout({
       selectedType: def.selectedType,
       activeFilters: def.activeFilters,
       viewMode: def.viewMode,
       groupBy: def.groupBy,
+      ordering: def.ordering,
       sortBy: def.sortBy,
       sortDirection: def.sortDirection,
       recentlyViewedDays: def.recentlyViewedDays,
@@ -289,8 +278,8 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
       selectedItemId: null,
       // Only overwrite the column layout/filters when the view actually
       // captured them; older views leave the current table state alone.
-      ...(capturedConfig
-        ? { typeColumnConfigs: { ...modeLayout.typeColumnConfigs, [def.selectedType]: capturedConfig } }
+      ...(def.columnConfig
+        ? { typeColumnConfigs: { ...modeLayout.typeColumnConfigs, [def.selectedType]: def.columnConfig } }
         : {}),
       ...(def.columnFilters
         ? { typeColumnFilters: { ...modeLayout.typeColumnFilters, [def.selectedType]: def.columnFilters } }
@@ -361,6 +350,8 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
     <TrackerMainView
       filterType={filterType}
       activeFilters={activeFilters}
+      // Display Settings can select `timeline` before a timeline view exists;
+      // the chosen mode is what persists, the board is what renders meanwhile.
       viewMode={viewMode}
       onViewModeChange={handleViewModeChange}
       onSwitchToFilesMode={onSwitchToFilesMode}

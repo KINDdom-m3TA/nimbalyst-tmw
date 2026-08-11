@@ -661,6 +661,20 @@ interface ElectronAPI {
       sharing?: 'personal' | 'team';
       draftByDefault?: boolean;
     }) => Promise<{ success: boolean; item?: any; error?: string }>;
+    /** Update 1-100 items in one call; each well-formed entry names its own routing. */
+    updateTrackerItems: (payload: {
+      entries: Array<{
+        itemId: string;
+        fileUpdates?: Record<string, any>;
+        storeUpdates?: Record<string, any>;
+        sharing?: 'personal' | 'team';
+        draftByDefault?: boolean;
+      }>;
+    }) => Promise<{
+      success: boolean;
+      results?: Array<{ itemId: string; success: boolean; error?: string }>;
+      error?: string;
+    }>;
     setTrackerItemPublished: (payload: {
       itemId: string;
       published: boolean;

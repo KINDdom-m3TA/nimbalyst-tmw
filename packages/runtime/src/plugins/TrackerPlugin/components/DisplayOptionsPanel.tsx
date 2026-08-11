@@ -1,10 +1,13 @@
 /**
- * DisplayOptionsPanel -- dropdown panel for configuring visible columns,
- * column order (drag-reorderable), and grouping options.
- * Modeled after Linear's display options panel.
+ * DisplayOptionsPanel -- the whole control surface for a tracker view: which
+ * view mode renders it, which axis its columns group by, how items are ordered
+ * within a group, and which columns the table shows.
+ *
+ * Every knob here belongs to the saved view, so the caller's change handlers
+ * write view state rather than a local presentation flag.
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import {
   autoUpdate,
   flip,
@@ -15,7 +18,13 @@ import {
   useFloating,
 } from '@floating-ui/react';
 import { windowControlsClearance } from '../../../ui/floating/windowControlsClearance';
+import type { TrackerGroupBy } from '../models/trackerGrouping';
+import type { TrackerOrdering } from '../models/trackerOrdering';
+import { DisplayOptionsColumnList } from './DisplayOptionsColumnList';
+import { DisplayViewSettings, type DisplayOptionsViewMode } from './DisplayViewSettings';
 import type { TrackerColumnDef, TypeColumnConfig } from './trackerColumns';
+
+export type { DisplayOptionsViewMode } from './DisplayViewSettings';
 
 interface DisplayOptionsPanelProps {
   /** All available columns for this type */
@@ -26,8 +35,30 @@ interface DisplayOptionsPanelProps {
   onConfigChange: (config: TypeColumnConfig) => void;
   /** Close the panel */
   onClose: () => void;
-  /** Optional trigger element for viewport-aware floating positioning */
-  anchorElement?: HTMLElement | null;
+  /**
+   * The trigger the panel hangs off. Required, and never optional: a tracker
+   * view lives inside scrolling and transformed containers, so an inline
+   * `absolute` fallback clips against the wrong ancestor. `null` is only the
+   * before-first-paint value of a trigger ref; the panel repositions the moment
+   * the element exists.
+   */
+  anchorElement: HTMLElement | null;
+  /** View modes to offer; omitted (or empty) drops the view-mode row. */
+  viewModes?: readonly DisplayOptionsViewMode[];
+  /** Currently rendered view mode. */
+  viewMode?: string;
+  onViewModeChange?: (viewMode: string) => void;
+  /** Grouping axis for the board's columns and the list's groups. */
+  groupBy?: TrackerGroupBy;
+  onGroupByChange?: (groupBy: TrackerGroupBy) => void;
+  /** Manual (dragged) order, or a sortable column to order by. */
+  ordering?: TrackerOrdering;
+  onOrderingChange?: (ordering: TrackerOrdering) => void;
+  /**
+   * Whether the view has table columns to configure. Board and inbox modes
+   * still get the view settings above, just not the column properties.
+   */
+  showColumnProperties?: boolean;
 }
 
 export const DisplayOptionsPanel: React.FC<DisplayOptionsPanelProps> = ({
@@ -36,13 +67,18 @@ export const DisplayOptionsPanel: React.FC<DisplayOptionsPanelProps> = ({
   onConfigChange,
   onClose,
   anchorElement,
+  viewModes,
+  viewMode,
+  onViewModeChange,
+  groupBy,
+  onGroupByChange,
+  ordering,
+  onOrderingChange,
+  showColumnProperties = true,
 }) => {
   const panelRef = useRef<HTMLDivElement>(null);
-  const [draggedId, setDraggedId] = useState<string | null>(null);
-  const [dragOverId, setDragOverId] = useState<string | null>(null);
-  const isFloating = Boolean(anchorElement);
   const { refs, floatingStyles } = useFloating({
-    open: isFloating,
+    open: true,
     placement: 'bottom-end',
     strategy: 'fixed',
     whileElementsMounted: autoUpdate,
@@ -67,8 +103,8 @@ export const DisplayOptionsPanel: React.FC<DisplayOptionsPanelProps> = ({
 
   const setPanelElement = useCallback((element: HTMLDivElement | null) => {
     panelRef.current = element;
-    if (isFloating) refs.setFloating(element);
-  }, [isFloating, refs]);
+    refs.setFloating(element);
+  }, [refs]);
 
   // Close on outside click
   useEffect(() => {
@@ -86,181 +122,56 @@ export const DisplayOptionsPanel: React.FC<DisplayOptionsPanelProps> = ({
     return () => document.removeEventListener('mousedown', handler);
   }, [anchorElement, onClose]);
 
-  const toggleColumn = useCallback((columnId: string) => {
-    const visible = [...config.visibleColumns];
-    const idx = visible.indexOf(columnId);
-    if (idx >= 0) {
-      // Don't allow removing title column
-      if (columnId === 'title') return;
-      visible.splice(idx, 1);
-    } else {
-      visible.push(columnId);
-    }
-    onConfigChange({ ...config, visibleColumns: visible });
-  }, [config, onConfigChange]);
-
-  const handleDragStart = useCallback((e: React.DragEvent, columnId: string) => {
-    setDraggedId(columnId);
-    e.dataTransfer.effectAllowed = 'move';
-    // Set drag image to be semi-transparent
-    if (e.currentTarget instanceof HTMLElement) {
-      e.dataTransfer.setDragImage(e.currentTarget, 0, 0);
-    }
-  }, []);
-
-  const handleDragOver = useCallback((e: React.DragEvent, columnId: string) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    setDragOverId(columnId);
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent, targetId: string) => {
-    e.preventDefault();
-    if (!draggedId || draggedId === targetId) {
-      setDraggedId(null);
-      setDragOverId(null);
-      return;
-    }
-
-    const visible = [...config.visibleColumns];
-    const fromIdx = visible.indexOf(draggedId);
-    const toIdx = visible.indexOf(targetId);
-
-    if (fromIdx >= 0 && toIdx >= 0) {
-      visible.splice(fromIdx, 1);
-      visible.splice(toIdx, 0, draggedId);
-      onConfigChange({ ...config, visibleColumns: visible });
-    }
-
-    setDraggedId(null);
-    setDragOverId(null);
-  }, [draggedId, config, onConfigChange]);
-
-  const handleDragEnd = useCallback(() => {
-    setDraggedId(null);
-    setDragOverId(null);
-  }, []);
-
-  // Separate visible and hidden columns
-  const visibleColumns = config.visibleColumns
-    .map(id => availableColumns.find(c => c.id === id))
-    .filter((c): c is TrackerColumnDef => c !== undefined);
-
-  const hiddenColumns = availableColumns.filter(
-    c => !config.visibleColumns.includes(c.id)
-  );
-
-  // Grouping options
-  const groupByOptions = [
-    { value: '', label: 'No grouping' },
-    { value: 'status', label: 'Status' },
-    { value: 'priority', label: 'Priority' },
-    { value: 'type', label: 'Type' },
-    { value: 'owner', label: 'Owner' },
-  ];
-
   const panel = (
     <div
       ref={setPanelElement}
-      style={isFloating ? floatingStyles : undefined}
+      style={floatingStyles}
       data-testid="tracker-display-options-panel"
-      className={`${isFloating ? '' : 'absolute right-0 top-full mt-1 max-h-[calc(100vh-4rem)]'} flex w-[260px] flex-col overflow-hidden rounded-lg border border-[var(--nim-border)] bg-[var(--nim-bg-secondary)] shadow-xl z-50`}
+      className="tracker-display-options-panel flex w-[272px] flex-col overflow-hidden rounded-lg border border-[var(--nim-border)] bg-[var(--nim-bg-secondary)] shadow-xl z-50"
     >
-      {/* Header */}
       <div className="px-3 py-2 border-b border-[var(--nim-border)]">
-        <span className="text-xs font-semibold text-[var(--nim-text)]">Display Options</span>
-      </div>
-
-      {/* Grouping */}
-      <div className="px-3 py-2 border-b border-[var(--nim-border)]">
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] text-[var(--nim-text-muted)]">Grouping</span>
-          <select
-            value={config.groupBy || ''}
-            onChange={(e) => onConfigChange({ ...config, groupBy: e.target.value || null })}
-            aria-label="Group tracker items"
-            className="text-xs bg-[var(--nim-bg)] border border-[var(--nim-border)] rounded px-1.5 py-0.5 text-[var(--nim-text)] outline-none"
-          >
-            {groupByOptions.map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-        </div>
+        <span className="text-xs font-semibold text-[var(--nim-text)]">Display Settings</span>
       </div>
 
       <div
         className="min-h-0 overflow-y-auto overscroll-contain"
         data-testid="tracker-display-options-scroll-region"
       >
-        {/* Visible columns (drag-reorderable) */}
-        <div className="px-3 py-2 border-b border-[var(--nim-border)]">
-          <span className="text-[11px] font-medium text-[var(--nim-text-faint)] uppercase tracking-wide">Display properties</span>
-          <div className="mt-1.5 space-y-0.5">
-            {visibleColumns.map(col => (
-              <div
-                key={col.id}
-                draggable={col.id !== 'title'}
-                onDragStart={(e) => handleDragStart(e, col.id)}
-                onDragOver={(e) => handleDragOver(e, col.id)}
-                onDrop={(e) => handleDrop(e, col.id)}
-                onDragEnd={handleDragEnd}
-                className={`flex items-center gap-2 px-1.5 py-1 rounded text-xs cursor-grab ${
-                  dragOverId === col.id ? 'bg-[var(--nim-primary)]15 border border-dashed border-[var(--nim-primary)]' : 'hover:bg-[var(--nim-bg-hover)]'
-                } ${draggedId === col.id ? 'opacity-50' : ''}`}
-              >
-                {col.id !== 'title' && (
-                  <span className="material-symbols-outlined text-[14px] text-[var(--nim-text-faint)] cursor-grab">drag_indicator</span>
-                )}
-                <span className="flex-1 text-[var(--nim-text)]">{col.label}</span>
-                {col.id !== 'title' && (
-                  <button
-                    onClick={() => toggleColumn(col.id)}
-                    className="text-[var(--nim-text-faint)] hover:text-[var(--nim-text)] transition-colors"
-                    title="Hide column"
-                  >
-                    <span className="material-symbols-outlined text-[14px]">visibility</span>
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
+        <DisplayViewSettings
+          availableColumns={availableColumns}
+          viewModes={viewModes}
+          viewMode={viewMode}
+          onViewModeChange={onViewModeChange}
+          groupBy={groupBy}
+          onGroupByChange={onGroupByChange}
+          ordering={ordering}
+          onOrderingChange={onOrderingChange}
+        />
 
-        {/* Hidden columns */}
-        {hiddenColumns.length > 0 && (
-          <div className="px-3 py-2">
-            <span className="text-[11px] font-medium text-[var(--nim-text-faint)] uppercase tracking-wide">Hidden</span>
-            <div className="mt-1.5 space-y-0.5">
-              {hiddenColumns.map(col => (
-                <div
-                  key={col.id}
-                  className="flex items-center gap-2 px-1.5 py-1 rounded text-xs hover:bg-[var(--nim-bg-hover)] cursor-pointer"
-                  onClick={() => toggleColumn(col.id)}
-                >
-                  <span className="material-symbols-outlined text-[14px] text-[var(--nim-text-faint)]">visibility_off</span>
-                  <span className="flex-1 text-[var(--nim-text-faint)]">{col.label}</span>
-                  <span className="text-[10px] text-[var(--nim-primary)]">Show</span>
-                </div>
-              ))}
-            </div>
-          </div>
+        {showColumnProperties && (
+          <DisplayOptionsColumnList
+            availableColumns={availableColumns}
+            config={config}
+            onConfigChange={onConfigChange}
+          />
         )}
       </div>
 
-      {/* Reset */}
-      <div className="px-3 py-2 border-t border-[var(--nim-border)]">
-        <button
-          className="text-xs text-[var(--nim-text-faint)] hover:text-[var(--nim-text)] transition-colors"
-          onClick={() => {
-            const defaults = availableColumns.filter(c => c.defaultVisible).map(c => c.id);
-            onConfigChange({ visibleColumns: defaults, columnWidths: {}, groupBy: null });
-          }}
-        >
-          Reset to defaults
-        </button>
-      </div>
+      {showColumnProperties && (
+        <div className="px-3 py-2 border-t border-[var(--nim-border)]">
+          <button
+            className="text-xs text-[var(--nim-text-faint)] hover:text-[var(--nim-text)] transition-colors"
+            onClick={() => {
+              const defaults = availableColumns.filter(c => c.defaultVisible).map(c => c.id);
+              onConfigChange({ visibleColumns: defaults, columnWidths: {} });
+            }}
+          >
+            Reset to defaults
+          </button>
+        </div>
+      )}
     </div>
   );
 
-  return isFloating ? <FloatingPortal>{panel}</FloatingPortal> : panel;
+  return <FloatingPortal>{panel}</FloatingPortal>;
 };

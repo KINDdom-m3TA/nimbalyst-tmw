@@ -18,7 +18,7 @@ import {
   buildFullDocumentTrackerId,
 } from '../documentHeader/frontmatterUtils';
 import { getRecordTitle, getRecordStatus, getRecordPriority, getFieldByRole, resolveRoleFieldName, getItemPublicationState } from '../trackerRecordAccessors';
-import { globalRegistry, parseDate, normalizeRelationshipValue } from '../models';
+import { globalRegistry, parseDate, normalizeRelationshipValue, type TrackerGroupBy } from '../models';
 import {usePostHog} from "posthog-js/react";
 import {
   resolveColumnsForType,
@@ -57,6 +57,7 @@ interface TrackerTableProps {
   filterType?: TrackerItemType | 'all';
   sortBy?: SortColumn;
   sortDirection?: SortDirection;
+  groupBy?: TrackerGroupBy;
   onSortChange?: (column: SortColumn, direction: SortDirection) => void;
   hideTypeTabs?: boolean;
   onSwitchToFilesMode?: () => void;
@@ -728,6 +729,7 @@ export function TrackerTable({
   filterType = 'all',
   sortBy = 'lastIndexed',
   sortDirection = 'desc',
+  groupBy = 'none',
   onSortChange,
   hideTypeTabs = false,
   onSwitchToFilesMode,
@@ -753,8 +755,10 @@ export function TrackerTable({
   const [internalTypeFilter, setInternalTypeFilter] = useState<TrackerItemType | 'all'>('all');
   const activeTypeFilter = hideTypeTabs ? filterType : internalTypeFilter;
 
-  // Display options panel state
+  // Display options panel state. The panel is portaled and positions against the
+  // toolbar button, so the button's element is what anchors it.
   const [showDisplayOptions, setShowDisplayOptions] = useState(false);
+  const displayOptionsButtonRef = useRef<HTMLButtonElement>(null);
 
   // Column configuration: use external config or derive from type
   const effectiveColumnConfig = useMemo(() => {
@@ -923,8 +927,8 @@ export function TrackerTable({
   // console.log('[TrackerTable] Render - items:', items.length, 'filtered:', filteredItems.length, 'typeFilter:', typeFilter);
   const sortedItems = preserveItemOrder ? filteredItems : sortItems(filteredItems, currentSortBy, currentSortDirection);
   const groupedRecords = useMemo(
-    () => groupTrackerRecords(sortedItems, effectiveColumnConfig.groupBy),
-    [effectiveColumnConfig.groupBy, sortedItems],
+    () => groupTrackerRecords(sortedItems, groupBy),
+    [groupBy, sortedItems],
   );
   const displayItems = useMemo(
     () => groupedRecords.flatMap(group => group.items),
@@ -1112,14 +1116,13 @@ export function TrackerTable({
     <div className="tracker-table-wrapper flex flex-col h-full w-full bg-[var(--nim-bg)]" data-testid="tracker-table">
       {/* Display options panel (positioned relative to wrapper) */}
       {!hideToolbar && showDisplayOptions && onColumnConfigChange && (
-        <div className="relative">
-          <DisplayOptionsPanel
-            availableColumns={allColumns}
-            config={effectiveColumnConfig}
-            onConfigChange={(config) => onColumnConfigChange(config)}
-            onClose={() => setShowDisplayOptions(false)}
-          />
-        </div>
+        <DisplayOptionsPanel
+          availableColumns={allColumns}
+          config={effectiveColumnConfig}
+          onConfigChange={(config) => onColumnConfigChange(config)}
+          onClose={() => setShowDisplayOptions(false)}
+          anchorElement={displayOptionsButtonRef.current}
+        />
       )}
 
       {/* Type filter tabs */}
@@ -1226,6 +1229,7 @@ export function TrackerTable({
           {/* Display options */}
           {onColumnConfigChange && (
             <button
+              ref={displayOptionsButtonRef}
               className="inline-flex items-center justify-center w-6 h-6 rounded hover:bg-[var(--nim-bg-tertiary)] text-[var(--nim-text-faint)] hover:text-[var(--nim-text)] transition-colors"
               onClick={() => setShowDisplayOptions(!showDisplayOptions)}
               title="Display options"

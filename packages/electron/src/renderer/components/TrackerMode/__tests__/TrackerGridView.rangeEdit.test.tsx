@@ -149,7 +149,6 @@ describe('TrackerGridView range edits', () => {
         columnConfig={{
           visibleColumns: ['title', 'status'],
           columnWidths: {},
-          groupBy: null,
         }}
       />,
     );
@@ -183,7 +182,6 @@ describe('TrackerGridView range edits', () => {
         columnConfig={{
           visibleColumns: ['title', 'status'],
           columnWidths: {},
-          groupBy: null,
         }}
       />,
     );
@@ -235,7 +233,7 @@ describe('TrackerGridView undo', () => {
         filterType="bug"
         overrideItems={items}
         preserveItemOrder
-        columnConfig={{ visibleColumns: ['title', 'status'], columnWidths: {}, groupBy: null }}
+        columnConfig={{ visibleColumns: ['title', 'status'], columnWidths: {} }}
       />,
     );
   }
@@ -246,7 +244,7 @@ describe('TrackerGridView undo', () => {
         filterType="bug"
         overrideItems={items}
         preserveItemOrder
-        columnConfig={{ visibleColumns: ['title', 'status'], columnWidths: {}, groupBy: null }}
+        columnConfig={{ visibleColumns: ['title', 'status'], columnWidths: {} }}
       />,
     ));
   }
@@ -337,7 +335,6 @@ describe('TrackerGridView column layout', () => {
         columnConfig={{
           visibleColumns: ['title', 'status'],
           columnWidths: {},
-          groupBy: null,
         }}
         onColumnConfigChange={onColumnConfigChange}
       />,
@@ -358,7 +355,6 @@ describe('TrackerGridView column layout', () => {
         columnConfig={{
           visibleColumns: ['title', 'status'],
           columnWidths: {},
-          groupBy: null,
         }}
         onColumnConfigChange={onColumnConfigChange}
       />,
@@ -374,7 +370,6 @@ describe('TrackerGridView column layout', () => {
     expect(onColumnConfigChange).toHaveBeenCalledWith({
       visibleColumns: ['title', 'status'],
       columnWidths: { title: 360, status: 150 },
-      groupBy: null,
     });
   });
 
@@ -386,7 +381,6 @@ describe('TrackerGridView column layout', () => {
         columnConfig={{
           visibleColumns: ['title', 'status'],
           columnWidths: {},
-          groupBy: null,
         }}
       />,
     );
@@ -409,7 +403,6 @@ describe('TrackerGridView column layout', () => {
         columnConfig={{
           visibleColumns: ['title', 'status'],
           columnWidths: {},
-          groupBy: null,
         }}
         onColumnConfigChange={onColumnConfigChange}
       />,
@@ -425,7 +418,6 @@ describe('TrackerGridView column layout', () => {
       expect(onColumnConfigChange).toHaveBeenCalledWith({
         visibleColumns: ['status', 'title'],
         columnWidths: {},
-        groupBy: null,
       });
     });
   });
@@ -439,7 +431,6 @@ describe('TrackerGridView column layout', () => {
         columnConfig={{
           visibleColumns: ['title', 'status'],
           columnWidths: {},
-          groupBy: null,
         }}
         columnFilters={{ combinator: 'and', clauses: [] }}
         onColumnFiltersChange={onColumnFiltersChange}
@@ -505,7 +496,6 @@ describe('TrackerGridView column layout', () => {
         columnConfig={{
           visibleColumns: ['title', 'status'],
           columnWidths: {},
-          groupBy: null,
         }}
       />,
     );
@@ -554,7 +544,6 @@ describe('TrackerGridView double-click', () => {
         columnConfig={{
           visibleColumns: ['key', 'title', 'status'],
           columnWidths: {},
-          groupBy: null,
         }}
         onOpenDocument={onOpenDocument}
       />,

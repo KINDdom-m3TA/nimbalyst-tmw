@@ -882,6 +882,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sharing?: 'personal' | 'team';
       draftByDefault?: boolean;
     }) => ipcRenderer.invoke('document-service:update-tracker-item', payload) as Promise<{ success: boolean; item?: any; error?: string }>,
+    /**
+     * Update many tracker items in one call. Each entry names its own routing --
+     * `fileUpdates` for a frontmatter-backed item, `storeUpdates` for the tracker
+     * store -- so a bulk board action costs one round trip instead of one per item.
+     * Main rejects empty batches, batches over 100 entries, and malformed entries
+     * before it starts the first write.
+     */
+    updateTrackerItems: (payload: {
+      entries: Array<{
+        itemId: string;
+        fileUpdates?: Record<string, any>;
+        storeUpdates?: Record<string, any>;
+        sharing?: 'personal' | 'team';
+        draftByDefault?: boolean;
+      }>;
+    }) => ipcRenderer.invoke('document-service:update-tracker-items', payload) as Promise<{
+      success: boolean;
+      results?: Array<{ itemId: string; success: boolean; error?: string }>;
+      error?: string;
+    }>,
     setTrackerItemPublished: (payload: {
       itemId: string;
       published: boolean;

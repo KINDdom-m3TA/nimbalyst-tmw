@@ -72,6 +72,7 @@ vi.mock('@nimbalyst/runtime/plugins/TrackerPlugin/models/TrackerDataModel', () =
 }));
 
 import { trackerItemToRecord } from '@nimbalyst/runtime/core/TrackerRecord';
+import { buildFullDocumentTrackerId } from '@nimbalyst/runtime/plugins/TrackerPlugin/documentHeader/frontmatterUtils';
 import { ElectronDocumentService, setupDocumentServiceHandlers } from '../ElectronDocumentService';
 
 const WORKSPACE = '/Users/test/my-project';
@@ -105,6 +106,20 @@ function makeTrackerRow(overrides: Record<string, any> = {}) {
     source: 'tracked',
     source_ref: null,
     ...overrides,
+  };
+}
+
+function makeTrackerItem(id: string, source: 'native' | 'frontmatter' = 'native') {
+  return {
+    id,
+    type: 'bug' as const,
+    title: `Item ${id}`,
+    status: 'to-do' as const,
+    module: source === 'frontmatter' ? `plans/${id}.md` : '',
+    workspace: tempDir,
+    lastIndexed: new Date('2026-08-11T00:00:00.000Z'),
+    source,
+    syncStatus: 'local' as const,
   };
 }
 
@@ -191,6 +206,191 @@ describe('deleteTrackerItem sync integration', () => {
 
     expect(changeEvents).toHaveLength(1);
     expect(changeEvents[0].removed).toEqual(['bug-002']);
+  });
+});
+
+describe('tracker batch IPC handlers', () => {
+  it('rejects every malformed or oversized batch before the first write', async () => {
+    const updateInFile = vi.spyOn(service, 'updateTrackerItemInFile');
+    const updateStore = vi.spyOn(service, 'updateTrackerItem');
+    const handler = mockIpcHandlers.get('document-service:update-tracker-items');
+    expect(handler).toBeDefined();
+
+    const invalidPayloads = [
+      undefined,
+      { entries: [null] },
+      { entries: [{ itemId: ' ', fileUpdates: { status: 'done' } }] },
+      { entries: [{ itemId: 'bug-1', fileUpdates: [] }] },
+      { entries: [{ itemId: 'bug-1', fileUpdates: {}, storeUpdates: {} }] },
+      { entries: [{ itemId: 'bug-1', storeUpdates: { status: 'done' }, sharing: 'org' }] },
+      { entries: Array.from({ length: 101 }, (_, index) => ({
+        itemId: `bug-${index}`,
+        storeUpdates: { status: 'done' },
+      })) },
+    ];
+
+    for (const payload of invalidPayloads) {
+      const result = await handler!({}, payload);
+      expect(result.success).toBe(false);
+    }
+    expect(updateInFile).not.toHaveBeenCalled();
+    expect(updateStore).not.toHaveBeenCalled();
+  });
+
+  it('routes file and store entries through the exact single-item write functions', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    mockIsTrackerSyncActive.mockReturnValue(false);
+    const updateInFile = vi.spyOn(service, 'updateTrackerItemInFile')
+      .mockResolvedValue(makeTrackerItem('plan-file', 'frontmatter'));
+    const updateStore = vi.spyOn(service, 'updateTrackerItem')
+      .mockResolvedValue(makeTrackerItem('bug-store'));
+    vi.spyOn(service, 'propagateInverseForUpdate').mockResolvedValue(undefined);
+
+    const handler = mockIpcHandlers.get('document-service:update-tracker-items');
+    const result = await handler!({}, {
+      entries: [
+        { itemId: 'plan-file', fileUpdates: { collection: [{ itemId: 'milestone-1' }] } },
+        { itemId: 'bug-store', storeUpdates: { priority: 'high' }, sharing: 'personal' },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    expect(updateInFile).toHaveBeenCalledWith('plan-file', {
+      collection: [{ itemId: 'milestone-1' }],
+    });
+    expect(updateStore).toHaveBeenCalledWith('bug-store', { priority: 'high' });
+  });
+
+  it('keeps a batched file relationship update canonical in nested customFields', async () => {
+    const relativePath = 'plans/batch-plan.md';
+    const itemId = buildFullDocumentTrackerId('plan', relativePath);
+    await fs.mkdir(path.join(tempDir, 'plans'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, relativePath), `---
+planStatus:
+  title: Batch plan
+  status: draft
+  collection:
+    - itemId: milestone-a
+---
+
+# Body
+`, 'utf-8');
+
+    let row = makeTrackerRow({
+      id: itemId,
+      type: 'plan',
+      workspace: tempDir,
+      source: 'frontmatter',
+      source_ref: relativePath,
+      document_path: relativePath,
+      data: JSON.stringify({
+        title: 'Batch plan',
+        status: 'draft',
+        customFields: { collection: [{ itemId: 'milestone-a' }] },
+      }),
+    });
+    mockGlobalRegistryGet.mockReturnValue({
+      sharing: 'personal',
+      modes: { inline: false, fullDocument: true },
+      fields: [{
+        name: 'collection',
+        type: 'relationship',
+        relationshipTypeKey: 'in-collection',
+        multiValue: true,
+      }],
+    });
+    mockIsTrackerSyncActive.mockReturnValue(false);
+    vi.spyOn(service, 'propagateInverseForUpdate').mockResolvedValue(undefined);
+    mockQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim();
+      if (normalized.startsWith('SELECT data FROM tracker_items WHERE id = $1')) {
+        return { rows: [{ data: row.data }] };
+      }
+      if (normalized.startsWith('SELECT * FROM tracker_items WHERE id = $1')) {
+        return { rows: [row] };
+      }
+      if (normalized.startsWith('UPDATE tracker_items SET data = $1, updated = NOW() WHERE id = $2')) {
+        row = { ...row, data: params?.[0] as string };
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected query in test: ${normalized}`);
+    });
+
+    const handler = mockIpcHandlers.get('document-service:update-tracker-items');
+    const result = await handler!({}, {
+      entries: [{
+        itemId,
+        fileUpdates: { collection: [{ itemId: 'milestone-b' }] },
+      }],
+    });
+
+    expect(result.success).toBe(true);
+    const stored = JSON.parse(row.data);
+    expect(stored.customFields.collection).toEqual([{ itemId: 'milestone-b' }]);
+    expect(stored).not.toHaveProperty('collection');
+    expect(await fs.readFile(path.join(tempDir, relativePath), 'utf-8')).toContain('itemId: milestone-b');
+  });
+
+  it('reports an entry failure and continues with the rest of the batch', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    mockIsTrackerSyncActive.mockReturnValue(false);
+    const updateInFile = vi.spyOn(service, 'updateTrackerItemInFile')
+      .mockRejectedValueOnce(new Error('source file is read-only'))
+      .mockResolvedValueOnce(makeTrackerItem('plan-ok', 'frontmatter'));
+    vi.spyOn(service, 'propagateInverseForUpdate').mockResolvedValue(undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const handler = mockIpcHandlers.get('document-service:update-tracker-items');
+    const result = await handler!({}, {
+      entries: [
+        { itemId: 'plan-failed', fileUpdates: { status: 'in-development' } },
+        { itemId: 'plan-ok', fileUpdates: { status: 'in-review' } },
+      ],
+    });
+
+    expect(result).toEqual({
+      success: false,
+      results: [
+        { itemId: 'plan-failed', success: false, error: 'source file is read-only' },
+        { itemId: 'plan-ok', success: true },
+      ],
+    });
+    expect(updateInFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('caps and validates relationship reindex ids, then loads a valid batch in one SELECT', async () => {
+    const handler = mockIpcHandlers.get('document-service:tracker-item-reindex-relationships');
+    expect(handler).toBeDefined();
+
+    expect((await handler!({}, { itemIds: [null] })).success).toBe(false);
+    expect((await handler!({}, {
+      itemIds: Array.from({ length: 101 }, (_, index) => `bug-${index}`),
+    })).success).toBe(false);
+    expect(mockQuery).not.toHaveBeenCalled();
+
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM tracker_items WHERE id IN')) {
+        return {
+          rows: [
+            makeTrackerRow({ id: 'bug-1', workspace: tempDir }),
+            makeTrackerRow({ id: 'bug-2', workspace: tempDir }),
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const result = await handler!({}, { itemIds: ['bug-1', 'bug-1', 'bug-2'] });
+    expect(result.success).toBe(true);
+    const selects = mockQuery.mock.calls.filter(([sql]) => String(sql).includes('FROM tracker_items WHERE id IN'));
+    const relationshipDeletes = mockQuery.mock.calls.filter(([sql]) => (
+      String(sql).includes('DELETE FROM tracker_relationship_index')
+      && String(sql).includes('source_item_id IN')
+    ));
+    expect(selects).toHaveLength(1);
+    expect(selects[0][1]).toEqual(['bug-1', 'bug-2']);
+    expect(relationshipDeletes).toHaveLength(1);
+    expect(relationshipDeletes[0][1]).toEqual([tempDir, 'bug-1', 'bug-2']);
   });
 });
 
