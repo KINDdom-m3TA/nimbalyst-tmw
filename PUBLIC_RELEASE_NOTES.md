@@ -1,36 +1,63 @@
-# August 7th 2026 Release
+# August 11th, 2026 Release
 
-### New Features
+## Nimbalyst Teams Beta: Multiplayer Claude Code & Codex
 
-- New Tutorial available on install and via Help > Launch Tutorial
-- Tracker items can now open as full documents with editable field chips, keyboard-driven search and filters, and a side-by-side AI chat panel.
-- Undo and redo in the tracker table with Cmd+Z and Cmd+Shift+Z, covering cell edits, paste, bulk status and priority changes, and archiving.
-- Spreadsheets support find, replace and formulas.
-- The new-worktree dialog can now search branches, narrowing the local and remote lists as you type.
-- Agent sessions can show an MCP status chip listing which servers the session has and which are connected — off by default, under Settings > Agent Features.
+- Work locally in Nimbalyst, then promote any document or tracker to shared
+- Collaborate with your team asynchronously or in real time
+- Keep using your local agents, which can see your local docs, shared docs, trackers, and sessions
+- Less app switching, and no need to hold the links between docs, trackers, diagrams, code, and sessions in your head
+- For your agents, the advantage is deep unified context
 
-### Improvements
+### Getting started
 
-- The Git panel's Changes tab is now one compact, collapsible list with no staging step: tick the files you want and commit them, or hand the selection to AI to write the message.
-- Claude Agent sessions no longer re-write the prompt cache on most turns, cutting token cost and rate-limit usage on long sessions.
+- Free while in Beta, then $20/user/month
+- Click the profile icon at the bottom left, then Org
+- Invite team members to your org
+- See the website and documentation for details
+
+## Collaborative Documents
+
+- Share a document, plan, decision, mockup, diagram, or tracker item so everyone edits the same live copy
+- See teammates working via presence icons
+- Comment and review comments, with an Inbox for tracking them
+- Agents can read, reply to, and create inline comments
+- Embedded mockups and diagrams inside a shared document render live for teammates
+
+## Collaborative Trackers
+
+- Work with your team and your coding agents in a shared tracker
+- Create, update, and move items yourself or have your agent do it
+- Every tracker item holds a full collaborative markdown document with text, tables, and embedded diagrams, mockups, and CSV
+- Work stays organized in a system that records status and progress instead of cluttered folders
+
+## Nimbalyst Web Console
+
+- For team members who do not yet use the desktop app
+- Share a plan, mockup, or spreadsheet with one or many teammates
+- Web console users can edit files and comment on them
+
+## Nimbalyst Enterprise Beta
+
+- Collaboration server in your own Cloudflare account, or managed by us
+- Collaboration source available for your company's internal use
+- Data residency pinned to your jurisdiction
+- An engineer embedded with your platform team through onboarding
+- We build your first multiplayer extension, a visual editor for an artifact your teams work with today
+
+
+## New Features
+
+- Group the tracker board into lanes by milestone, goal, or any other field — drag a card, use the chip on it, or move several at once — and lay the same grouping out over time in the new Timeline view.
+- Git Log shows which AI session produced each commit, with a click-through to open it.
+- The editor header shows the last AI session that worked on the open file, with a dropdown to jump to other sessions or start a new one.
+- Improved taskbar session state preview
 
 ### Fixed
 
-- Claude Code sessions use your existing MCP setup instead of overriding it, so account connectors load again and sessions no longer fail to start on machines with an organization-managed MCP policy (#1051).
-- OAuth-authorized HTTP and SSE servers connect, and servers whose provider refuses dynamic client registration can be authorized with a client ID you enter.
-- Queued prompts now run on their own: a prompt sent from your phone opens the project and runs it, prompts left over from a quit resume once the project is open again, and a prompt that arrives mid-turn runs when the turn ends (#962).
-- Sessions no longer show as running after their work finished, so prompts queued behind an interrupted or background-task session send. Cancelling a Codex session stops it for good, and Codex sessions using parallel sub-agents wait for the lead agent's final response.
-- Yes/no questions from the agent show both answers as pickable buttons and wait for you to choose. Answering or cancelling a question closes it for good instead of bringing it back when you switch sessions (#1116, #773).
-- Simply opening a tracker item no longer bumps its "Updated" time or adds a phantom edit to its history.
-- Tracker items with structured array fields no longer crash when opened (#1104), sidebar type counts no longer read 0 for types that have items, and sorting by a date column orders rows by date instead of alphabetically by month name.
-- A session that reports its previous conversation has expired now genuinely starts fresh on the next message (#1098).
-- Main windows restore their maximized state after restart instead of reopening at stale bounds (#1077), and dropdown menus no longer open underneath the macOS window controls (#1096).
-- Windows builds sign installer and uninstaller (#853).
-- A file that repeatedly fails to save now shows a Retry banner instead of autosave looping on it forever.
-- Projects with many new, uncommitted folders no longer stall while the file tree and changed-files list refresh.
-- Find-in-document highlights matches inside inline code, comments whose anchor text was deleted scroll into view, and the sidebar extension panel reopens where you left it after a reload (#1114).
-- Links written as plain relative paths, such as `design/dashboard.mockup.html`, open the file instead of a broken page in your web browser, and embedded mockups and diagrams in shared documents open the shared copy.
-- When a session edits the same file several times, the red/green diff shows the whole set of changes again instead of only the last one.
-- Tables exported to PDF span the full page width with content-sized columns.
-- Web search and web fetch no longer fail in Claude Code CLI sessions running at max effort.
-- Changing a project's permission mode now applies to agent sessions that are already running.
+- Agents reading a web page no longer receive what you typed into its form fields.
+- Sessions waiting on a question or a permission prompt now show as awaiting your input in the sidebar and on mobile, instead of looking like they are still running.
+- Prompts sent from your phone appear in the queue while they are still pending.
+- Viewing history diffs no longer freezes a restored session.
+- The slash-command palette shows each command and skill's own description again, along with its correct icon and grouping.
+- Browser tabs now line up with their tab when the window is zoomed in or out, instead of painting the page in the wrong place and at the wrong size.
+- Repositories with more than a page of open pull requests no longer show only the first page, and accented characters in PR titles no longer come through garbled.
