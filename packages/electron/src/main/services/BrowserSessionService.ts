@@ -20,8 +20,12 @@
  *   setBounds() / detachFromWindow() -> renderer can reflow / unmount as tab changes
  *   destroySession() -> view torn down, webContents closed
  *
- * The view is sized in CSS pixels and positioned in the host window's content
- * area; conversion to device pixels happens automatically inside Electron.
+ * Coordinate systems: the renderer measures its placeholder in *its own* CSS
+ * pixels, which shrink as the host window's zoom factor grows. A
+ * WebContentsView is a sibling native view in the window's contentView tree,
+ * so `view.setBounds` takes device-independent pixels relative to the window
+ * content area and is unaffected by that zoom factor. This service converts
+ * between the two (`dip = cssPx * zoomFactor`); callers always pass CSS pixels.
  */
 
 import { WebContentsView, BrowserWindow, session as electronSession } from 'electron';
@@ -100,7 +104,14 @@ interface SessionEntry {
   partitionName: string;
   view: WebContentsView;
   hostWindow: BrowserWindow | null;
+  /** Last bounds applied to the view, in device-independent pixels. */
   bounds: BrowserSessionBounds | null;
+  /**
+   * Last bounds the renderer asked for, in its CSS pixels. Kept so we can
+   * re-derive device pixels when the host window's zoom factor changes without
+   * waiting for the renderer to re-measure.
+   */
+  requestedBounds: BrowserSessionBounds | null;
   state: BrowserNavigationState;
   /** Agent-owned session parked in the shared off-screen host window. */
   headless: boolean;
@@ -128,6 +139,29 @@ export function selectIdleHeadlessSessions(
   return candidates
     .filter((c) => c.headless && now - c.lastUsedAt >= ttlMs)
     .map((c) => c.sessionId);
+}
+
+/**
+ * Converts renderer CSS pixels into the device-independent pixels
+ * `WebContentsView.setBounds` expects. The host renderer's zoom factor scales
+ * its own CSS pixel grid but not the window's content area, so a rect measured
+ * at 125% zoom describes a region 1.25x larger (and further from the origin)
+ * than its raw numbers suggest.
+ */
+export function scaleBoundsForZoom(
+  bounds: BrowserSessionBounds,
+  zoomFactor: number,
+): BrowserSessionBounds {
+  // A non-finite or non-positive factor means we can't trust the reading;
+  // treat it as 1 rather than collapsing the view to nothing.
+  const factor = Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1;
+  if (factor === 1) return bounds;
+  return {
+    x: bounds.x * factor,
+    y: bounds.y * factor,
+    width: bounds.width * factor,
+    height: bounds.height * factor,
+  };
 }
 
 /**
@@ -297,6 +331,7 @@ export class BrowserSessionService extends EventEmitter {
       view,
       hostWindow: null,
       bounds: null,
+      requestedBounds: null,
       headless,
       lastUsedAt: Date.now(),
       state: {
@@ -419,16 +454,37 @@ export class BrowserSessionService extends EventEmitter {
     }
     entry.hostWindow = null;
     entry.bounds = null;
+    entry.requestedBounds = null;
   }
 
+  /** `bounds` are the renderer's CSS pixels; see the coordinate note up top. */
   public setBounds(sessionId: string, bounds: BrowserSessionBounds): void {
     const entry = this.sessions.get(sessionId);
     if (!entry || !entry.hostWindow || entry.hostWindow.isDestroyed()) return;
 
+    entry.requestedBounds = bounds;
+    const scaled = scaleBoundsForZoom(bounds, entry.hostWindow.webContents.getZoomFactor());
     const [containerWidth, containerHeight] = entry.hostWindow.getContentSize();
-    const clamped = clampBounds(bounds, { width: containerWidth, height: containerHeight });
+    const clamped = clampBounds(scaled, { width: containerWidth, height: containerHeight });
     entry.bounds = clamped;
     entry.view.setBounds(clamped);
+  }
+
+  /**
+   * Re-applies the last requested bounds for every session hosted in `window`.
+   *
+   * Zooming usually reflows the renderer, so the placeholder re-measures and
+   * pushes new bounds on its own -- but that path only fires when the CSS rect
+   * actually changes, and it never fires for a session whose renderer is not
+   * currently laying out. Called from the View menu's zoom commands so the
+   * native view tracks the new factor either way.
+   */
+  public refreshBoundsForWindow(window: BrowserWindow): void {
+    if (window.isDestroyed()) return;
+    for (const entry of this.sessions.values()) {
+      if (entry.hostWindow !== window || !entry.requestedBounds) continue;
+      this.setBounds(entry.sessionId, entry.requestedBounds);
+    }
   }
 
   // ============ NAVIGATION ============
