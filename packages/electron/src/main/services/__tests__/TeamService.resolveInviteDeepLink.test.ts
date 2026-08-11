@@ -30,7 +30,16 @@ vi.mock('../../utils/logger', () => ({
   logger: { main: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
 }));
 
-vi.mock('../../utils/gitUtils', () => ({ getNormalizedGitRemote: vi.fn() }));
+const gitRemoteFnMock = vi.hoisted(() => vi.fn());
+vi.mock('../../utils/gitUtils', () => ({
+  getNormalizedGitRemote: gitRemoteFnMock,
+  getRawGitRemote: gitRemoteFnMock,
+  normalizeGitRemote: (url: string | null) => url,
+  getGitRemoteIdentities: async (workspacePath: string) => {
+    const remote = await gitRemoteFnMock(workspacePath);
+    return remote ? { canonical: remote, legacy: remote } : null;
+  },
+}));
 
 vi.mock('../teamProjectResolver', () => ({ resolveTeamForRemoteHash: vi.fn() }));
 

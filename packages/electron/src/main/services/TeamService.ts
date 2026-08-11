@@ -26,7 +26,8 @@ import { basename } from 'path';
 import { mkdir, stat } from 'fs/promises';
 import { safeHandle } from '../utils/ipcRegistry';
 import { logger } from '../utils/logger';
-import { getNormalizedGitRemote } from '../utils/gitUtils';
+import { getGitRemoteIdentities, getRawGitRemote, normalizeGitRemote } from '../utils/gitUtils';
+import type { GitRemoteIdentities } from '../utils/gitUtils';
 import { resolveTeamForRemoteHash } from './teamProjectResolver';
 import { getCollabSyncHttpUrl } from '../utils/collabSyncUrl';
 import { assertJwtMatchesOrg, getJwtExp, AuthContextMismatchError } from './jwtOrg';
@@ -166,6 +167,15 @@ export interface TeamProjectSummary {
   gitRemoteHash: string | null;
   slug: string | null;
   name: string | null;
+  /**
+   * The project's git remote in clonable form, when the org has one recorded.
+   *
+   * Genuinely optional: the hash is one-way, so projects created before this
+   * field existed can never be backfilled server-side and will simply never
+   * have it. Every consumer must degrade to choose-a-folder rather than
+   * offering a clone that cannot run.
+   */
+  remoteUrl?: string;
 }
 
 /** Epic H3 P3: per-member row in the move wizard's pre-flight preview. */
@@ -686,11 +696,99 @@ async function fetchTeamApi(
 // ============================================================================
 
 /**
- * Hash a git remote URL with SHA-256 for server-side lookup.
- * The server never sees the plaintext remote URL -- only the hex digest.
+ * Hash a git remote URL with SHA-256 for the cross-entity remote -> org lookup.
+ * The shared D1 database only ever holds this digest, never the URL.
  */
 function hashGitRemote(remote: string): string {
   return createHash('sha256').update(remote).digest('hex');
+}
+
+/**
+ * Every hash a workspace could legitimately be stored under, newest first.
+ *
+ * A project shared before `normalizeGitRemote` was corrected is keyed on the
+ * legacy form, and SHA-256 cannot be migrated -- so matching has to accept both
+ * or those workspaces silently lose their organization. Writes are canonical
+ * only; a legacy row is healed when an admin relinks the project, deliberately
+ * and not as a side effect of a lookup.
+ */
+function remoteHashCandidates(remote: GitRemoteIdentities | null): string[] {
+  if (!remote) return [];
+  const canonical = hashGitRemote(remote.canonical);
+  const legacy = hashGitRemote(remote.legacy);
+  return canonical === legacy ? [canonical] : [canonical, legacy];
+}
+
+/** `resolveTeamForRemoteHash` over each candidate hash, first match wins. */
+function resolveTeamForAnyRemoteHash(
+  teams: TeamDetails[],
+  remoteHashes: readonly string[],
+): TeamDetails | null {
+  for (const hash of remoteHashes) {
+    const match = resolveTeamForRemoteHash(teams, hash);
+    if (match) return match;
+  }
+  return null;
+}
+
+/**
+ * Strip credentials before a clone remote leaves the desktop process.
+ *
+ * This is the deliberate desktop twin of `collabv3/src/projectRemote.ts` in
+ * nimbalyst-collab. The two sanitizers must stay in step so the client and
+ * server apply exactly the same credential-removal rules.
+ */
+function sanitizeRemoteUrl(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      parsed.username = '';
+      parsed.password = '';
+    } else if (parsed.password) {
+      // SSH usernames such as `git` are part of a valid clone URL, but a
+      // password embedded in any URL must never be transmitted.
+      parsed.password = '';
+    }
+    // A clone remote never needs a query string, and every spelling a token can
+    // hide behind (`token`, `api_key`, `access-token`, ...) is unguessable, so
+    // drop the whole thing rather than denylisting names.
+    parsed.search = '';
+    return parsed.toString();
+  } catch {
+    // Preserve SCP-style SSH remotes (`git@host:org/repo.git`). If a malformed
+    // URL uses hierarchical userinfo syntax, fail closed rather than sending
+    // credentials that could not be safely separated from the remote.
+    if (/^[a-z][a-z\d+.-]*:\/\/[^/\s]*@/i.test(trimmed)) return null;
+    return trimmed;
+  }
+}
+
+/**
+ * A workspace's git remote in both forms the server wants: the hash it routes
+ * on, and the URL a teammate can clone.
+ *
+ * The URL is org-sensitive (a private repository address), so it lives only in
+ * the organization's own Durable Object -- never in the shared D1 database,
+ * which keeps the hash. It is what lets the post-sign-in project walk offer a
+ * clone; without it that step degrades to choose-a-folder.
+ */
+async function captureWorkspaceRemote(
+  workspacePath: string | undefined,
+): Promise<{ gitRemoteHash?: string; remoteUrl?: string }> {
+  if (!workspacePath) return {};
+  const raw = await getRawGitRemote(workspacePath);
+  // A newly minted identity is always the canonical form, so a teammate who
+  // clones this repository cleanly hashes to the same value.
+  const normalized = normalizeGitRemote(raw);
+  if (!raw || !normalized) return {};
+  const remoteUrl = sanitizeRemoteUrl(raw);
+  return {
+    gitRemoteHash: hashGitRemote(normalized),
+    ...(remoteUrl ? { remoteUrl } : {}),
+  };
 }
 
 /**
@@ -1196,20 +1294,23 @@ export function broadcastWorkspaceOrgChanged(payload: { orgId: string; workspace
  * when the workspace has no remote to match on.
  * Pass precomputedRemote to skip the git spawn when the caller already has it.
  */
-export async function findTeamForWorkspace(workspacePath: string, precomputedRemote?: string): Promise<TeamDetails | null> {
+export async function findTeamForWorkspace(
+  workspacePath: string,
+  precomputedRemote?: GitRemoteIdentities,
+): Promise<TeamDetails | null> {
   if (!isAuthenticated()) {
     // logger.main.info('[TeamService] findTeamForWorkspace: not authenticated');
     return null;
   }
 
-  const remote = precomputedRemote ?? await getNormalizedGitRemote(workspacePath);
+  const remote = precomputedRemote ?? await getGitRemoteIdentities(workspacePath);
   const binding = getLocalOrgBinding(workspacePath);
   if (!remote && !binding) {
     // logger.main.info('[TeamService] findTeamForWorkspace: no git remote for', workspacePath);
     return null;
   }
 
-  const remoteHash = remote ? hashGitRemote(remote) : null;
+  const remoteHashes = remoteHashCandidates(remote);
 
   try {
     const teams = await listTeams();
@@ -1217,7 +1318,7 @@ export async function findTeamForWorkspace(workspacePath: string, precomputedRem
     // so a workspace whose remote matches a SECONDARY project routes to that
     // project's tracker room. The project registry rides along on listTeams
     // (cached), so this adds no extra fetch. See teamProjectResolver.ts.
-    const match = remoteHash ? resolveTeamForRemoteHash(teams, remoteHash) : null;
+    const match = resolveTeamForAnyRemoteHash(teams, remoteHashes);
     if (match) {
       // logger.main.info('[TeamService] findTeamForWorkspace: matched', match.orgId, match.teamProjectId);
       return match;
@@ -1238,7 +1339,7 @@ export async function findTeamForWorkspace(workspacePath: string, precomputedRem
       // Don't dump the full team list on every miss -- this is on a hot path
       // (called from many sites during workspace init) and the full dump was
       // burning measurable CPU on JSON.stringify alone.
-      logger.main.debug('[TeamService] findTeamForWorkspace: no hash match', { remoteHash, teamCount: teams.length });
+      logger.main.debug('[TeamService] findTeamForWorkspace: no hash match', { remoteHashes, teamCount: teams.length });
     }
     return null;
   } catch (err) {
@@ -1254,15 +1355,15 @@ export async function findTeamForWorkspace(workspacePath: string, precomputedRem
 export async function findPendingInviteForWorkspace(workspacePath: string): Promise<TeamDetails | null> {
   if (!isAuthenticated()) return null;
 
-  const remote = await getNormalizedGitRemote(workspacePath);
+  const remote = await getGitRemoteIdentities(workspacePath);
   if (!remote) return null;
 
-  const remoteHash = hashGitRemote(remote);
+  const remoteHashes = remoteHashCandidates(remote);
 
   try {
     const teams = await listTeams();
     const pendingTeams = teams.filter(t => t.membershipType && t.membershipType !== 'active_member');
-    const match = pendingTeams.find(t => t.gitRemoteHash === remoteHash) || null;
+    const match = pendingTeams.find(t => !!t.gitRemoteHash && remoteHashes.includes(t.gitRemoteHash)) || null;
     if (match) {
       logger.main.info('[TeamService] findPendingInviteForWorkspace: matched pending invite:', match.name, 'orgId:', match.orgId, 'membershipType:', match.membershipType);
     }
@@ -1345,19 +1446,14 @@ function creatorEmailForAccount(accountOrgId?: string): string | null {
 }
 
 async function createTeam(name: string, workspacePath?: string, accountOrgId?: string): Promise<TeamDetails> {
-  let gitRemoteHash: string | undefined;
-  if (workspacePath) {
-    const remote = await getNormalizedGitRemote(workspacePath);
-    if (remote) {
-      gitRemoteHash = hashGitRemote(remote);
-    }
-  }
+  const { gitRemoteHash, remoteUrl } = await captureWorkspaceRemote(workspacePath);
 
   // Create team using the specified account's JWT (or primary if not specified)
   const sourcePersonalOrgId = accountOrgId ?? getPersonalOrgId();
   const result = await fetchTeamApi('/api/teams', 'POST', {
     name,
     gitRemoteHash,
+    remoteUrl,
   }, undefined, accountOrgId) as {
     orgId: string;
     name: string;
@@ -1457,13 +1553,7 @@ async function addProjectToOrg(
   workspacePath?: string,
   name?: string,
 ): Promise<{ projectId: string; teamProjectId: string }> {
-  let gitRemoteHash: string | undefined;
-  if (workspacePath) {
-    const remote = await getNormalizedGitRemote(workspacePath);
-    if (remote) {
-      gitRemoteHash = hashGitRemote(remote);
-    }
-  }
+  const { gitRemoteHash, remoteUrl } = await captureWorkspaceRemote(workspacePath);
 
   // With no remote the name is the only thing that identifies the project in
   // the org's registry, so fall back to the folder name rather than minting a
@@ -1474,6 +1564,7 @@ async function addProjectToOrg(
   const result = await fetchTeamApi(`/api/teams/${orgId}/projects`, 'POST', {
     name: projectName,
     gitRemoteHash,
+    remoteUrl,
   }, orgId) as { projectId: string; teamProjectId: string };
 
   logger.main.info('[TeamService] Project added to org:', orgId, 'project:', result.projectId);
@@ -1528,10 +1619,11 @@ async function getRecentWorkspaceRemoteStates(
   const states: WorkspaceRemoteState[] = [];
   for (const workspace of getRecentItems('workspaces')) {
     if (!workspace.path || !existsSync(workspace.path)) continue;
-    const remote = await getNormalizedGitRemote(workspace.path);
+    const remote = await getGitRemoteIdentities(workspace.path);
     if (!remote) continue;
-    const gitRemoteHash = hashGitRemote(remote);
-    if (!projectGitRemoteHashes.has(gitRemoteHash)) continue;
+    const gitRemoteHash = remoteHashCandidates(remote)
+      .find((hash) => projectGitRemoteHashes.has(hash));
+    if (!gitRemoteHash) continue;
     states.push({
       workspacePath: workspace.path,
       gitRemoteHash,
@@ -1640,9 +1732,9 @@ export async function bindWorkspaceToSharedProject(input: {
     if (!stats.isDirectory()) {
       throw new Error('That path is a file, not a folder');
     }
-    const remote = await getNormalizedGitRemote(directoryPath);
+    const remote = await getGitRemoteIdentities(directoryPath);
     if (remote) {
-      const remoteMatch = resolveTeamForRemoteHash(teams, hashGitRemote(remote));
+      const remoteMatch = resolveTeamForAnyRemoteHash(teams, remoteHashCandidates(remote));
       if (remoteMatch && remoteMatch.teamProjectId !== teamProjectId) {
         throw new Error(
           "That folder's git remote already connects it to a different project",
@@ -2415,8 +2507,10 @@ export function registerTeamHandlers(): void {
 
   safeHandle('team:get-git-remote', async (_event, workspacePath: string) => {
     try {
-      const remote = await getNormalizedGitRemote(workspacePath);
-      return { success: true, remote };
+      // Display only, so it shows the canonical form -- the legacy one would
+      // put whatever credentials `origin` embeds on screen.
+      const remote = await getGitRemoteIdentities(workspacePath);
+      return { success: true, remote: remote?.canonical ?? null };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
@@ -2424,11 +2518,13 @@ export function registerTeamHandlers(): void {
 
   safeHandle('team:set-project-identity', async (_event, orgId: string, workspacePath: string) => {
     try {
-      const remote = await getNormalizedGitRemote(workspacePath);
+      const remote = await getGitRemoteIdentities(workspacePath);
       if (!remote) {
         return { success: false, error: 'No git remote found for this workspace' };
       }
-      const hash = hashGitRemote(remote);
+      // Relinking rewrites the stored identity, so it writes the canonical form
+      // -- this is the deliberate path that heals a legacy-hashed project.
+      const hash = hashGitRemote(remote.canonical);
       await setProjectIdentity(orgId, hash);
       return { success: true };
     } catch (error) {

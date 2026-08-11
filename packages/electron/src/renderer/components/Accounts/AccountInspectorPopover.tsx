@@ -13,6 +13,7 @@ import {
 } from '@floating-ui/react';
 import { windowControlsClearance } from '@nimbalyst/runtime/ui/floating/windowControlsClearance';
 
+import { resolveAccountOrgRow } from '../../../shared/orgProjectWalk';
 import type { PersonalAccountSummary } from '../../store/atoms/settingsDomains';
 import { formatUnreadCount } from '../../store/projectWindowUnreadViewModel';
 
@@ -28,6 +29,14 @@ interface AccountInspectorPopoverProps {
   projectOrg: ProjectOrganization | null;
   /** True while the organization lookup is still in flight. */
   projectOrgLoading?: boolean;
+  /**
+   * An organization the account belongs to that has no folder on this machine.
+   * Its presence is what turns the misleading "No organization — Set up" row
+   * into a way back into the post-sign-in project walk.
+   */
+  projectWalkOrg?: ProjectOrganization | null;
+  /** Resume the project walk for `projectWalkOrg`. */
+  onJoinOrganizationProject?: (orgId: string) => void;
   anchorEl: HTMLElement | null;
   onClose: () => void;
   /** Open the Account screen (sign-in / account management). */
@@ -52,6 +61,8 @@ export function AccountInspectorPopover({
   accounts,
   projectOrg,
   projectOrgLoading = false,
+  projectWalkOrg = null,
+  onJoinOrganizationProject,
   anchorEl,
   onClose,
   onOpenAccount,
@@ -81,6 +92,11 @@ export function AccountInspectorPopover({
   const activeAccount = accounts.find((account) => account.isSyncAccount) ?? accounts[0] ?? null;
   const email = activeAccount?.email ?? activeAccount?.personalOrgId ?? null;
   const expired = activeAccount?.sessionStatus === 'expired';
+  const orgRow = resolveAccountOrgRow({
+    projectOrg,
+    projectOrgLoading,
+    walkOrg: projectWalkOrg,
+  });
 
   return (
     <FloatingPortal>
@@ -150,8 +166,10 @@ export function AccountInspectorPopover({
             A single compact line whether or not the project has an org. An
             unfinished lookup gets its own row: "No organization — Set up" reads
             as an answer, and offering setup to someone who already has an org
-            is how a completed sign-up looked like it had failed. */}
-        {projectOrgLoading ? (
+            is how a completed sign-up looked like it had failed. A member whose
+            workspace matches nothing is offered the project walk instead, for
+            the same reason. */}
+        {orgRow.kind === 'loading' ? (
           <div
             className="account-inspector-row flex w-full items-center gap-3 px-4 py-2 text-left"
             data-testid="account-inspector-organization-loading"
@@ -159,17 +177,32 @@ export function AccountInspectorPopover({
             <MaterialSymbol icon="corporate_fare" size={20} className="shrink-0 text-[var(--nim-text-faint)]" />
             <span className="min-w-0 flex-1 truncate text-sm text-[var(--nim-text-muted)]">Loading organization…</span>
           </div>
-        ) : projectOrg ? (
+        ) : orgRow.kind === 'organization' ? (
           <button
             type="button"
             className={`${ROW_CLASS} py-2`}
             data-testid="account-inspector-organization-row"
-            onClick={() => onManageOrganization(projectOrg.orgId)}
+            onClick={() => onManageOrganization(orgRow.org.orgId)}
           >
             <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-gradient-to-br from-[#60a5fa] to-[#a78bfa] text-[10px] font-semibold text-white">
-              {projectOrg.name.slice(0, 2).toUpperCase()}
+              {orgRow.org.name.slice(0, 2).toUpperCase()}
             </span>
-            <span className="min-w-0 flex-1 truncate text-sm font-medium">{projectOrg.name}</span>
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">{orgRow.org.name}</span>
+            <MaterialSymbol icon="chevron_right" size={18} className="text-[var(--nim-text-faint)]" />
+          </button>
+        ) : orgRow.kind === 'joinProject' ? (
+          <button
+            type="button"
+            className={`${ROW_CLASS} py-2`}
+            data-testid="account-inspector-join-project-row"
+            onClick={() => onJoinOrganizationProject?.(orgRow.org.orgId)}
+          >
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-gradient-to-br from-[#60a5fa] to-[#a78bfa] text-[10px] font-semibold text-white">
+              {orgRow.org.name.slice(0, 2).toUpperCase()}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">
+              Join {orgRow.org.name} project
+            </span>
             <MaterialSymbol icon="chevron_right" size={18} className="text-[var(--nim-text-faint)]" />
           </button>
         ) : (

@@ -236,6 +236,8 @@ import {
   resolveInviteDeepLink,
   type InviteDeepLinkOutcome,
 } from './services/TeamService';
+import { registerOrgProjectWalkHandlers } from './services/OrgProjectWalkService';
+import { registerSignInAttributionHandlers } from './services/SignInAttribution';
 import { windowStates, windows, resolveActiveWorkspacePath } from './window/windowState';
 import { getRecentItems } from './utils/store';
 import { registerTeamCustodyHandlers } from './services/TeamCustodyService';
@@ -1808,6 +1810,8 @@ app.whenReady().then(async () => {
     gitRefWatcher.onCommitDetected((event) => commitTrackerLinker.handleCommitDetected(event));
 
     registerTeamHandlers();
+    registerOrgProjectWalkHandlers();
+    registerSignInAttributionHandlers();
     registerTeamInboxHandlers({
         openInboxSource: openInboxSourceFromDeepLink,
     });

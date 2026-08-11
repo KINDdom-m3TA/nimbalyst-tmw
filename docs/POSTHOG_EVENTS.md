@@ -184,7 +184,9 @@ The canonical property allowlists live in `packages/electron/src/shared/analytic
 
 | Event family | Events | Authoritative success seam |
 | --- | --- | --- |
-| Organization and membership | `team_surface_opened`, `team_organization_created`, `team_organization_switched`, `team_invitation_sent`, `team_invitation_accepted`, `team_member_role_changed`, `team_member_removed`, `team_organization_merged`, `team_organization_deleted`, `team_operation_failed` | Organization service response or explicit surface transition |
+| Organization and membership | `team_surface_opened`, `team_organization_created`, `team_organization_switched`, `team_invitation_sent`, `team_invitation_accepted`, `team_sign_in_completed`, `team_member_role_changed`, `team_member_removed`, `team_organization_merged`, `team_organization_deleted`, `team_operation_failed` | Organization service response, resolved invitation deep link, completed sign-in, or explicit surface transition |
+| Invitation handoff | `invite_landing_viewed`, `invite_handoff_shown`, `invite_deep_link_followed`, `invite_download_clicked`, `invite_browser_instead_chosen` | Web-console invitation callback, rendered handoff, or explicit handoff action |
+| Project walk | `team_project_walk_presented`, `team_project_walk_completed` | Visible desktop project-walk dialog or its completed/skipped outcome |
 | Project sharing and access | `team_project_added`, `team_project_identity_changed`, `team_project_moved`, `team_project_access_changed` | Project-sharing service response |
 | Shared-document discovery | `collab_home_opened`, `collab_home_searched` | Visible Shared Docs home and debounced committed search |
 | Shared-document lifecycle | `collab_document_created`, `collab_document_opened`, `collab_document_first_edited`, `collab_document_action`, `collab_operation_failed` | Creation orchestrator, successful tab open/reuse, first local Yjs mutation, or accepted document action |
@@ -193,6 +195,8 @@ The canonical property allowlists live in `packages/electron/src/shared/analytic
 | Collaboration health | `collab_sync_attempt_completed`, `collab_outbox_replay_completed`, `collab_share_asset_migration_completed`, `collab_server_mutation_rejected` | Coalesced client-observed terminal attempt or replay/migration/rejection outcome |
 
 Common Teams properties are low-cardinality subsets of `surface`, `entryPoint`, `source`, `outcome`, `errorCategory`, `actorType`, `callerRole` (`owner`, `admin`, `member`, `viewer`, or `unknown`), `documentType`, `editorCategory`, `collaborationScope`, `resourceType`, `connectionPath`, `encryptionMode`, `durationCategory`, and the defined count/retry buckets. Event-specific enums and permitted fields are enforced by the shared contract.
+
+The signup funnel uses these bounded properties: `team_invitation_accepted` adds `entryPoint=deep_link`, the exact bounded `status` from invite resolution (`accepted`, `already-member`, `sign-in-required`, `not-found`, or `error`), and `projectMatched`; `team_sign_in_completed` records `membershipState` (`pending`, `active`, or `mixed`) plus `organizationCountBucket`; `team_project_walk_completed` records `folderSource` (`clone`, `bind`, or `not_applicable`) and `skipped`. Console events always set `surface=web_console`; the handoff event adds `orgResolved`, and the deep-link event adds `auto`. No console event identifies the Stytch member or includes callback URL data.
 
 Never add organization, project, document, folder, member, account, room, or session IDs to these events. Also forbidden are names, email addresses, titles, filenames, paths, git remotes, raw errors, URLs, tokens, content, payloads, and exact values where a bucket exists.
 

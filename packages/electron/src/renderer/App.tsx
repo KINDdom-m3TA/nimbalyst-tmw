@@ -124,6 +124,7 @@ import { initConversationListeners } from './store/listeners/conversationListene
 import { initConversationDirectoryListeners } from './store/listeners/conversationDirectoryListeners';
 import { initOrgSettingsListeners } from './store/listeners/orgSettingsListeners';
 import { initProjectOrgListeners } from './store/listeners/projectOrgListeners';
+import { initOrgProjectWalkListeners } from './store/listeners/orgProjectWalkListeners';
 import { initCollabScopeListeners } from './store/listeners/collabScopeListeners';
 import { initCollabReplicaListeners } from './store/listeners/collabReplicaListeners';
 import { initCollabConversionListeners } from './store/listeners/collabConversionListeners';
@@ -391,6 +392,7 @@ export default function App() {
     const cleanupConversationDirectory = initConversationDirectoryListeners();
     const cleanupOrgSettings = initOrgSettingsListeners();
     const cleanupProjectOrg = initProjectOrgListeners();
+    const cleanupOrgProjectWalk = initOrgProjectWalkListeners();
     const cleanupCollabScope = initCollabScopeListeners();
     const cleanupCollabReplicas = initCollabReplicaListeners();
     const cleanupCollabConversion = initCollabConversionListeners();
@@ -432,6 +434,7 @@ export default function App() {
       cleanupConversationDirectory?.();
       cleanupOrgSettings?.();
       cleanupProjectOrg?.();
+      cleanupOrgProjectWalk?.();
       cleanupCollabScope?.();
       cleanupCollabReplicas?.();
       cleanupCollabConversion?.();

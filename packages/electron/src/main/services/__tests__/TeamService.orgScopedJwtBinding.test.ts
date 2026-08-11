@@ -31,7 +31,12 @@ vi.mock('../../utils/logger', () => ({
   logger: { main: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
 }));
 
-vi.mock('../../utils/gitUtils', () => ({ getNormalizedGitRemote: vi.fn(async () => null) }));
+vi.mock('../../utils/gitUtils', () => ({
+  getNormalizedGitRemote: vi.fn(async () => null),
+  getRawGitRemote: vi.fn(async () => null),
+  normalizeGitRemote: (url: string | null) => url,
+  getGitRemoteIdentities: vi.fn(async () => null),
+}));
 vi.mock('../teamProjectResolver', () => ({ resolveTeamForRemoteHash: () => null }));
 vi.mock('../../utils/collabSyncUrl', () => ({ getCollabSyncHttpUrl: () => 'https://sync.test' }));
 

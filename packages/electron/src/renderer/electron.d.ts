@@ -165,6 +165,7 @@ interface ElectronAPI {
         name: string | null;
         slug: string | null;
         gitRemoteHash: string | null;
+        remoteUrl?: string;
         localStatus: 'open' | 'closed' | 'notLocal';
         workspacePath: string | null;
       }>;

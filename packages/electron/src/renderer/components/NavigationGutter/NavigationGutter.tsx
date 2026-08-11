@@ -35,6 +35,8 @@ import { stytchIsSignedInAtom } from '../../store/atoms/stytchAuth';
 import { personalAccountsAtom } from '../../store/atoms/settingsDomains';
 import { orgInboxUnreadCountAtomFamily } from '../../store/atoms/teamInbox';
 import { useProjectOrg } from '../../hooks/useProjectOrg';
+import { orgProjectWalkAtom } from '../../store/atoms/orgProjectWalk';
+import { openOrgProjectWalk } from '../../store/listeners/orgProjectWalkListeners';
 import { AlphaBadge } from '../common/AlphaBadge';
 import { AccountInspectorPopover } from '../Accounts/AccountInspectorPopover';
 import { GutterContextMenu } from './GutterContextMenu';
@@ -133,6 +135,9 @@ export const NavigationGutter: React.FC<NavigationGutterProps> = ({
   const projectOrgUnread = useAtomValue(
     orgInboxUnreadCountAtomFamily(projectOrg?.orgId ?? ''),
   );
+  // An org the account belongs to with nothing bound here yet. Replaces the
+  // "No organization" row, which is a lie for an actual member.
+  const projectWalk = useAtomValue(orgProjectWalkAtom);
 
   // Global gutter customization (visibility + per-section order).
   const hiddenItems = useAtomValue(hiddenGutterItemsAtom);
@@ -534,6 +539,11 @@ export const NavigationGutter: React.FC<NavigationGutterProps> = ({
               accounts={accounts}
               projectOrg={projectOrg}
               projectOrgLoading={projectOrgLoading}
+              projectWalkOrg={projectWalk.org}
+              onJoinOrganizationProject={() => {
+                setUserMenuOpen(false);
+                openOrgProjectWalk();
+              }}
               anchorEl={userMenuButtonRef.current}
               onClose={() => setUserMenuOpen(false)}
               onOpenAccount={() => {

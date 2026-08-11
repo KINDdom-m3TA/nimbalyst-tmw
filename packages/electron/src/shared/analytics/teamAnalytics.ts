@@ -14,6 +14,7 @@ const outcome = enumRule('success', 'partial', 'failed', 'cancelled', 'offline_r
 const durationCategory = enumRule('fast', 'medium', 'slow');
 const memberCountBucket = enumRule('1', '2-3', '4-10', '11-25', '26+');
 const projectCountBucket = enumRule('1', '2-3', '4-10', '11+');
+const organizationCountBucket = enumRule('1', '2-3', '4-10', '11+');
 const itemCountBucket = enumRule('0', '1', '2-5', '6-20', '21+');
 const retryCountBucket = enumRule('0', '1', '2-3', '4+');
 const queryLengthBucket = enumRule('1-3', '4-10', '11-30', '31+');
@@ -128,8 +129,39 @@ export const TEAM_ANALYTICS_EVENT_SCHEMAS = {
   },
   team_invitation_accepted: {
     surface,
-    entryPoint: enumRule('organization_manager', 'project_sharing'),
+    entryPoint: enumRule('organization_manager', 'project_sharing', 'deep_link'),
     projectMatched: booleanRule,
+    status: enumRule('accepted', 'already-member', 'sign-in-required', 'not-found', 'error'),
+  },
+  team_sign_in_completed: {
+    surface,
+    membershipState: enumRule('pending', 'active', 'mixed'),
+    organizationCountBucket,
+  },
+  team_project_walk_presented: {
+    surface,
+  },
+  team_project_walk_completed: {
+    surface,
+    folderSource: enumRule('clone', 'bind', 'not_applicable'),
+    skipped: booleanRule,
+  },
+  invite_landing_viewed: {
+    surface,
+  },
+  invite_handoff_shown: {
+    surface,
+    orgResolved: booleanRule,
+  },
+  invite_deep_link_followed: {
+    surface,
+    auto: booleanRule,
+  },
+  invite_download_clicked: {
+    surface,
+  },
+  invite_browser_instead_chosen: {
+    surface,
   },
   team_member_role_changed: {
     surface,
@@ -409,6 +441,13 @@ export function bucketMemberCount(count: number): '1' | '2-3' | '4-10' | '11-25'
 }
 
 export function bucketProjectCount(count: number): '1' | '2-3' | '4-10' | '11+' {
+  if (count <= 1) return '1';
+  if (count <= 3) return '2-3';
+  if (count <= 10) return '4-10';
+  return '11+';
+}
+
+export function bucketOrganizationCount(count: number): '1' | '2-3' | '4-10' | '11+' {
   if (count <= 1) return '1';
   if (count <= 3) return '2-3';
   if (count <= 10) return '4-10';

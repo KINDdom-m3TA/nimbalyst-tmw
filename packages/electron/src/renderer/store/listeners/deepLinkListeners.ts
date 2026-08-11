@@ -22,8 +22,10 @@ import {
   setTrackerModeLayoutAtom,
 } from '../atoms/trackers';
 import { activeWorkspacePathAtom } from '../atoms/openProjects';
+import { orgProjectWalkRefreshAtom } from '../atoms/orgProjectWalk';
 import { openSettingsCommandAtom } from '../atoms/settingsNavigation';
 import { errorNotificationService } from '../../services/ErrorNotificationService';
+import { trackTeamAnalyticsEvent } from '../../utils/teamAnalytics';
 import type { TrackerDeepLinkView } from '../../../shared/trackerDeepLinks';
 
 interface SharedDocPayload {
@@ -100,6 +102,33 @@ function applyTrackerPayload(data: TrackerPayload): void {
 }
 
 /**
+ * Ask the project-walk listener to re-resolve. Membership just changed, so the
+ * org may now have nothing bound to it on this machine.
+ */
+function offerProjectWalk(): void {
+  store.set(orgProjectWalkRefreshAtom, (revision) => revision + 1);
+}
+
+async function trackTeamInviteOutcome(outcome: TeamInviteOutcome): Promise<void> {
+  let projectMatched = false;
+  const workspacePath = store.get(activeWorkspacePathAtom);
+  if (workspacePath && (outcome.status === 'accepted' || outcome.status === 'already-member')) {
+    try {
+      const team = await window.electronAPI.invoke('team:find-for-workspace', workspacePath) as { orgId?: string } | null;
+      projectMatched = team?.orgId === outcome.orgId;
+    } catch {
+      // A failed enrichment must not suppress the resolved invitation event.
+    }
+  }
+  trackTeamAnalyticsEvent('team_invitation_accepted', {
+    surface: 'desktop',
+    entryPoint: 'deep_link',
+    projectMatched,
+    status: outcome.status,
+  });
+}
+
+/**
  * Team-invitation handoff from the web console. The console has already
  * accepted the invitation in the browser; main has re-derived what that means
  * for the signed-in accounts here.
@@ -113,6 +142,7 @@ type TeamInviteOutcome =
 
 function applyTeamInviteOutcome(outcome: TeamInviteOutcome): void {
   if (!outcome?.status) return;
+  void trackTeamInviteOutcome(outcome);
 
   switch (outcome.status) {
     case 'accepted':
@@ -121,6 +151,10 @@ function applyTeamInviteOutcome(outcome: TeamInviteOutcome): void {
         'Shared documents, trackers, and projects for this team are now available.',
         { duration: 8000 }
       );
+      // A toast is where this used to stop, and the user was then told they had
+      // no organization. Re-resolve so the project walk can offer the org's
+      // project instead.
+      offerProjectWalk();
       break;
     case 'already-member':
       // Also the normal handoff path: the console accepted the invitation
@@ -130,6 +164,7 @@ function applyTeamInviteOutcome(outcome: TeamInviteOutcome): void {
         'Shared documents, trackers, and projects for this team are available in Nimbalyst.',
         { duration: 6000 }
       );
+      offerProjectWalk();
       break;
     case 'sign-in-required':
       // The common first-run path: they installed Nimbalyst because of the

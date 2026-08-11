@@ -27,7 +27,7 @@ import * as os from 'os';
 import { getProjectFileSyncService } from './ProjectFileSyncService';
 import { startProjectFileSync, stopAllProjectFileSync } from '../file/WorkspaceWatcher';
 import { windowStates } from '../window/WindowManager';
-import { getNormalizedGitRemote } from '../utils/gitUtils';
+import { getGitRemoteIdentities } from '../utils/gitUtils';
 import { resolveProjectPath } from '../utils/workspaceDetection';
 import { createHash } from 'crypto';
 import { setSleepPreventionMode, setSyncConnected, shutdownSleepPrevention, type PreventSleepMode } from './PowerSaveService';
@@ -1359,11 +1359,12 @@ export async function syncProjectCommandsToMobile(
   }
 
   try {
-    // Compute gitRemoteHash from the workspace's git remote URL
+    // Compute gitRemoteHash from the workspace's git remote URL. This is a
+    // freshly written identity, so it uses the canonical (credential-free) form.
     let gitRemoteHash: string | undefined;
-    const gitRemote = await getNormalizedGitRemote(workspacePath);
+    const gitRemote = await getGitRemoteIdentities(workspacePath);
     if (gitRemote) {
-      gitRemoteHash = createHash('sha256').update(gitRemote).digest('hex');
+      gitRemoteHash = createHash('sha256').update(gitRemote.canonical).digest('hex');
     }
 
     await provider.syncProjectConfig(workspacePath, {

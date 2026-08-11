@@ -1680,6 +1680,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // open it -- the join half of the git-free flow.
     openSharedProject: (payload: { orgId: string; teamProjectId: string; directoryPath: string }) =>
       ipcRenderer.invoke('team:open-shared-project', payload),
+    // Post-sign-in project walk: which orgs have nothing bound, what a chosen
+    // folder can be used for, and making it the project's folder.
+    resolveProjectWalk: () => ipcRenderer.invoke('team:resolve-project-walk'),
+    // Exactly one window records a completed sign-in; main arbitrates because
+    // the auth broadcast reaches all of them.
+    claimSignInAttribution: (key: string) =>
+      ipcRenderer.invoke('team:claim-sign-in-attribution', key),
+    inspectProjectFolder: (payload: { orgId: string; teamProjectId: string; directoryPath: string }) =>
+      ipcRenderer.invoke('team:inspect-project-folder', payload),
+    joinProjectFolder: (payload: { orgId: string; teamProjectId: string; directoryPath: string }) =>
+      ipcRenderer.invoke('team:join-project-folder', payload),
+    cloneProject: (payload: { cloneId: string; remoteUrl: string; directoryPath: string }) =>
+      ipcRenderer.invoke('team:clone-project', payload),
+    cancelProjectClone: (cloneId: string) =>
+      ipcRenderer.invoke('team:cancel-project-clone', cloneId),
+    onProjectCloneProgress: (
+      callback: (progress: { cloneId: string; phase: string; percent: number | null }) => void,
+    ) => {
+      const handler = (_event: any, progress: any) => callback(progress);
+      ipcRenderer.on('team:project-clone-progress', handler);
+      return () => ipcRenderer.removeListener('team:project-clone-progress', handler);
+    },
     // Epic H3 P3: move-project wizard. Preview is read-only; move is destructive (admin on both orgs).
     moveProjectPreview: (srcOrgId: string, projectId: string, destOrgId: string) =>
       ipcRenderer.invoke('team:move-project-preview', srcOrgId, projectId, destOrgId),
