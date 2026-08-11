@@ -10,34 +10,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
-- Git Log now shows which AI session produced each commit, with a click-through to open that session.
-- The editor header now shows the last AI session that worked on the open file, with a dropdown to jump to the other sessions that touched it or start a new one.
-- Linked local files can now pull the latest Shared Document content from the editor header, with conflict protection and offline-ready Markdown images.
-- Shared document version history now shows the contents of each earlier version, so you can see what you are restoring before you restore it.
-- Trackers are now plainly personal or your team's: your own lists stay on your machine, items in a team tracker stay private until you publish them, issue keys are assigned on publishing, and removing a field or status asks first and shows how many items it affects.
-- You can now read, write, and reply to comments on shared documents in the browser, and an `@`-mention reaches the person's inbox; teammates with read-only access can follow the discussion without being offered edits the server would refuse.
-- Signing in to a team now walks you into your organization's project, cloning the repository or binding a folder you already have, and Account settings lets you open a project in any organization you belong to, instead of leaving you at "No organization" when you are already a member.
-- Organization owners and admins can now remove a member or revoke a pending invitation from Members & Roles.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
 
 ### Fixed
 <!-- Bug fixes go here -->
-- Agents reading a web page no longer receive what you typed into its form fields, so a password can no longer reach a session transcript; fields now report only whether they are filled.
-- A shared document you are only allowed to read now says so, instead of looking editable and silently retrying the refused save until you reload.
-- Restoring an earlier version of a shared document now actually rolls the document back, instead of reporting success while leaving it unchanged.
-- Keeping or reverting an AI change in a shared document now clears its highlight for good, instead of leaving marks that pile up on every later turn.
+
+### Removed
+<!-- Removed features go here -->
+
+## [0.73.0] - 2026-08-11
+
+
+### Added
+<!-- New features go here -->
+- Git Log shows which AI session produced each commit, with a click-through to open it.
+- The editor header shows the last AI session that worked on the open file, with a dropdown to jump to other sessions or start a new one.
+- Linked local files can pull the latest Shared Document content from the editor header.
+- Shared document version history previews the contents of each earlier version before you restore it.
+- Trackers are now plainly personal or your team's, and items in a team tracker stay private until you publish them.
+- Read, write, and reply to shared document comments in the browser, with `@`-mentions reaching the person's inbox.
+- Signing in to a team walks you into your organization's project, and Account settings can open a project in any organization you belong to.
+- Organization owners and admins can remove a member or revoke a pending invitation from Members & Roles.
+
+### Changed
+<!-- Changes to existing functionality go here -->
+
+### Fixed
+<!-- Bug fixes go here -->
+- Agents reading a web page no longer receive what you typed into its form fields.
+- A shared document you may only read now says so, instead of silently retrying the refused save.
+- Restoring an earlier version of a shared document now actually rolls the document back.
+- Keeping or reverting an AI change in a shared document now clears its highlight for good.
 - An AI edit near an embedded file in a shared document no longer duplicates the embed.
-- AI agents no longer present provisional tracker keys as final references when creating items in shared projects.
-- Editing a shared tracker's config file no longer silently discards the change, and editing a field a teammate just added no longer reverts their value.
-- A Quick Open file mask that filters by name, such as `Ch0*.md`, now matches on Windows instead of silently returning nothing.
-- Comment highlights in a shared document now reappear after the document reloads, instead of silently vanishing while the comments stay in the panel.
-- Teammates appear by name rather than by email address when you `@`-mention them and in the notifications a mention produces.
-- Edits you make to a shared document on one of your own devices now appear live on your others, instead of only after a reload.
-- A failed sign-in on iPhone and iPad now explains what went wrong, instead of returning to the login screen with no message.
-- The profile menu now updates as soon as you sign in or out, instead of offering your previous organization until you reload.
-- Opening a team invitation while signed out now takes you to the sign-in page and offers a Sign in button on the prompt, instead of stranding you on Notifications with nothing to click.
+- AI agents no longer present provisional tracker keys as final references in shared projects.
+- Editing a shared tracker's config file no longer silently discards the change.
+- A Quick Open file mask that filters by name, such as `Ch0*.md`, now matches on Windows.
+- Comment highlights in a shared document reappear after the document reloads.
+- Teammates appear by name rather than by email address in `@`-mentions and notifications.
+- Edits you make to a shared document on one of your devices now appear live on your others.
+- A failed sign-in on iPhone and iPad now explains what went wrong.
+- The profile menu updates as soon as you sign in or out.
+- Opening a team invitation while signed out now takes you to the sign-in page.
+- Prompts sent from your phone appear in the queue while they are still pending.
+- Viewing history diffs no longer freezes a restored session.
 
 ### Removed
 <!-- Removed features go here -->
