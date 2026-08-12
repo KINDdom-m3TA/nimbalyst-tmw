@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Picking a grouping or ordering in the tracker's Display Settings now works instead of closing the panel without changing anything.
 
 ### Removed
 <!-- Removed features go here -->

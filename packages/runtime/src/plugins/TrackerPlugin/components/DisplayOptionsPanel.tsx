@@ -7,15 +7,20 @@
  * write view state rather than a local presentation flag.
  */
 
-import React, { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect } from 'react';
 import {
   autoUpdate,
   flip,
+  FloatingNode,
   FloatingPortal,
+  FloatingTree,
   offset,
   shift,
   size,
+  useDismiss,
   useFloating,
+  useFloatingNodeId,
+  useInteractions,
 } from '@floating-ui/react';
 import { windowControlsClearance } from '../../../ui/floating/windowControlsClearance';
 import type { TrackerGroupBy } from '../models/trackerGrouping';
@@ -61,7 +66,18 @@ interface DisplayOptionsPanelProps {
   showColumnProperties?: boolean;
 }
 
-export const DisplayOptionsPanel: React.FC<DisplayOptionsPanelProps> = ({
+/**
+ * The panel and the selects it contains are separate floating layers, so they
+ * share a tree: a press inside the grouping or ordering dropdown then counts as
+ * a press inside the panel rather than a dismissal.
+ */
+export const DisplayOptionsPanel: React.FC<DisplayOptionsPanelProps> = props => (
+  <FloatingTree>
+    <DisplayOptionsPanelContent {...props} />
+  </FloatingTree>
+);
+
+const DisplayOptionsPanelContent: React.FC<DisplayOptionsPanelProps> = ({
   availableColumns,
   config,
   onConfigChange,
@@ -76,9 +92,11 @@ export const DisplayOptionsPanel: React.FC<DisplayOptionsPanelProps> = ({
   onOrderingChange,
   showColumnProperties = true,
 }) => {
-  const panelRef = useRef<HTMLDivElement>(null);
-  const { refs, floatingStyles } = useFloating({
+  const nodeId = useFloatingNodeId();
+  const { refs, floatingStyles, context } = useFloating({
+    nodeId,
     open: true,
+    onOpenChange: open => { if (!open) onClose(); },
     placement: 'bottom-end',
     strategy: 'fixed',
     whileElementsMounted: autoUpdate,
@@ -97,37 +115,22 @@ export const DisplayOptionsPanel: React.FC<DisplayOptionsPanelProps> = ({
     ],
   });
 
+  // Matching the previous listener's event keeps the anchor's own click-to-toggle
+  // working: the press closes the panel before the button's click reopens it.
+  const dismiss = useDismiss(context, { outsidePressEvent: 'mousedown' });
+  const { getFloatingProps } = useInteractions([dismiss]);
+
   useEffect(() => {
     if (anchorElement) refs.setReference(anchorElement);
   }, [anchorElement, refs]);
 
-  const setPanelElement = useCallback((element: HTMLDivElement | null) => {
-    panelRef.current = element;
-    refs.setFloating(element);
-  }, [refs]);
-
-  // Close on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (
-        panelRef.current
-        && !panelRef.current.contains(target)
-        && !anchorElement?.contains(target)
-      ) {
-        onClose();
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [anchorElement, onClose]);
-
   const panel = (
     <div
-      ref={setPanelElement}
+      ref={refs.setFloating}
       style={floatingStyles}
       data-testid="tracker-display-options-panel"
       className="tracker-display-options-panel flex w-[272px] flex-col overflow-hidden rounded-lg border border-[var(--nim-border)] bg-[var(--nim-bg-secondary)] shadow-xl z-50"
+      {...getFloatingProps()}
     >
       <div className="px-3 py-2 border-b border-[var(--nim-border)]">
         <span className="text-xs font-semibold text-[var(--nim-text)]">Display Settings</span>
@@ -173,5 +176,9 @@ export const DisplayOptionsPanel: React.FC<DisplayOptionsPanelProps> = ({
     </div>
   );
 
-  return <FloatingPortal>{panel}</FloatingPortal>;
+  return (
+    <FloatingNode id={nodeId}>
+      <FloatingPortal>{panel}</FloatingPortal>
+    </FloatingNode>
+  );
 };
