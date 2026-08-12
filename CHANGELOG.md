@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - Picking a grouping or ordering in the tracker's Display Settings now works instead of closing the panel without changing anything.
+- Collaborator avatars and the sync indicator no longer flicker on every character you type in a shared document.
 
 ### Removed
 <!-- Removed features go here -->
