@@ -2974,6 +2974,13 @@ export const TabEditor: React.FC<TabEditorProps> = ({
                 <MarkdownEditor
                   key={`${filePath}-lexical`}
                   host={editorHost}
+                  // This component already applies external file changes to the
+                  // Lexical instance itself (see the handle.onFileChanged
+                  // subscription above), together with the last-saved/dirty
+                  // bookkeeping that has to move with them. Letting
+                  // MarkdownEditor's own subscription run as well would re-parse
+                  // the document a second time on every external change.
+                  applyExternalFileChanges={false}
                   config={{
                     theme,
                     onRenameDocument,

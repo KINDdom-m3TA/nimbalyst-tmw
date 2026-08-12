@@ -12,7 +12,7 @@
 
 import { buildCollabUri } from '@nimbalyst/collab-protocol';
 import { logger } from './logger';
-import { createProxiedWebSocket } from './proxiedWebSocket';
+import { appendCollabUrlQuery, createProxiedWebSocket } from './proxiedWebSocket';
 import {
   getSharedDocumentDisplayName,
   normalizeCollabPath,
@@ -343,11 +343,7 @@ export async function resolveCollabConfigForUri(
       urlExtraQuery,
       pendingUpdateBase64,
       createWebSocket: hasWsProxy
-        ? (url: string) => createProxiedWebSocket(
-            urlExtraQuery
-              ? `${url}${url.includes('?') ? '&' : '?'}${urlExtraQuery}`
-              : url,
-          )
+        ? (url: string) => createProxiedWebSocket(appendCollabUrlQuery(url, urlExtraQuery))
         : undefined,
       getJwt: async (opts) => {
         const jwtResult = await window.electronAPI.documentSync.getJwt(orgId, opts?.forceRefresh);
@@ -464,7 +460,18 @@ export async function openCollabDocumentViaIPC(options: {
     throw new Error(result.error || 'Failed to resolve collaborative document config');
   }
 
-  const { orgId, documentId, title, serverUrl, accountId, userId, userName, userEmail, pendingUpdateBase64 } = result.config;
+  const {
+    orgId,
+    documentId,
+    title,
+    serverUrl,
+    accountId,
+    userId,
+    userName,
+    userEmail,
+    urlExtraQuery,
+    pendingUpdateBase64,
+  } = result.config;
   if (orgId !== options.scope.orgId) {
     throw new Error('Resolved collaborative document belongs to a different scope');
   }
@@ -499,9 +506,12 @@ export async function openCollabDocumentViaIPC(options: {
     userId,
     userName,
     userEmail,
+    urlExtraQuery,
     initialContent: options.initialContent,
     pendingUpdateBase64,
-    createWebSocket: hasWsProxy ? createProxiedWebSocket : undefined,
+    createWebSocket: hasWsProxy
+      ? (url: string) => createProxiedWebSocket(appendCollabUrlQuery(url, urlExtraQuery))
+      : undefined,
     getJwt: async (opts) => {
       const jwtResult = await window.electronAPI.documentSync.getJwt(orgId, opts?.forceRefresh);
       if (!jwtResult.success || !jwtResult.jwt) {

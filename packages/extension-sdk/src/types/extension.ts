@@ -665,6 +665,16 @@ export interface CustomEditorContribution {
   collaboration?: {
     supported: boolean;
     awarenessFields?: string[];
+
+    /**
+     * User-facing explanation shown in place of the generic "does not declare a
+     * collaborative editor binding" text when `supported` is false.
+     *
+     * Use it when an editor *has* a binding but sharing is known to lose data,
+     * so the disabled reason names the actual defect rather than implying the
+     * work was never started. Ignored when `supported` is true.
+     */
+    unsupportedReason?: string;
   };
 }
 

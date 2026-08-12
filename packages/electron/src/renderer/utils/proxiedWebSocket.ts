@@ -60,6 +60,17 @@ function registerWsHandler(id: string, handler: WsEventHandler): void {
 }
 
 /**
+ * Append a host-supplied, already-authorized query to a collab room URL.
+ *
+ * `urlExtraQuery` only ever comes from a main-process config response, so the
+ * proxy itself never has to know about alternate auth shapes.
+ */
+export function appendCollabUrlQuery(url: string, urlExtraQuery?: string): string {
+  if (!urlExtraQuery) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}${urlExtraQuery}`;
+}
+
+/**
  * Create a browser-compatible WebSocket that proxies through the Electron
  * main process via IPC. This works around Cloudflare blocking WebSocket
  * upgrades from browser/Chromium clients.

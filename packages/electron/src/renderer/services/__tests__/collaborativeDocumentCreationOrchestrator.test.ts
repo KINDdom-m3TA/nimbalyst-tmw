@@ -72,7 +72,6 @@ const markdownDescriptor: CollaborativeDocumentTypeDescriptor = {
     sharedCreate: true,
     history: true,
     export: true,
-    embed: false,
   },
 };
 

@@ -741,10 +741,15 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
       }
       collabActiveRef.current = true;
       return {
+        // Drained by the host before it reports a write complete. This matters
+        // more here than anywhere else: local edits reach the Y.Text on a 1s
+        // poll, so without it an AI tool returns a full second before its cells
+        // are in the document.
+        syncNow: () => binding.syncNow(),
         destroy: () => {
           // Flush any pending sync so a closing tab doesn't drop the last
-          // edit. Fire-and-forget; the binding is about to be destroyed
-          // either way.
+          // edit. Fire-and-forget keeps close non-blocking; CsvBinding lets a
+          // serialization that already started here finish after destroy().
           void binding.syncNow().catch(() => {});
           binding.destroy();
           collabBindingRef.current = null;
@@ -1137,6 +1142,10 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
   const handleAfterEdit = useCallback(
     async (event: RevoGridCustomEvent<any>) => {
       if (!event.detail) return;
+      // The grid already contains the committed value. Push it to Y.Text
+      // before awaiting any follow-up work so a teammate's remote update
+      // cannot repaint this still-local edit during the polling interval.
+      await collabBindingRef.current?.syncNow();
       try {
         await gridOpsRef.current?.recalculateFormulas();
       } catch (error) {

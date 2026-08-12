@@ -38,7 +38,6 @@
 
 import * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
-import { COLLAB_INIT_ORIGIN } from '@nimbalyst/extension-sdk';
 import type { DataModelStoreApi } from '../store';
 import type {
   DataModelFile,
@@ -320,7 +319,6 @@ export class DataModelBinding {
 
   private handleRemoteChange(txn: Y.Transaction): void {
     if (txn.origin === this) return;
-    if (txn.origin === COLLAB_INIT_ORIGIN) return;
     this.applyYDocStateToStore();
   }
 

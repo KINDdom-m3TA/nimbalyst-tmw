@@ -15,6 +15,12 @@ export interface CollabIndexConfig {
     userId: string;
     userName?: string;
     userEmail?: string;
+    /**
+     * Extra query the host has already authorized for the team socket, appended
+     * verbatim to the room URL. Mirrors `CollabDocumentConfig.urlExtraQuery`;
+     * only a host-supplied test identity sets it.
+     */
+    urlExtraQuery?: string;
 }
 /**
  * Host-defined collaboration identity.
@@ -129,7 +135,6 @@ export interface CollabDocumentTypeDescriptor {
         sharedCreate: boolean;
         history: boolean;
         export: boolean;
-        embed: boolean;
         disabledReason?: string;
     };
 }

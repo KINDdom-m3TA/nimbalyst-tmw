@@ -160,6 +160,22 @@ export interface CollaborationContext {
    * Excalidraw scene JSON) deterministically so dedupe-on-hash is stable.
    */
   registerRevisionAdapter?(adapter: RevisionSnapshotAdapter): () => void;
+
+  /**
+   * Register a synchronous drain of the editor's pending local content into the
+   * Y.Doc. The returned function unregisters it -- call it on unmount.
+   *
+   * A binding that debounces its local pushes holds the newest edit outside the
+   * CRDT until the debounce fires. The host awaits this before it reports a
+   * write as complete -- notably after every mutating extension AI tool -- so an
+   * agent edit is in the Y.Doc and server-acked before the tool returns.
+   * Without it the tool reports success while the edit is still in the
+   * debounce, and a peer update landing in that window discards it: the same
+   * loss window that direct keystrokes close by calling `syncNow()`.
+   *
+   * Bindings that write through to the Y.Doc synchronously do not need this.
+   */
+  registerContentFlush?(flush: () => void | Promise<void>): () => void;
 }
 
 /**

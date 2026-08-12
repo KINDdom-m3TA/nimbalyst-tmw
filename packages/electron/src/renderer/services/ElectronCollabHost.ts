@@ -449,11 +449,11 @@ export class ElectronCollabHost implements CollabHost<ElectronDocsCapability> {
         retryable: !message.includes('Not authenticated') && !message.includes('No team found'),
       });
     }
-    const { orgId, teamProjectId, serverUrl, userId, userName, userEmail } = result.config;
+    const { orgId, teamProjectId, serverUrl, userId, userName, userEmail, urlExtraQuery } = result.config;
     return {
       scopeKey: requestedScopeKey,
       orgId,
-      indexConfig: { teamProjectId, serverUrl, userId, userName, userEmail },
+      indexConfig: { teamProjectId, serverUrl, userId, userName, userEmail, urlExtraQuery },
     };
   }
 

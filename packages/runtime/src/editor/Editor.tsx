@@ -22,6 +22,7 @@ import type { LexicalEditor } from 'lexical';
 
 import { $convertToEnhancedMarkdownString } from './markdown';
 
+import { EXTERNAL_CONTENT_UPDATE_TAG } from './applyExternalMarkdown';
 import { DEFAULT_EDITOR_CONFIG, type EditorConfig } from './EditorConfig';
 import { getEditorTransformers } from './markdown';
 import AutoEmbedPlugin from './plugins/AutoEmbedPlugin';
@@ -168,8 +169,12 @@ export default function Editor({ config = DEFAULT_EDITOR_CONFIG }: EditorProps):
   const hasCompletedInitialLoadRef = useRef(false);
 
   useEffect(() => {
-    const removeUpdateListener = editor.registerUpdateListener(({ dirtyElements, dirtyLeaves }) => {
+    const removeUpdateListener = editor.registerUpdateListener(({ dirtyElements, dirtyLeaves, tags }) => {
       if (dirtyElements.size === 0 && dirtyLeaves.size === 0) return;
+      // Content that arrived from outside the editor (collaborator, file
+      // watcher, agent) is not unsaved local work -- flagging it dirty would
+      // schedule an autosave that writes the document straight back.
+      if (tags.has(EXTERNAL_CONTENT_UPDATE_TAG)) return;
       if (!hasCompletedInitialLoadRef.current) {
         hasCompletedInitialLoadRef.current = true;
         return;

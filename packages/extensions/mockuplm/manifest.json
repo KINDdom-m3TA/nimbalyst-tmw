@@ -55,7 +55,8 @@
         "component": "MockupProjectEditor",
         "supportsSourceMode": true,
         "collaboration": {
-          "supported": true,
+          "supported": false,
+          "unsupportedReason": "Sharing a mockup project is not available yet: each screen's HTML still lives in the author's own workspace, so teammates would see empty screens.",
           "awarenessFields": ["selectedMockupId", "selectedConnectionId"]
         }
       }

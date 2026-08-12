@@ -34,7 +34,6 @@
 
 import * as Y from 'yjs';
 import type * as awarenessProtocol from 'y-protocols/awareness';
-import { COLLAB_INIT_ORIGIN } from '@nimbalyst/extension-sdk';
 import { getYCsv } from './seed';
 import { extractRemotePresences, type RemotePresence } from './presence';
 
@@ -85,11 +84,8 @@ export class CsvBinding {
     ): void => {
       if (this.destroyed) return;
       // Ignore echoes of our own writes; the editor already has the
-      // up-to-date grid content. Also ignore the SDK's bootstrap
-      // transaction (the editor's applyContent already ran on the seed
-      // input, before this binding was constructed).
+      // up-to-date grid content.
       if (txn.origin === this.localTxnOrigin) return;
-      if (txn.origin === COLLAB_INIT_ORIGIN) return;
       const content = this.yText.toString();
       if (content === this.lastSyncedContent) return;
       this.lastSyncedContent = content;
@@ -147,7 +143,14 @@ export class CsvBinding {
       console.error('[CsvBinding] getCurrentCsv failed:', err);
       return;
     }
-    if (this.destroyed) return;
+    // Once serialization has started, teardown must not cancel the write that
+    // exists specifically to preserve edits made after the last polling tick.
+    // destroy() still prevents any new sync from starting and removes every
+    // observer immediately; this already-started write completes in the
+    // background so closing a tab does not wait on a slow grid serialization.
+    // The provider owns the Y.Doc, though, and may destroy it while the
+    // serialization is pending. In that case there is nowhere left to flush.
+    if (this.yDoc.isDestroyed) return;
     if (current === this.lastSyncedContent) return;
 
     // Wipe guard (NIM-1529): an empty serialization against a non-empty
@@ -182,10 +185,20 @@ export class CsvBinding {
     const removeLen = prev.length - prefix - suffix;
     const insertText = current.slice(prefix, current.length - suffix);
 
-    this.yDoc.transact(() => {
-      if (removeLen > 0) this.yText.delete(prefix, removeLen);
-      if (insertText.length > 0) this.yText.insert(prefix, insertText);
-    }, this.localTxnOrigin);
+    try {
+      this.yDoc.transact(() => {
+        if (removeLen > 0) this.yText.delete(prefix, removeLen);
+        if (insertText.length > 0) this.yText.insert(prefix, insertText);
+      }, this.localTxnOrigin);
+    } catch (err) {
+      // Provider teardown can win the race between the lifecycle check and
+      // the transaction. That late flush is no longer actionable; other
+      // failures stay visible without escaping as unhandled rejections.
+      if (!this.yDoc.isDestroyed) {
+        console.error('[CsvBinding] Failed to sync CSV to Y.Text:', err);
+      }
+      return;
+    }
 
     this.lastSyncedContent = current;
   }

@@ -19,7 +19,7 @@ import {
   type TeamSyncConfig,
 } from '@nimbalyst/runtime/sync';
 import { asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
-import { createProxiedWebSocket } from '../utils/proxiedWebSocket';
+import { appendCollabUrlQuery, createProxiedWebSocket } from '../utils/proxiedWebSocket';
 import { teamMemberDisplayName } from '../utils/teamMemberDisplayName';
 
 export interface ElectronCollabDocumentsDataSourceEvents {
@@ -137,7 +137,13 @@ export class ElectronCollabDocumentsDataSource implements CollabDocsDataSource {
       // desktop collab socket. A browser WebSocket sends an Origin header the
       // sync server rejects for non-allowlisted origins (the dev renderer's
       // http://localhost:5273), which surfaces as an opaque 1006 close.
-      ...(hasWebSocketProxy() ? { createWebSocket: createProxiedWebSocket } : {}),
+      ...(hasWebSocketProxy()
+        ? {
+            createWebSocket: (url: string) => createProxiedWebSocket(
+              appendCollabUrlQuery(url, scope.indexConfig.urlExtraQuery),
+            ),
+          }
+        : {}),
       ...providerEvents,
     };
     this.provider = (options.createProvider ?? ((providerConfig) => (

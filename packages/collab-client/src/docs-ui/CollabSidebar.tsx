@@ -29,7 +29,11 @@ import { useFloatingMenu, FloatingPortal, virtualElement } from './primitives/us
 import { DocUnreadDot } from './DocUnreadDot';
 import { bucketItemCount, trackDocumentAction } from './analytics';
 import { useCollabDocsUI, type CollabTreeFilter } from './CollabDocsUIProvider';
-import { resolveSharedDocumentTypePresentation } from './documentPresentation';
+import {
+  applySharedDocumentRenameSuffix,
+  getSharedDocumentRenameParts,
+  resolveSharedDocumentTypePresentation,
+} from './documentPresentation';
 
 // ---------------------------------------------------------------------------
 // TeamSync status indicator -- shown in the header subtitle slot
@@ -154,6 +158,9 @@ export const CollabSidebar: React.FC<CollabSidebarProps> = ({
   const [isCreateFolderOpen, setIsCreateFolderOpen] = useState(false);
   const [createTargetFolderId, setCreateTargetFolderId] = useState<string | null>(null);
   const [documentToRename, setDocumentToRename] = useState<SharedDocument | null>(null);
+  const documentRenameParts = documentToRename
+    ? getSharedDocumentRenameParts(documentToRename, documentTypeDescriptors)
+    : { baseName: '', suffix: '' };
   const [hasLoadedState, setHasLoadedState] = useState(false);
   const [loadedScopeKey, setLoadedScopeKey] = useState<string | null>(null);
   const pendingCollabFolder = useAtomValue(session.atoms.pendingFolder);
@@ -716,7 +723,8 @@ export const CollabSidebar: React.FC<CollabSidebarProps> = ({
     if (!documentToRename) return;
     if (!canMutateMetadata('rename this document')) return;
 
-    const name = getCollabNodeName(documentName.trim()) || documentName.trim();
+    const requestedName = getCollabNodeName(documentName.trim()) || documentName.trim();
+    const name = applySharedDocumentRenameSuffix(requestedName, documentRenameParts.suffix);
     if (!name) { setDocumentToRename(null); setContextMenu(null); return; }
 
     // Dual-write: rebuild the full-path title from the doc's parent folder so
@@ -743,7 +751,7 @@ export const CollabSidebar: React.FC<CollabSidebarProps> = ({
     });
     setDocumentToRename(null);
     setContextMenu(null);
-  }, [canMutateMetadata, documentToRename, existingPaths, folderPathById, host, session, showWarning]);
+  }, [canMutateMetadata, documentRenameParts.suffix, documentToRename, existingPaths, folderPathById, host, session, showWarning]);
 
   const moveDraggedDocument = useCallback(async (targetFolderId: string | null, targetFolderPath: string | null) => {
     if (!draggedDocument) return;
@@ -1626,7 +1634,8 @@ export const CollabSidebar: React.FC<CollabSidebarProps> = ({
         isOpen={documentToRename !== null}
         title="Rename Shared Document"
         placeholder="Document name"
-        defaultValue={documentToRename ? getCollabNodeName(getCollabDocumentPath(documentToRename)) : ''}
+        defaultValue={documentRenameParts.baseName}
+        suffix={documentRenameParts.suffix}
         confirmLabel="Rename"
         onConfirm={handleRenameDocument}
         onCancel={() => {

@@ -102,7 +102,6 @@ const spreadsheetDescriptor = {
     sharedCreate: true,
     history: true,
     export: true,
-    embed: false,
   },
 };
 

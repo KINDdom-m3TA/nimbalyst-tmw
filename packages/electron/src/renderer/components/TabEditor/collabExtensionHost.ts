@@ -39,6 +39,11 @@ import {
   setEditorContextItems as storeSetEditorContextItems,
 } from '../../stores/editorContextStore';
 import type { EditorContext, EditorContextItem } from '@nimbalyst/runtime';
+import {
+  createEditorAPIOwnerToken,
+  registerEditorAPI,
+  unregisterEditorAPI,
+} from '@nimbalyst/runtime';
 
 /** Origin tag for awareness updates we inject from remote broadcasts. */
 const REMOTE_AWARENESS_ORIGIN = Symbol('nimbalyst:collab-remote-awareness');
@@ -178,8 +183,9 @@ export function createCollaborationContext(args: {
 }): CollaborationContext {
   const { syncProvider, awareness, activeConfig, onRevisionAdapterChange } = args;
   let currentAdapter: RevisionSnapshotAdapter | null = null;
+  const contentFlushes = new Set<() => void | Promise<void>>();
 
-  return {
+  const context: CollaborationContext = {
     yDoc: syncProvider.getYDoc(),
     awareness,
     user: {
@@ -216,7 +222,50 @@ export function createCollaborationContext(args: {
         }
       };
     },
+    registerContentFlush: (flush: () => void | Promise<void>) => {
+      contentFlushes.add(flush);
+      return () => {
+        contentFlushes.delete(flush);
+      };
+    },
   };
+
+  contentFlushRegistry.set(context, contentFlushes);
+  return context;
+}
+
+// ---------------------------------------------------------------------------
+// Pending-content flush registry
+//
+// `registerContentFlush` is part of the public CollaborationContext, but the
+// drain is host-internal: only the host decides when a write must be complete.
+// Keyed off the context object rather than returned alongside it so the factory
+// keeps its single-value contract, the same shape as `statusFanouts` below.
+// ---------------------------------------------------------------------------
+
+const contentFlushRegistry = new WeakMap<
+  CollaborationContext,
+  Set<() => void | Promise<void>>
+>();
+
+/**
+ * Drain every binding's pending local content into the Y.Doc, then wait for the
+ * server to persist it. Resolves `false` if the server did not confirm.
+ *
+ * A binding that never registers a flush contributes nothing here, so this
+ * still closes the provider-to-server half for every collaborative document.
+ */
+export async function flushCollaborativeContent(
+  collaboration: CollaborationContext,
+): Promise<boolean> {
+  for (const flush of contentFlushRegistry.get(collaboration) ?? []) {
+    try {
+      await flush();
+    } catch (error) {
+      console.error('[collabExtensionHost] Pending content flush failed:', error);
+    }
+  }
+  return collaboration.flushWithAck();
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +377,7 @@ export function createCollabExtensionHost(
   } = args;
 
   const editorKey = makeEditorKey(filePath);
+  const editorAPIOwnerToken = createEditorAPIOwnerToken(`collab:${filePath}`);
 
   const storage: ExtensionStorage = {
     get: () => undefined,
@@ -397,7 +447,27 @@ export function createCollabExtensionHost(
       if (embedded) return;
       storeSetEditorContextItems(filePath, items);
     },
-    registerEditorAPI(): void {},
+    registerEditorAPI(api: unknown | null): void {
+      if (embedded) return;
+      if (api) {
+        // Not a no-op: `flushEditorSave` runs after every mutating extension AI
+        // tool, and for a collaborative document "saved" means the edit reached
+        // the Y.Doc and the server acked it. Returning early would let the tool
+        // report success while the write sat in the binding's debounce, where a
+        // peer update replaces it wholesale.
+        registerEditorAPI(
+          filePath,
+          api,
+          () => flushCollaborativeContent(collaboration).then(() => undefined),
+          {
+            ownerToken: editorAPIOwnerToken,
+            priority: 'visible',
+          },
+        );
+      } else {
+        unregisterEditorAPI(filePath, editorAPIOwnerToken);
+      }
+    },
     registerMenuItems(): void {},
 
     collaboration,

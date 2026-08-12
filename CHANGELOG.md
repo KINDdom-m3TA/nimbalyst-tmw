@@ -13,9 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- Mockup project files can no longer be shared to a team, since their screens do not yet sync between people.
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Shared spreadsheets, diagrams, mockups, and data models no longer drop edits when two people work in them at once.
+- Shared mockup files now have a source pane, so their content can be edited collaboratively.
+- The results column in a shared calc sheet no longer goes blank until you type again.
 - Picking a grouping or ordering in the tracker's Display Settings now works instead of closing the panel without changing anything.
 - Grouping by milestone or goal names each lane, row, and card chip after the milestone itself, instead of showing a raw id or an out-of-date name.
 - Collaborator avatars and the sync indicator no longer flicker on every character you type in a shared document.

@@ -47,6 +47,7 @@ export {
   COLLAB_INIT_ORIGIN,
   type UseCollaborativeEditorConfig,
   type UseCollaborativeEditorResult,
+  type CollaborativeBindingHandle,
 } from './useCollaborativeEditor.js';
 
 export {
@@ -55,6 +56,12 @@ export {
   TEXT_COLLAB_DEFAULT_FIELD,
   type TextCollabContentAdapterOptions,
 } from './collab/createTextCollabContentAdapter.js';
+
+export {
+  applyTextDiff,
+  replaceYText,
+  type ApplyTextEdit,
+} from './collab/textReplacement.js';
 
 // Re-export host-provided editor context and UI helpers for extensions.
 export {

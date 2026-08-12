@@ -45,7 +45,6 @@ export interface CollaborativeDocumentTypeDescriptor {
     sharedCreate: boolean;
     history: boolean;
     export: boolean;
-    embed: boolean;
     disabledReason?: string;
   };
 }
@@ -84,6 +83,8 @@ interface CatalogEntry {
   hasEditorContribution: boolean;
   hasEditorComponent: boolean;
   declaresCollabBinding: boolean;
+  /** Manifest-supplied reason shown instead of the generic disabled text. */
+  collabUnsupportedReason?: string;
   codec?: CollabCodec;
   codecConflictReason?: string;
   sourceOrder: number;
@@ -149,7 +150,6 @@ function emptyCapabilities(localCreate: boolean): CollaborativeDocumentTypeDescr
     sharedCreate: false,
     history: false,
     export: false,
-    embed: false,
   };
 }
 
@@ -376,7 +376,13 @@ export class CollaborativeDocumentTypeCatalog {
         return `The owning extension "${extensionLabel}" does not provide editor component "${descriptor.editor.componentName ?? 'unknown'}".`;
       }
       if (!entry.declaresCollabBinding) {
-        return `The owning extension "${extensionLabel}" does not declare a collaborative editor binding for "${suffix}".`;
+        // An extension that has a binding but knows sharing loses data opts out
+        // with a reason, so the user is told what is actually broken rather
+        // than that nobody has started the work.
+        return (
+          entry.collabUnsupportedReason ??
+          `The owning extension "${extensionLabel}" does not declare a collaborative editor binding for "${suffix}".`
+        );
       }
     } else if (descriptor.editor.kind === 'monaco' && !this.monacoBindingAvailable) {
       return `The built-in Monaco editor does not yet provide a collaborative binding for "${suffix}".`;
@@ -507,6 +513,7 @@ export class CollaborativeDocumentTypeCatalog {
           hasEditorContribution: true,
           hasEditorComponent: !!component,
           declaresCollabBinding: editor.collaboration?.supported === true,
+          collabUnsupportedReason: editor.collaboration?.unsupportedReason,
           codec,
           codecConflictReason,
           sourceOrder: sourceOrder++ + editorIndex / 100,
@@ -606,7 +613,6 @@ export class CollaborativeDocumentTypeCatalog {
         sharedCreate: ready && entry.descriptor.capabilities.localCreate,
         history: ready,
         export: ready,
-        embed: false,
         ...(reason ? { disabledReason: reason } : {}),
       };
     }

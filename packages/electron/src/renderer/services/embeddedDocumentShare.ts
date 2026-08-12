@@ -227,6 +227,9 @@ export async function discoverEmbeddedDocuments(
 
     if (!(await input.fileExists(absolutePath))) continue;
     const fileName = basename(absolutePath);
+    // Embed eligibility is standalone shareability — there is deliberately no separate
+    // embed capability. If a type should ever be shareable but not embeddable, that
+    // distinction goes here, not into a new descriptor field.
     const shareability = input.catalog.resolveShareability(fileName);
     if (
       shareability.state !== 'ready'

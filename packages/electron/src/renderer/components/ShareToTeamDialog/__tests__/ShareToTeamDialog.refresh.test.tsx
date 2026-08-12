@@ -46,7 +46,6 @@ const markdownDescriptor = {
     sharedCreate: true,
     history: true,
     export: true,
-    embed: false,
   },
 };
 

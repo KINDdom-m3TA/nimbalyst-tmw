@@ -8,6 +8,7 @@ The SDK is versioned independently of the Nimbalyst app. Each release declares i
 
 | SDK version | Minimum Nimbalyst app version |
 | --- | --- |
+| 0.4.0 | 0.70.0 |
 | 0.3.0 | 0.70.0 |
 | 0.2.2 | 0.58.5 |
 | 0.2.1 | 0.58.5 |
@@ -17,8 +18,12 @@ The SDK is versioned independently of the Nimbalyst app. Each release declares i
 
 ## [Unreleased]
 
+## [0.4.0]
+
 ### Added
 
+- `applyTextDiff()` and `replaceYText()` reduce a whole-string replacement to one contiguous `Y.Text` edit, so a binding no longer has to hand-write the prefix/suffix diff.
+- `@nimbalyst/extension-sdk/collab` is a React-free entry point for the collaborative-document helpers, for codecs and codec tests that have no React installed.
 - `host.onFindRequested()` routes the app's Find command (Cmd+F) to a custom editor's own find UI.
 
 ## [0.3.0]

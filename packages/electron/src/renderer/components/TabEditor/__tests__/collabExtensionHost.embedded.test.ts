@@ -20,7 +20,11 @@ vi.mock('../../../services/ErrorNotificationService', () => ({
   errorNotificationService: { showWarning: vi.fn() },
 }));
 
-import { createCollabExtensionHost } from '../collabExtensionHost';
+import {
+  createCollabExtensionHost,
+  createCollaborationContext,
+  flushCollaborativeContent,
+} from '../collabExtensionHost';
 
 describe('createCollabExtensionHost embedded mode', () => {
   it('enforces read-only embedded semantics without polluting tab state', () => {
@@ -62,5 +66,72 @@ describe('createCollabExtensionHost embedded mode', () => {
     expect(mocks.storeSet).not.toHaveBeenCalled();
     expect(mocks.setEditorContext).not.toHaveBeenCalled();
     expect(mocks.setEditorContextItems).not.toHaveBeenCalled();
+  });
+});
+
+describe('flushCollaborativeContent', () => {
+  function makeContext(flushWithAck: () => Promise<boolean>) {
+    return createCollaborationContext({
+      syncProvider: {
+        getYDoc: () => ({}),
+        getStatus: () => 'connected',
+        flushWithAck,
+        hasUndecodedContent: () => false,
+        flushLocalState: async () => {},
+      } as never,
+      awareness: {} as never,
+      activeConfig: { userId: 'user-1', userName: 'User One' } as never,
+    });
+  }
+
+  it('drains pending binding content before waiting on the server ack', async () => {
+    // The order is the whole point: a binding's debounced edit has to reach the
+    // Y.Doc before the flush that waits for the server to persist it, or the
+    // AI tool that triggered this reports success on a document that does not
+    // contain the edit yet.
+    const calls: string[] = [];
+    const context = makeContext(async () => {
+      calls.push('ack');
+      return true;
+    });
+    context.registerContentFlush?.(() => {
+      calls.push('binding');
+    });
+
+    await expect(flushCollaborativeContent(context)).resolves.toBe(true);
+    expect(calls).toEqual(['binding', 'ack']);
+  });
+
+  it('still awaits the server ack when no binding registered a flush', async () => {
+    const flushWithAck = vi.fn(async () => false);
+    await expect(flushCollaborativeContent(makeContext(flushWithAck))).resolves.toBe(false);
+    expect(flushWithAck).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let one binding failure skip the rest or the ack', async () => {
+    const calls: string[] = [];
+    const context = makeContext(async () => {
+      calls.push('ack');
+      return true;
+    });
+    context.registerContentFlush?.(() => {
+      throw new Error('binding blew up');
+    });
+    context.registerContentFlush?.(() => {
+      calls.push('second');
+    });
+
+    await expect(flushCollaborativeContent(context)).resolves.toBe(true);
+    expect(calls).toEqual(['second', 'ack']);
+  });
+
+  it('stops draining a flush once its binding unregisters', async () => {
+    const context = makeContext(async () => true);
+    const flush = vi.fn();
+    const unregister = context.registerContentFlush?.(flush);
+    unregister?.();
+
+    await flushCollaborativeContent(context);
+    expect(flush).not.toHaveBeenCalled();
   });
 });

@@ -247,6 +247,7 @@ import { getRecentItems } from './utils/store';
 import { registerTeamCustodyHandlers } from './services/TeamCustodyService';
 import { purgeLegacyKeyFiles } from './services/LegacyKeyFilePurge';
 import { registerDocumentSyncHandlers } from './ipc/DocumentSyncHandlers';
+import { registerCollabTestIdentityHandlers } from './ipc/CollabTestIdentityHandlers';
 import { getCollabOutboxDrainCoordinator } from './services/CollabOutboxDrainerService';
 import { getCollabAssetOutboxDrainCoordinator } from './services/CollabAssetOutboxDrainCoordinator';
 import { getCollabAssetStore } from './services/CollabAssetStore';
@@ -1847,6 +1848,8 @@ app.whenReady().then(async () => {
     purgeLegacyKeyFiles();
     registerCollabConversionClient();
     registerDocumentSyncHandlers();
+    // No-op outside an unpackaged Playwright run with the collab harness env.
+    registerCollabTestIdentityHandlers();
     getCollabOutboxDrainCoordinator().start();
     getCollabAssetOutboxDrainCoordinator().start();
     registerCollabBackupHandlers();

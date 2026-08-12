@@ -236,6 +236,32 @@ describe('CollaborativeDocumentTypeCatalog', () => {
     catalog.dispose();
   });
 
+  it('gives a compound-suffix owner priority over an extension claiming the generic suffix', () => {
+    // The Browser extension really does claim *.html, which would otherwise swallow
+    // every *.mockup.html file and route it to a non-collaborative editor.
+    const extensions = new MutableExtensionSource([
+      extension({
+        id: 'com.example.browser',
+        editors: [customEditor(['.html'], 'BrowserEditor')],
+        components: ['BrowserEditor'],
+      }),
+      extension({
+        id: 'com.example.mockup',
+        menus: [menu('.mockup.html', 'Mockup', 'palette')],
+        editors: [customEditor(['.mockup.html'], 'MockupEditor')],
+        components: ['MockupEditor'],
+      }),
+    ]);
+    const codecs = new MutableCodecSource([codec('mockup.html', ['.mockup.html'])]);
+    const catalog = makeCatalog(extensions, codecs);
+
+    expect(catalog.resolveShareability('screen.mockup.html')).toMatchObject({
+      state: 'ready',
+      descriptor: { documentType: 'mockup.html', editor: { extensionId: 'com.example.mockup' } },
+    });
+    catalog.dispose();
+  });
+
   it('projects the Monaco suffix/language map without treating markdown as code', () => {
     const catalog = makeCatalog(
       new MutableExtensionSource(),
@@ -292,6 +318,27 @@ describe('CollaborativeDocumentTypeCatalog', () => {
     expect(catalog.resolveShareability('x.codec')).toMatchObject({
       state: 'unsupported',
       reason: 'No collaborative codec is registered for document type "codec".',
+    });
+    catalog.dispose();
+  });
+
+  it('prefers the manifest opt-out reason over the generic missing-binding text', () => {
+    // A type with a working binding whose sharing is known to lose data opts
+    // out with its own reason, so the user is told what is broken rather than
+    // that the work was never started. `.mockupproject` is the live case.
+    const optedOut = customEditor(['.knownbroken'], 'BrokenEditor', false);
+    optedOut.collaboration = {
+      supported: false,
+      unsupportedReason: 'Screens are still workspace-local, so teammates see empty screens.',
+    };
+    const extensions = new MutableExtensionSource([
+      extension({ id: 'opted-out', editors: [optedOut], components: ['BrokenEditor'] }),
+    ]);
+    const catalog = makeCatalog(extensions, new MutableCodecSource([codec('knownbroken', ['.knownbroken'])]));
+
+    expect(catalog.resolveShareability('x.knownbroken')).toMatchObject({
+      state: 'unsupported',
+      reason: 'Screens are still workspace-local, so teammates see empty screens.',
     });
     catalog.dispose();
   });
