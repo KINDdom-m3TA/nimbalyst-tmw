@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - Shared spreadsheets, diagrams, mockups, and data models no longer drop edits when two people work in them at once.
+- Opening a shared document whose editor you do not have now names the extension you need and offers to install it, instead of showing only the document type.
 - Shared mockup files now have a source pane, so their content can be edited collaboratively.
 - The results column in a shared calc sheet no longer goes blank until you type again.
 - Picking a grouping or ordering in the tracker's Display Settings now works instead of closing the panel without changing anything.

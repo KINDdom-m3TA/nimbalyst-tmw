@@ -86,6 +86,11 @@ import { closeActiveTabRequestAtom } from '../../store/atoms/appCommands';
 import { dialogRef } from '../../contexts/DialogContext';
 import { customEditorRegistry } from '../CustomEditors';
 import type { CustomEditorRegistration } from '../CustomEditors/types';
+import {
+  resolveCollabEditorAvailability,
+  type CollabEditorAvailability,
+} from './collabEditorAvailability';
+import { MissingCollabEditorNotice } from './MissingCollabEditorNotice';
 import { useCollabLocalOrigin } from '../../hooks/useCollabLocalOrigin';
 import { useLexicalSelectionContext } from '../../hooks/useLexicalSelectionContext';
 import { teamMemberDisplayName } from '../../utils/teamMemberDisplayName';
@@ -1154,21 +1159,23 @@ export const CollaborativeTabEditor: React.FC<CollaborativeTabEditorProps> = ({
       }
     });
   }, [filePath]);
-  const extensionRegistration: CustomEditorRegistration | null = useMemo(() => {
+  // Why an extension editor is (un)available. The unavailable cases are kept
+  // distinct so the recipient is told which extension the document needs --
+  // see collabEditorAvailability.ts.
+  const editorAvailability: CollabEditorAvailability | null = useMemo(() => {
     if (documentType === 'markdown' || documentType === 'code') return null;
-    // Look up by the share filename, which carries the extension (e.g.
-    // `MyDrawing.excalidraw`). Falls back to `<title>.<documentType>` so
-    // recipients of a doc shared with a bare title still get routed to
-    // the right editor.
-    const lookupName = activeConfig.fileExtension
-      ? `document${activeConfig.fileExtension}`
-      : fileName.includes('.') ? fileName : `${activeConfig.title}.${documentType}`;
-    const match = customEditorRegistry.findRegistrationForFile(lookupName);
-    if (!match) return null;
-    if (activeConfig.editorId && match.extensionId !== activeConfig.editorId) return null;
-    if (!match.collaboration?.supported) return null;
-    return match;
+    return resolveCollabEditorAvailability({
+      documentType,
+      fileName,
+      fileExtension: activeConfig.fileExtension,
+      title: activeConfig.title,
+      editorId: activeConfig.editorId,
+      findRegistration: (name) => customEditorRegistry.findRegistrationForFile(name),
+    });
   }, [documentType, fileName, activeConfig.editorId, activeConfig.fileExtension, activeConfig.title]);
+
+  const extensionRegistration: CustomEditorRegistration | null =
+    editorAvailability?.kind === 'ready' ? editorAvailability.registration : null;
   // Manual resync ("Re-upload to Shared Doc"). For an OPEN custom-editor collab
   // doc we MUST write through the live renderer connection: the default IPC
   // path opens a throwaway main-process provider that connects -> writes ->
@@ -1525,6 +1532,11 @@ export const CollaborativeTabEditor: React.FC<CollaborativeTabEditorProps> = ({
               }
             }}
             onDirtyChange={onDirtyChange}
+          />
+        ) : editorAvailability && editorAvailability.kind !== 'ready' ? (
+          <MissingCollabEditorNotice
+            availability={editorAvailability}
+            documentType={documentType}
           />
         ) : (
           <div className="flex items-center justify-center h-full text-nim-muted">
