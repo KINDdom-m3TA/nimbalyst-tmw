@@ -48,6 +48,7 @@
     "android:screenshots": "bash packages/android/scripts/take-screenshots.sh",
     "android:walkthrough": "bash packages/android/scripts/record-walkthrough.sh",
     "test:extensions": "bash scripts/run-extension-tests.sh",
+    "marketplace:status": "node packages/marketplace/scripts/marketplace-status.mjs",
     "electron:resign": "bash scripts/resign-dev-electron.sh",
     "dev:url-handler": "bash scripts/install-dev-url-handler.sh",
     "postinstall": "patch-package",
