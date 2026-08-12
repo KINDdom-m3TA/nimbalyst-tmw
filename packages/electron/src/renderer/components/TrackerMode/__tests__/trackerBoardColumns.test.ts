@@ -102,6 +102,23 @@ describe('board columns', () => {
     expect(columns[0].ref?.issueKey).toBe('MST-mst_alpha');
   });
 
+  it('names a lane from the milestone record rather than the stored snapshot', () => {
+    // A relationship written from the milestone's side stores no title at all,
+    // and a title stored before a rename is stale -- either way the lane read as
+    // a raw id or an old name until the record itself was consulted.
+    const untitled = bug('5', {
+      collection: [{ itemId: 'mst_alpha', trackerType: 'milestone', direction: 'out' }],
+    });
+    const columns = buildTrackerBoardColumns(
+      'milestone',
+      'bug',
+      [untitled, ...items],
+      itemId => (itemId === 'mst_alpha' ? 'Alpha Launch' : undefined),
+    );
+
+    expect(columns.map(c => c.label)).toEqual(['Alpha Launch', 'Beta Hardening', 'No milestone']);
+  });
+
   it('keeps the triage bucket even when every item is placed', () => {
     const placed = items.filter(item => item.fields.collection);
     const columns = buildTrackerBoardColumns('milestone', 'bug', placed);

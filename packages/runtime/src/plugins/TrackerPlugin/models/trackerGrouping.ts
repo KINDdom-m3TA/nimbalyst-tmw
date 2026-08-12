@@ -150,10 +150,36 @@ export function resolveGroupingRelationshipValues(
     .filter(value => !value.trackerType || value.trackerType === axis);
 }
 
-function relationshipGroups(item: TrackerRecord, axis: TrackerRelationshipGroupingAxis): ResolvedTrackerGroup[] {
+/**
+ * Reads the current title of a referenced item, when the caller can see it.
+ *
+ * The `title` stored on a relationship is a snapshot taken when the link was
+ * written: it is absent when the link was written from the other side, and
+ * stale after the target is renamed. Surfaces with the tracker's records in
+ * hand pass this so a milestone lane reads "Onboarding" rather than
+ * `milestone_1786137761427_n9d75j`.
+ */
+export type TrackerRelationshipLabelResolver = (itemId: string) => string | undefined;
+
+/** The best available name for a relationship value: live title, then snapshot. */
+export function resolveRelationshipLabel(
+  value: Pick<TrackerRelationshipValue, 'itemId' | 'title' | 'issueKey'>,
+  resolveLabel?: TrackerRelationshipLabelResolver,
+): string {
+  return resolveLabel?.(value.itemId)?.trim()
+    || value.title
+    || value.issueKey
+    || value.itemId;
+}
+
+function relationshipGroups(
+  item: TrackerRecord,
+  axis: TrackerRelationshipGroupingAxis,
+  resolveLabel?: TrackerRelationshipLabelResolver,
+): ResolvedTrackerGroup[] {
   const values = resolveGroupingRelationshipValues(item, axis);
   const groups = values.map(value => {
-    const label = value.title || value.issueKey || value.itemId;
+    const label = resolveRelationshipLabel(value, resolveLabel);
     return {
       key: groupKey(axis, value.itemId),
       value: value.itemId,
@@ -172,6 +198,7 @@ function dedupeGroups(groups: ResolvedTrackerGroup[]): ResolvedTrackerGroup[] {
 export function resolveTrackerGroups(
   item: TrackerRecord,
   axis: TrackerGroupingAxis,
+  resolveLabel?: TrackerRelationshipLabelResolver,
 ): ResolvedTrackerGroup[] {
   switch (axis) {
     case 'status':
@@ -194,7 +221,7 @@ export function resolveTrackerGroups(
     }
     case 'milestone':
     case 'goal':
-      return relationshipGroups(item, axis);
+      return relationshipGroups(item, axis, resolveLabel);
   }
 }
 
@@ -202,11 +229,12 @@ export function resolveTrackerGroups(
 export function groupTrackerRecordsByAxis(
   items: TrackerRecord[],
   groupBy: TrackerGroupBy,
+  resolveLabel?: TrackerRelationshipLabelResolver,
 ): TrackerRecordGroup[] {
   if (groupBy === 'none') return [{ key: 'none:all', label: 'All', items }];
   const buckets = new Map<string, TrackerRecordGroup>();
   for (const item of items) {
-    for (const resolved of resolveTrackerGroups(item, groupBy)) {
+    for (const resolved of resolveTrackerGroups(item, groupBy, resolveLabel)) {
       const bucket = buckets.get(resolved.key);
       if (bucket) bucket.items.push(item);
       else buckets.set(resolved.key, { key: resolved.key, label: resolved.label, items: [item] });

@@ -10,7 +10,11 @@ import type {
   TrackerItemType,
 } from '../../../core/DocumentService';
 import type { TrackerRecord } from '../../../core/TrackerRecord';
-import { trackerItemsByTypeAtom, trackerDataLoadedAtom } from '../trackerDataAtoms';
+import {
+  trackerItemsByTypeAtom,
+  trackerDataLoadedAtom,
+  trackerRelationshipLabelAtom,
+} from '../trackerDataAtoms';
 import { TrackerRowContextMenu } from './TrackerRowContextMenu';
 import {
   EXTENSION_OWNED_KEYS,
@@ -781,6 +785,7 @@ export function TrackerTable({
   // Read tracker items from cross-platform atoms (populated by host adapter)
   const atomItems = useAtomValue(trackerItemsByTypeAtom(activeTypeFilter));
   const dataLoaded = useAtomValue(trackerDataLoadedAtom);
+  const relationshipLabel = useAtomValue(trackerRelationshipLabelAtom);
 
   // Use override items if provided (e.g., for archived view), otherwise atom items
   const sourceItems = overrideItems ?? atomItems;
@@ -927,8 +932,8 @@ export function TrackerTable({
   // console.log('[TrackerTable] Render - items:', items.length, 'filtered:', filteredItems.length, 'typeFilter:', typeFilter);
   const sortedItems = preserveItemOrder ? filteredItems : sortItems(filteredItems, currentSortBy, currentSortDirection);
   const groupedRecords = useMemo(
-    () => groupTrackerRecords(sortedItems, groupBy),
-    [groupBy, sortedItems],
+    () => groupTrackerRecords(sortedItems, groupBy, relationshipLabel),
+    [groupBy, sortedItems, relationshipLabel],
   );
   const displayItems = useMemo(
     () => groupedRecords.flatMap(group => group.items),

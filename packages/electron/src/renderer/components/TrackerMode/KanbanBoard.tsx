@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useCallback, useRef, useState } from 'react';
+import { useAtomValue } from 'jotai';
 import { useFloating, offset, flip, shift, FloatingPortal } from '@floating-ui/react';
 import { windowControlsClearance } from '@nimbalyst/runtime/ui/floating/windowControlsClearance';
 import { MaterialSymbol } from '@nimbalyst/runtime';
@@ -6,6 +7,7 @@ import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
 import { type TrackerItemType } from '@nimbalyst/runtime/plugins/TrackerPlugin';
 import { MANUAL_TRACKER_ORDERING, type TrackerGroupBy, type TrackerOrdering } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
 import { buildKanbanStatusColumns, getRecordTitle, resolveRoleFieldName } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerRecordAccessors';
+import { trackerRelationshipLabelAtom } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerDataAtoms';
 import {
   buildTrackerBoardColumns,
   groupItemsIntoBoardColumns,
@@ -192,10 +194,11 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
     await saveTrackerFieldsBatch(entries);
   }, [selectedIds, closeContextMenu]);
 
+  const relationshipLabel = useAtomValue(trackerRelationshipLabelAtom);
   const boardAxis = resolveBoardAxis(groupBy);
   const columns = useMemo(
-    () => buildTrackerBoardColumns(groupBy, filterType, allItems),
-    [groupBy, filterType, allItems],
+    () => buildTrackerBoardColumns(groupBy, filterType, allItems, relationshipLabel),
+    [groupBy, filterType, allItems, relationshipLabel],
   );
   const columnsByKey = useMemo(
     () => new Map(columns.map(col => [col.key, col])),

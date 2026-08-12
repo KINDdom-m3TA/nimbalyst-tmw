@@ -31,6 +31,7 @@ import {
   parseDate,
   type TrackerGroupBy,
   type TrackerOrdering,
+  type TrackerRelationshipLabelResolver,
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
 import { sortBoardColumnItems } from './trackerBoardColumns';
 
@@ -304,6 +305,8 @@ export function buildTrackerTimeline(
   items: TrackerRecord[],
   groupBy: TrackerGroupBy,
   ordering: TrackerOrdering,
+  /** Names relationship rows from the referenced record; see the resolver's docs. */
+  resolveLabel?: TrackerRelationshipLabelResolver,
 ): TrackerTimelineModel {
   const datesById = new Map<string, TrackerTimelineDates | null>();
   for (const item of items) {
@@ -329,7 +332,7 @@ export function buildTrackerTimeline(
     buckets = buildTimelineBuckets(range, granularity);
   }
 
-  const rows = groupTrackerRecordsByAxis(items, groupBy).map(group => {
+  const rows = groupTrackerRecordsByAxis(items, groupBy, resolveLabel).map(group => {
     const ordered = sortBoardColumnItems(group.items, ordering);
     const bars: TrackerTimelineBar[] = [];
     const undated: TrackerRecord[] = [];

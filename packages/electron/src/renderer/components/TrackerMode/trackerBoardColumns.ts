@@ -36,6 +36,7 @@ import {
   type TrackerGroupingAxis,
   type TrackerOrdering,
   type TrackerRelationshipGroupingAxis,
+  type TrackerRelationshipLabelResolver,
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
 import {
   buildKanbanStatusColumns,
@@ -82,6 +83,8 @@ export function buildTrackerBoardColumns(
   groupBy: TrackerGroupBy,
   filterType: string,
   items: TrackerRecord[],
+  /** Names relationship lanes from the referenced record; see the resolver's docs. */
+  resolveLabel?: TrackerRelationshipLabelResolver,
 ): TrackerBoardColumn[] {
   const axis = resolveBoardAxis(groupBy);
   if (axis === 'status') {
@@ -98,7 +101,7 @@ export function buildTrackerBoardColumns(
     const refs = isRelationshipAxis(axis)
       ? new Map(resolveGroupingRelationshipValues(item, axis).map(ref => [ref.itemId, ref]))
       : null;
-    for (const group of resolveTrackerGroups(item, axis)) {
+    for (const group of resolveTrackerGroups(item, axis, resolveLabel)) {
       if (group.empty || byKey.has(group.key)) continue;
       byKey.set(group.key, {
         key: group.key,

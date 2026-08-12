@@ -14,6 +14,7 @@
  */
 
 import React, { useCallback, useState } from 'react';
+import { useAtomValue } from 'jotai';
 import {
   FloatingPortal,
   autoUpdate,
@@ -29,7 +30,12 @@ import {
 import { windowControlsClearance } from '@nimbalyst/runtime/ui/floating/windowControlsClearance';
 import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
-import type { TrackerRelationshipValue } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
+import {
+  resolveRelationshipLabel,
+  type TrackerRelationshipLabelResolver,
+  type TrackerRelationshipValue,
+} from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
+import { trackerRelationshipLabelAtom } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerDataAtoms';
 import { TrackerMilestonePickerPanel } from './TrackerMilestonePicker';
 import {
   cardMilestoneValues,
@@ -45,9 +51,12 @@ interface TrackerCardMilestoneChipProps {
 }
 
 /** How the chip reads: the milestone, "+N" when several, or the empty invitation. */
-function chipLabel(values: TrackerRelationshipValue[]): string {
+function chipLabel(
+  values: TrackerRelationshipValue[],
+  resolveLabel: TrackerRelationshipLabelResolver,
+): string {
   if (values.length === 0) return 'No milestone';
-  const first = values[0].title || values[0].issueKey || values[0].itemId;
+  const first = resolveRelationshipLabel(values[0], resolveLabel);
   return values.length === 1 ? first : `${first} +${values.length - 1}`;
 }
 
@@ -56,9 +65,10 @@ export const TrackerCardMilestoneChip: React.FC<TrackerCardMilestoneChipProps> =
   onOpenItem,
 }) => {
   const [open, setOpen] = useState(false);
+  const relationshipLabel = useAtomValue(trackerRelationshipLabelAtom);
   const values = cardMilestoneValues(item);
   const empty = values.length === 0;
-  const label = chipLabel(values);
+  const label = chipLabel(values, relationshipLabel);
 
   const floating = useFloating({
     open,

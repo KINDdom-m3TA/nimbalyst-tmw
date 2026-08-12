@@ -49,6 +49,7 @@ import {
 import {
   trackerItemsByTypeAtom,
   trackerDataLoadedAtom,
+  trackerRelationshipLabelAtom,
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerDataAtoms';
 import {
   getRecordTitle,
@@ -162,6 +163,7 @@ export function TrackerGridView({
 
   const atomItems = useAtomValue(trackerItemsByTypeAtom(activeTypeFilter));
   const dataLoaded = useAtomValue(trackerDataLoadedAtom);
+  const relationshipLabel = useAtomValue(trackerRelationshipLabelAtom);
   const sourceItems = overrideItems ?? atomItems;
 
   // Collections live outside the active type filter (you add bugs to a
@@ -414,9 +416,10 @@ export function TrackerGridView({
       [ROW_GROUP_LABEL]: getTrackerGroupLabel(
         sortedItems[index],
         groupBy,
+        relationshipLabel,
       ),
     })),
-    [groupBy, sortedItems, visibleColumnDefs],
+    [groupBy, sortedItems, visibleColumnDefs, relationshipLabel],
   );
   const gridGrouping = useMemo(
     () => groupBy !== 'none'

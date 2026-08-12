@@ -19,6 +19,7 @@ import {
   normalizeTrackerGroupBy,
   resolveTrackerGroups,
   type TrackerGroupBy,
+  type TrackerRelationshipLabelResolver,
 } from '../models/trackerGrouping';
 import { getCellValue, getEffectiveUpdatedDate } from './trackerColumns';
 
@@ -166,10 +167,14 @@ export interface TrackerRecordGroup {
 }
 
 /** Resolve the user-facing bucket name for one record. */
-export function getTrackerGroupLabel(record: TrackerRecord, groupBy: string | null): string {
+export function getTrackerGroupLabel(
+  record: TrackerRecord,
+  groupBy: string | null,
+  resolveLabel?: TrackerRelationshipLabelResolver,
+): string {
   const normalized = normalizeTrackerGroupBy(groupBy);
   if (normalized === 'none') return '';
-  return resolveTrackerGroups(record, normalized).map(group => group.label).join(', ');
+  return resolveTrackerGroups(record, normalized, resolveLabel).map(group => group.label).join(', ');
 }
 
 /**
@@ -179,8 +184,9 @@ export function getTrackerGroupLabel(record: TrackerRecord, groupBy: string | nu
 export function groupTrackerRecords(
   records: TrackerRecord[],
   groupBy: TrackerGroupBy | 'owner' | null,
+  resolveLabel?: TrackerRelationshipLabelResolver,
 ): TrackerRecordGroup[] {
   const normalized = normalizeTrackerGroupBy(groupBy);
   if (normalized === 'none') return [{ key: '', label: null, items: records }];
-  return groupTrackerRecordsByAxis(records, normalized);
+  return groupTrackerRecordsByAxis(records, normalized, resolveLabel);
 }

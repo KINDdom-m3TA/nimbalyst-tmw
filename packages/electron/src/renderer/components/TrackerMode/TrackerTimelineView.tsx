@@ -12,11 +12,13 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { useAtomValue } from 'jotai';
 import { FloatingPortal, flip, offset, shift, useFloating, type VirtualElement } from '@floating-ui/react';
 import { MaterialSymbol } from '@nimbalyst/runtime';
 import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
 import { MANUAL_TRACKER_ORDERING, type TrackerGroupBy, type TrackerOrdering } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
 import { getRecordStatus, getRecordTitle } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerRecordAccessors';
+import { trackerRelationshipLabelAtom } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerDataAtoms';
 import {
   buildTrackerTimeline,
   resolveTodayFraction,
@@ -83,9 +85,10 @@ export const TrackerTimelineView: React.FC<TrackerTimelineViewProps> = ({
   onOpenDocument,
   selectedItemId,
 }) => {
+  const relationshipLabel = useAtomValue(trackerRelationshipLabelAtom);
   const timeline = useMemo(
-    () => buildTrackerTimeline(items, groupBy, ordering),
-    [items, groupBy, ordering],
+    () => buildTrackerTimeline(items, groupBy, ordering, relationshipLabel),
+    [items, groupBy, ordering, relationshipLabel],
   );
 
   const [hovered, setHovered] = useState<HoveredBar | null>(null);
