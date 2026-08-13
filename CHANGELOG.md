@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 <!-- New features go here -->
 - Shared spreadsheets now open and edit in the web console, with live presence between the desktop app and the browser.
+- Entities and relationships a teammate has selected in a shared data model now show their name and color.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
