@@ -206,6 +206,7 @@ export * from './editors';
 // Sync types (for capacitor)
 export type { SessionIndexEntry } from './sync/types';
 export * from './sync/ConversationSync';
+export * from './sync/FeedbackRequestSync';
 // Read receipts (unread indicators for trackers/docs)
 export {
   isEntityUnread,

@@ -33,6 +33,17 @@ export type {
   ConversationSyncEvent,
   ConversationTarget,
 } from './sync/ConversationSync';
+export {
+  FeedbackRequestSync,
+  FeedbackRequestSyncError,
+} from './sync/FeedbackRequestSync';
+export type {
+  FeedbackRequestNudgeReceipt,
+  FeedbackRequestSyncConfig,
+  FeedbackRequestSyncEvent,
+  FeedbackRequestSyncState,
+  FeedbackRequestTarget,
+} from './sync/FeedbackRequestSync';
 export type {
   AgentMessage,
   ChatAttachment,

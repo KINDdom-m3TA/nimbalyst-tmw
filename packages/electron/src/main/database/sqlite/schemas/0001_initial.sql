@@ -371,6 +371,23 @@ CREATE INDEX IF NOT EXISTS idx_session_wakeups_waiting
   ON ai_session_wakeups(workspace_id) WHERE status = 'waiting_for_workspace';
 
 -- ----------------------------------------------------------------------------
+-- feedback_request_cache
+-- ----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS feedback_request_cache (
+  workspace_path TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  viewer_user_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  data TEXT NOT NULL,                                  -- JSON
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  PRIMARY KEY (workspace_path, org_id, viewer_user_id, request_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_request_cache_org
+  ON feedback_request_cache(workspace_path, org_id, viewer_user_id, updated_at);
+
+-- ----------------------------------------------------------------------------
 -- super_loops + super_iterations
 -- ----------------------------------------------------------------------------
 

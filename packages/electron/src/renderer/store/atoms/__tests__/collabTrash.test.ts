@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, describe, expect, it } from 'vitest';
 import { store } from '@nimbalyst/runtime/store';
 import {
@@ -16,6 +17,7 @@ import {
   sharedDocumentsAtom as packageSharedDocumentsAtom,
   trashedSharedDocumentsAtom as packageTrashedSharedDocumentsAtom,
 } from '@nimbalyst/collab-client/docs';
+import { getSharedDocumentVisibility } from '../../../services/mcpCollabReadHandlers';
 
 const WORKSPACE = '/workspace/collab-trash';
 const SCOPE: CollabScope = {
@@ -56,6 +58,19 @@ describe('shared document Trash projections', () => {
     expect(store.get(sharedDocumentsAtom).map(row => row.documentId)).toEqual(['active']);
     expect(store.get(trashedSharedDocumentsAtom).map(row => row.documentId)).toEqual(['trashed']);
     expect(store.get(allSharedDocumentsAtom)).toHaveLength(2);
+  });
+
+  it('reports a document genuinely absent from the shared index as not shared', () => {
+    store.set(activeCollabScopeAtom, SCOPE);
+    store.set(allSharedDocumentsAtom, [doc('shared-doc')]);
+
+    expect(getSharedDocumentVisibility('local-only-doc')).toEqual({
+      kind: 'document',
+      sourceId: 'local-only-doc',
+      teamVisible: false,
+      orgId: null,
+      reason: 'notShared',
+    });
   });
 
   it('moves, restores, and permanently removes rows without a connected provider', () => {

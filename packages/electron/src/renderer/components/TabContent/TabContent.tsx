@@ -28,6 +28,8 @@ import { TrackerResourceEditor } from '../AgentMode/TrackerResourceEditor';
 import { SharedDocsListView } from '@nimbalyst/collab-client/docs-ui';
 import { ElectronCollabDocsUIRoot } from '../CollabMode/ElectronCollabDocsUIProvider';
 import { isSharedHomeTab } from '../CollabMode/sharedHomeTab';
+import { FeedbackRequestResultsTab } from '../FeedbackRequest/FeedbackRequestResultsTab';
+import { isFeedbackRequestTab } from '../FeedbackRequest/feedbackRequestTab';
 import { isCollabUri, parseCollabUri } from '@nimbalyst/collab-protocol';
 import {
   getCollabConfig,
@@ -167,6 +169,11 @@ const TabContentComponent: React.FC<TabContentProps> = ({
     // short-circuit before the generic virtual:// loader (which would call
     // documentService.loadVirtual and fail).
     if (isSharedHomeTab(filePath)) {
+      return '';
+    }
+
+    // Feedback request results are synced state, not content on disk.
+    if (isFeedbackRequestTab(filePath)) {
       return '';
     }
 
@@ -342,6 +349,34 @@ const TabContentComponent: React.FC<TabContentProps> = ({
                 </ElectronCollabDocsUIRoot>
               )
               : null}
+          </TabEditorErrorBoundary>
+        </JotaiProvider>
+      );
+      tabInstancesRef.current.set(tab.id, { root, element, tabData: tab, content });
+      return;
+    }
+
+    // Feedback request results: the author's view of a synced request. No
+    // save/dirty/getContent wiring -- the request lives in its own room and
+    // this tab only reads it.
+    if (isFeedbackRequestTab(tab.filePath)) {
+      root.render(
+        <JotaiProvider store={store}>
+          <TabEditorErrorBoundary
+            filePath={tab.filePath}
+            fileName={tab.fileName}
+            onRetry={() => {
+              removeTabEditor(tab.id);
+              createTabEditor(tab, content);
+            }}
+            onClose={() => {
+              propsRef.current.onTabClose?.(tab.id);
+            }}
+          >
+            <FeedbackRequestResultsTab
+              tabUri={tab.filePath}
+              workspacePath={propsRef.current.workspaceId}
+            />
           </TabEditorErrorBoundary>
         </JotaiProvider>
       );

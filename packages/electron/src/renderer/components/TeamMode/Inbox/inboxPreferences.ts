@@ -9,6 +9,7 @@
 
 import type { InboxFilterId, InboxScope, InboxSourceKind } from './inboxTypes';
 import { EMPTY_INBOX_SCOPE } from './inboxTypes';
+import { SOURCE_KIND_LABELS } from './inboxViewModel';
 
 export const INBOX_PREFERENCES_SETTING_KEY = 'inboxViewPreferences';
 
@@ -25,13 +26,10 @@ export const DEFAULT_INBOX_PREFERENCES: InboxPreferences = {
 };
 
 const FILTERS: InboxFilterId[] = ['all', 'mentions', 'assigned', 'follows'];
-const SOURCE_KINDS: InboxSourceKind[] = [
-  'roomMessage',
-  'documentDiscussion',
-  'dmMessage',
-  'trackerComment',
-  'documentInlineComment',
-];
+// Derived from the label map rather than restated, so a source kind added to
+// the protocol cannot be silently dropped from a restored scope: the map is a
+// `Record<InboxSourceKind, string>` and stops compiling until it is covered.
+const SOURCE_KINDS = Object.keys(SOURCE_KIND_LABELS) as InboxSourceKind[];
 
 function stringArrayOrNull(value: unknown, allowed?: readonly string[]): string[] | null {
   if (!Array.isArray(value)) return null;

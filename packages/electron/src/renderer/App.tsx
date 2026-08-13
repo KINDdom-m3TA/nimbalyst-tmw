@@ -121,6 +121,7 @@ import { initMenuCommandListeners } from './store/listeners/menuCommandListeners
 import { initNetworkAvailabilityListeners } from './store/listeners/networkAvailabilityListeners';
 import { initTeamInboxListeners } from './store/listeners/teamInboxListeners';
 import { initConversationListeners } from './store/listeners/conversationListeners';
+import { initFeedbackRequestListeners } from './store/listeners/feedbackRequestListeners';
 import { initConversationDirectoryListeners } from './store/listeners/conversationDirectoryListeners';
 import { initOrgSettingsListeners } from './store/listeners/orgSettingsListeners';
 import { initProjectOrgListeners } from './store/listeners/projectOrgListeners';
@@ -390,6 +391,7 @@ export default function App() {
     const cleanupNetworkAvailability = initNetworkAvailabilityListeners();
     const cleanupTeamInbox = initTeamInboxListeners();
     const cleanupConversations = initConversationListeners();
+    const cleanupFeedbackRequests = initFeedbackRequestListeners();
     const cleanupConversationDirectory = initConversationDirectoryListeners();
     const cleanupOrgSettings = initOrgSettingsListeners();
     const cleanupProjectOrg = initProjectOrgListeners();
@@ -432,6 +434,7 @@ export default function App() {
       cleanupNetworkAvailability?.();
       cleanupTeamInbox?.();
       cleanupConversations?.();
+      cleanupFeedbackRequests?.();
       cleanupConversationDirectory?.();
       cleanupOrgSettings?.();
       cleanupProjectOrg?.();
@@ -2501,6 +2504,19 @@ export default function App() {
         if (target.tagName === 'A') {
           const anchor = target as HTMLAnchorElement;
           const href = anchor.getAttribute('href');
+
+          if (href?.startsWith('nimbalyst://conversation/')) {
+            event.preventDefault();
+            event.stopPropagation();
+            void window.electronAPI.invoke('deep-link:open-inbox-source', href)
+              .then((opened: boolean) => {
+                if (!opened) logger.ui.warn('Conversation link could not be opened:', href);
+              })
+              .catch((error: unknown) => {
+                logger.ui.error('Failed to open conversation link:', error);
+              });
+            return;
+          }
 
           // Check if it's an external link (http:// or https://)
           if (href && (href.startsWith('http://') || href.startsWith('https://'))) {

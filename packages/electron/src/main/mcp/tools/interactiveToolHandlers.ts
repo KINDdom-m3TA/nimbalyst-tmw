@@ -3,6 +3,7 @@ import {
   AgentMessagesRepository,
   AISessionsRepository,
 } from "@nimbalyst/runtime";
+import { STRUCTURED_INPUT_FIELD_TYPES } from "@nimbalyst/collab-protocol";
 import { getSessionStateManager } from "@nimbalyst/runtime/ai/server/SessionStateManager";
 import { notificationService } from "../../services/NotificationService";
 import { findWindowIdForWorkspacePath } from "../mcpWorkspaceResolver";
@@ -1277,7 +1278,7 @@ const REQUEST_USER_INPUT_FIELD_SCHEMA = {
   properties: {
     type: {
       type: "string",
-      enum: ["multiSelect", "singleSelect", "reorder", "editText", "confirm"],
+      enum: [...STRUCTURED_INPUT_FIELD_TYPES],
       description: "Field type discriminator.",
     },
     id: {

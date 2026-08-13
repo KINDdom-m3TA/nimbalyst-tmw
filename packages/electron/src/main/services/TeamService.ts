@@ -533,6 +533,8 @@ const MIGRATION_FINALIZATION_API_TIMEOUT_MS = 120_000;
 
 interface FetchTeamApiOptions {
   timeoutMs?: number;
+  /** Already-resolved TEAM authorization for an org-scoped request. */
+  teamJwt?: TeamJwt;
 }
 
 /**
@@ -596,7 +598,7 @@ async function fetchTeamApi(
   // Use org-scoped JWT if orgId provided, otherwise personal JWT
   // When accountOrgId is set, use that specific account's JWT
   let jwt = orgId
-    ? await getOrgScopedJwt(orgId, accountOrgId)
+    ? options?.teamJwt ?? await getOrgScopedJwt(orgId, accountOrgId)
     : accountOrgId
       ? getPersonalSessionJwtForAccount(accountOrgId)
       : getPersonalSessionJwt();
@@ -1908,7 +1910,28 @@ export async function resolveInviteDeepLink(
  * List members of a team. Requires explicit orgId.
  */
 export async function listMembers(orgId: string): Promise<{ members: TeamMember[]; callerRole: string }> {
-  const data = await fetchTeamApi(`/api/teams/${orgId}/members`, 'GET', undefined, orgId) as {
+  const teamJwt = await getOrgScopedJwt(orgId);
+  return listMembersWithTeamJwt(orgId, teamJwt);
+}
+
+/**
+ * List an organization's members using authorization that is branded as
+ * team-scoped. Agent-facing directory reads use this boundary so a personal
+ * JWT cannot be substituted accidentally.
+ */
+export async function listMembersWithTeamJwt(
+  orgId: string,
+  teamJwt: TeamJwt,
+): Promise<{ members: TeamMember[]; callerRole: string }> {
+  assertJwtMatchesOrg(teamJwt, orgId);
+  const data = await fetchTeamApi(
+    `/api/teams/${encodeURIComponent(orgId)}/members`,
+    'GET',
+    undefined,
+    orgId,
+    undefined,
+    { teamJwt },
+  ) as {
     members: TeamMember[];
     callerRole: string;
   };

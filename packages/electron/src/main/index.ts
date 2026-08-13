@@ -36,7 +36,7 @@ import {
     type AppAction,
 } from './utils/appActionLinks';
 import { createWorkspaceManagerWindow, setupWorkspaceManagerHandlers, wasWorkspaceManagerManuallyClosed } from './window/WorkspaceManagerWindow.ts';
-import { setupTeamManagementHandlers } from './window/TeamManagementWindow';
+import { createTeamManagementWindow, setupTeamManagementHandlers } from './window/TeamManagementWindow';
 import { setupTrayPanelHandlers } from './window/TrayPanelWindow';
 import { applyDockIcon } from './utils/dockIcon';
 import { showSplashScreen, closeSplashScreen } from './window/SplashScreen';
@@ -74,9 +74,17 @@ import {
     shutdownTeamInboxHandlers,
 } from './ipc/TeamInboxHandlers';
 import {
+    startAgentMentionDispatchService,
+    shutdownAgentMentionDispatchService,
+} from './services/AgentMentionDispatchService';
+import {
     registerConversationHandlers,
     shutdownConversationHandlers,
 } from './ipc/ConversationHandlers';
+import {
+    registerFeedbackRequestHandlers,
+    shutdownFeedbackRequestHandlers,
+} from './ipc/FeedbackRequestHandlers';
 import { registerOrgSettingsHandlers } from './ipc/OrgSettingsHandlers';
 import { registerWakeupHandlers } from './ipc/WakeupHandlers';
 import { registerBlitzHandlers } from './ipc/BlitzHandlers';
@@ -263,6 +271,7 @@ import { pathToFileURL } from 'url';
 import { registerLinuxAppImageProtocolHandler } from './services/LinuxProtocolRegistration';
 import { installWindowOpenGuard } from './window/windowOpenGuard';
 import { resolveClaudeConfigDir } from '@nimbalyst/runtime/ai/server/providers/claudeCode/claudeConfigDir';
+import { parseConversationDeepLink } from '../shared/conversationDeepLinks';
 
 setAuthCallbackSuccessHandler(async () => {
   try {
@@ -860,9 +869,14 @@ async function openInboxSourceFromDeepLink(rawUrl: string): Promise<boolean> {
             const documentId = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
             return documentId ? openSharedDocumentFromDeepLink(documentId, orgId) : false;
         }
-        // Conversation deep links are already the canonical address, but the
-        // room surface has not landed in the desktop client yet. Returning
-        // false preserves unread state instead of pretending navigation won.
+        if (parsed.host === 'conversation' && orgId) {
+            const conversation = parseConversationDeepLink(rawUrl);
+            createTeamManagementWindow({
+                orgId: conversation.orgId,
+                conversationId: conversation.conversationId,
+            });
+            return true;
+        }
         return false;
     } catch {
         return false;
@@ -1841,6 +1855,7 @@ app.whenReady().then(async () => {
         openInboxSource: openInboxSourceFromDeepLink,
     });
     registerConversationHandlers();
+    registerFeedbackRequestHandlers();
     registerOrgSettingsHandlers();
     registerTeamCustodyHandlers();
     // Team custody is server-managed; drop the client key material the retired
@@ -2497,6 +2512,12 @@ app.whenReady().then(async () => {
       });
     } catch (recoveryErr) {
       logger.main.error('[Main] Boot queue recovery failed:', recoveryErr);
+    }
+
+    try {
+      await startAgentMentionDispatchService(aiService);
+    } catch (error) {
+      logger.main.error('[AgentMentionDispatch] Failed to start agent wake dispatch:', error);
     }
 
     // Recover any super loops that were running when the app last shut down
@@ -3202,6 +3223,7 @@ app.on('before-quit', async (event) => {
     }
 
     try {
+        shutdownAgentMentionDispatchService();
         shutdownTeamInboxHandlers();
     } catch (error) {
         console.error('[QUIT] Error shutting down Teams inbox:', error);
@@ -3210,6 +3232,11 @@ app.on('before-quit', async (event) => {
         shutdownConversationHandlers();
     } catch (error) {
         console.error('[QUIT] Error shutting down Teams conversations:', error);
+    }
+    try {
+        shutdownFeedbackRequestHandlers();
+    } catch (error) {
+        console.error('[QUIT] Error shutting down feedback requests:', error);
     }
 
     // Check if we can write to userData directory

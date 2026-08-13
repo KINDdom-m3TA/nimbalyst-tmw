@@ -312,6 +312,7 @@ export function TeamMode({ workspacePath, isActive = true }: { workspacePath?: s
       team={team}
       organizations={organizations}
       boundEmail={boundEmail}
+      workspacePath={workspacePath}
       onSelectOrganization={selectOrganization}
     />
   );
@@ -332,11 +333,13 @@ function OrgWindowBody({
   team,
   organizations,
   boundEmail,
+  workspacePath,
   onSelectOrganization,
 }: {
   team: TeamSummary;
   organizations: TeamSummary[];
   boundEmail: string | null;
+  workspacePath?: string;
   onSelectOrganization: (orgId: string) => void;
 }) {
   const orgId = team.orgId;
@@ -665,6 +668,7 @@ function OrgWindowBody({
                 >
                   <InboxProviderContext.Provider value={inboxProvider}>
                     <InboxSection
+                      workspacePath={workspacePath}
                       onBrowseRooms={gating.roomsVisible ? openDirectory : undefined}
                       onNewMessage={gating.roomsVisible || gating.dmsVisible
                         ? openCompose

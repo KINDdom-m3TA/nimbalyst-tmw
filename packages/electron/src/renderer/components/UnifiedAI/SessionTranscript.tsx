@@ -29,6 +29,7 @@ import { AIInput, AIInputRef } from './AIInput';
 import { PromptQueueList } from './PromptQueueList';
 import { TranscriptEmbeddedFileCard } from './TranscriptEmbeddedFileCard';
 import { getDiffPeekSizeForInteractiveWidgetHost } from './interactiveWidgetHostProxy';
+import { createFeedbackComposeHost } from '../FeedbackRequest/createFeedbackComposeHost';
 import { customEditorRegistry } from '../CustomEditors/registry';
 import { useDialog } from '../../contexts/DialogContext';
 import { FileGutter } from '../AIChat/FileGutter';
@@ -1864,6 +1865,20 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
         refreshPendingPrompts(sessionId);
       },
 
+      // Feedback request operations. Fire-and-forget: send publishes the
+      // subjects the author confirmed, creates the request, and returns. The
+      // turn does not wait for a recipient.
+      feedbackRequestSend: async (payload) =>
+        createFeedbackComposeHost({
+          workspacePath: workspacePath || '',
+          sessionId,
+        }).send(payload),
+      feedbackRequestCancel: async (draftId: string) =>
+        createFeedbackComposeHost({
+          workspacePath: workspacePath || '',
+          sessionId,
+        }).cancel(draftId),
+
       // Auto-commit
       autoCommitEnabled,
       setAutoCommitEnabled: (enabled: boolean) => {
@@ -2099,6 +2114,8 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
       exitPlanModeCancel: (...args) => liveHostRef.current!.exitPlanModeCancel(...args),
       toolPermissionSubmit: (...args) => liveHostRef.current!.toolPermissionSubmit(...args),
       toolPermissionCancel: (...args) => liveHostRef.current!.toolPermissionCancel(...args),
+      feedbackRequestSend: (...args) => liveHostRef.current!.feedbackRequestSend!(...args),
+      feedbackRequestCancel: (...args) => liveHostRef.current!.feedbackRequestCancel!(...args),
       setAutoCommitEnabled: (...args) => liveHostRef.current!.setAutoCommitEnabled(...args),
       gitCommit: (...args) => liveHostRef.current!.gitCommit(...args),
       gitCommitCancel: (...args) => liveHostRef.current!.gitCommitCancel(...args),

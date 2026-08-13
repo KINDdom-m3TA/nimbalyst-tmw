@@ -37,6 +37,8 @@ import {
   writeStoredFieldValue,
 } from './tracker/relationshipFieldStorage';
 import { projectionWouldChange } from './tracker/projectionUpdateGuard';
+import { assignLocalKeysToRows } from './tracker/localKeyAllocator';
+import { workspaceLocalKeyStore } from './tracker/workspaceLocalKeyStore';
 import { extractFrontmatter, extractCommonFields } from '../utils/frontmatterReader';
 import {
   PLAN_INVALID_STATUS_SIGNAL_KIND,
@@ -1336,6 +1338,7 @@ export class ElectronDocumentService implements DocumentService {
       `SELECT * FROM tracker_items WHERE workspace = $1 ORDER BY kanban_sort_order ASC NULLS LAST, last_indexed DESC`,
       [this.workspacePath]
     );
+    await this.assignLocalKeysFrom(result.rows);
     const dbItems = result.rows.map(row => this.rowToTrackerItem(row));
     const metadataItems = await this.listFullDocumentTrackerItemsFromMetadata();
 
@@ -1764,6 +1767,46 @@ export class ElectronDocumentService implements DocumentService {
   }
 
   // Tracker Items API methods
+  /**
+   * Give any unnumbered rows this project's next local numbers, reusing the
+   * rows the list query just read.
+   *
+   * Allocation lives here rather than at each insert because eight call sites
+   * write to `tracker_items`, and eight copies of a monotonic counter is how
+   * one of them drifts. Rows already numbered cost nothing: in the steady
+   * state `unnumbered` is empty and this returns without a query. New items
+   * and the one-time backfill of items that predate local numbering are the
+   * same path.
+   *
+   * Failure is not fatal -- an item with no number still works everywhere,
+   * so a broken sweep must not take the tracker list down with it.
+   */
+  private async assignLocalKeysFrom(rows: any[]): Promise<void> {
+    const unnumbered = rows
+      .filter((row) => row.local_key == null && row.deleted_at == null)
+      .sort((a, b) => String(a.created).localeCompare(String(b.created)) || String(a.id).localeCompare(String(b.id)))
+      .map((row) => row.id as string);
+    if (unnumbered.length === 0) return;
+
+    try {
+      const assigned = await assignLocalKeysToRows(
+        database,
+        workspaceLocalKeyStore,
+        this.workspacePath,
+        unnumbered,
+      );
+      // Reflect the writes in the rows we are about to map, so the number shows
+      // on this pass rather than the next one. The allocator returns what it
+      // wrote precisely so this does not become a read per row.
+      for (const row of rows) {
+        const localKey = assigned.get(row.id);
+        if (localKey) row.local_key = localKey;
+      }
+    } catch (error) {
+      console.error('[DocumentService] Failed to assign local tracker numbers:', error);
+    }
+  }
+
   async listTrackerItems(): Promise<TrackerItem[]> {
     try {
       return await this.listMergedTrackerItems();
@@ -1817,6 +1860,7 @@ export class ElectronDocumentService implements DocumentService {
       id: getCanonicalTrackerItemIdFromRow(row),
       issueNumber: row.issue_number ?? undefined,
       issueKey: row.issue_key ?? undefined,
+      localKey: row.local_key ?? undefined,
       type: row.type,
       typeTags,
       title: data.title || row.title, // Fallback to generated column
@@ -3944,6 +3988,8 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
   }) => {
     try {
       const item = await requireDocumentService(event).setTrackerItemPublished(payload.itemId, payload.published);
+      const policy = getEffectiveTrackerSharingPolicy(item.workspace, item.type);
+      const teamVisible = shouldSyncTrackerItem(policy, item);
       sendTeamAnalyticsEvent(trackerAnalytics, 'tracker_item_scope_changed', {
         surface: 'desktop',
         actorType: 'user',
@@ -3951,7 +3997,7 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
         toScope: payload.published ? 'shared' : 'personal',
         trackerType: toStableAnalyticsCategory(item.type),
       });
-      return { success: true, item };
+      return { success: true, item, teamVisible };
     } catch (error) {
       console.error('[DocumentService] set-tracker-item-published failed:', error);
       return { success: false, error: error instanceof Error ? error.message : String(error) };

@@ -196,6 +196,16 @@ export function getMigrations(schemaDir: string): Migration[] {
       name: 'session_commits',
       sqlFile: path.join(schemaDir, '0031_session_commits.sql'),
     },
+    {
+      version: 32,
+      name: 'feedback_request_cache',
+      sqlFile: path.join(schemaDir, '0032_feedback_request_cache.sql'),
+    },
+    {
+      version: 33,
+      name: 'tracker_local_key',
+      sqlFile: path.join(schemaDir, '0033_tracker_local_key.sql'),
+    },
   ];
 }
 

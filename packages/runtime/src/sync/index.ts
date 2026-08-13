@@ -113,6 +113,18 @@ export type {
 } from './ConversationSync';
 
 export {
+  FeedbackRequestSync,
+  FeedbackRequestSyncError,
+} from './FeedbackRequestSync';
+export type {
+  FeedbackRequestNudgeReceipt,
+  FeedbackRequestSyncConfig,
+  FeedbackRequestSyncEvent,
+  FeedbackRequestSyncState,
+  FeedbackRequestTarget,
+} from './FeedbackRequestSync';
+
+export {
   createSyncedSessionStore,
   createMessageSyncHandler,
   type SyncedSessionStoreOptions,

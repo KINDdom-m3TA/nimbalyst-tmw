@@ -109,6 +109,48 @@ describe('createAtomInboxProvider', () => {
     );
   });
 
+  it('maps every activity resource kind to its own source kind', async () => {
+    const store = createStore();
+    const activity = (resourceKind: 'tracker' | 'document' | 'feedbackRequest') => ({
+      id: `delivery-${resourceKind}`,
+      recipientUserId: 'member-a',
+      orgId: 'org-a',
+      orgName: 'Acme',
+      createdAt: 100,
+      source: {
+        orgId: 'org-a',
+        resourceKind,
+        resourceId: `${resourceKind}-1`,
+        sourceEventId: `event-${resourceKind}`,
+        eventClass: 'created',
+      },
+      reason: 'assignment' as const,
+    });
+    store.set(teamInboxSnapshotAtom, {
+      status: 'ready',
+      deliveries: [activity('tracker'), activity('document'), activity('feedbackRequest')],
+      organizations: [{ orgId: 'org-a', orgName: 'Acme', status: 'ready' }],
+    } as TeamInboxSnapshot);
+    const invoke = vi.fn(async () => true);
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { invoke },
+    });
+    const provider = createAtomInboxProvider(store);
+
+    expect(
+      provider.getSnapshot().deliveries.map((delivery) => delivery.source.sourceKind),
+    ).toEqual(['trackerComment', 'documentInlineComment', 'feedbackRequest']);
+
+    // A feedback request is not a conversation. Before it had its own source
+    // kind the conversation fallback minted a deep link for it, which opened
+    // an unrelated room; refusing to navigate is the honest outcome until the
+    // respond surface owns a route.
+    const feedbackRow = toRowView(provider.getSnapshot().deliveries[2], { now: 200 });
+    await expect(provider.navigate(feedbackRow)).resolves.toBe(false);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('subscribes through the Jotai store', () => {
     const store = createStore();
     const provider = createAtomInboxProvider(store);

@@ -60,6 +60,11 @@ const SOURCE_TYPES: Record<InboxSourceKind, InboxTypeIdentity> = {
   // (someone commented) instead of the thing you are about to open.
   documentDiscussion: { icon: 'description', accent: 'var(--nim-success)', label: 'Doc' },
   documentInlineComment: { icon: 'description', accent: 'var(--nim-success)', label: 'Doc' },
+  // Shares the direct-message hue deliberately: both are addressed to you
+  // personally rather than to a room, and the palette has no sixth hue that
+  // is not a status color. The ballot glyph and the label carry the
+  // distinction — this row wants an answer, a DM wants a reply.
+  feedbackRequest: { icon: 'ballot', accent: 'var(--nim-purple)', label: 'Feedback' },
 };
 
 /**
@@ -87,7 +92,20 @@ export const SOURCE_KIND_LABELS: Record<InboxSourceKind, string> = {
   dmMessage: 'Direct messages',
   trackerComment: 'Tracker comments',
   documentInlineComment: 'Inline comments',
+  feedbackRequest: 'Feedback requests',
 };
+
+/**
+ * The one source kind that asks for something back.
+ *
+ * A comment or a mention is a statement the reader may act on; a feedback
+ * request is a question with typed answers waiting on them, and the row has to
+ * say so before it is opened. Derived from the source kind alone — response
+ * state lives on the request resource, which a delivery does not carry.
+ */
+export function awaitsResponse(sourceKind: InboxSourceKind | undefined): boolean {
+  return sourceKind === 'feedbackRequest';
+}
 
 /**
  * What kind of thing this row points at — resolved as specifically as the
@@ -159,8 +177,15 @@ export function openActionLabel(row: Pick<InboxRowView, 'sourceKind' | 'itemType
       return 'Open room';
     case 'dmMessage':
       return 'Open conversation';
-    default:
+    case 'feedbackRequest':
+      return 'Open feedback request';
+    case undefined:
       return 'Open';
+    default: {
+      const unhandled: never = row.sourceKind;
+      void unhandled;
+      return 'Open';
+    }
   }
 }
 
@@ -264,6 +289,9 @@ export function toRowView(delivery: HydratedInboxDelivery, options: { now: numbe
     sourceKind,
     itemType,
     type: typeIdentity(sourceKind, { itemType, sourceTitle }),
+    // Redacted with the source kind: a revoked row must not disclose that
+    // someone was waiting on an answer from this reader.
+    awaitsResponse: awaitsResponse(sourceKind),
     sourceTitle,
     actor,
     preview,

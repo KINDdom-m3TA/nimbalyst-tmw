@@ -52,6 +52,7 @@ import {
   trackFolderMoved,
   trackFolderRenamed,
 } from '../utils/collabIndexAnalytics';
+import { registerMcpCollabReadHandlers } from '../services/mcpCollabReadHandlers';
 
 // Tracker field updates now go through the generic trackerStatus frontmatter format.
 // No hardcoded plan-specific field list needed.
@@ -814,6 +815,8 @@ export function useIPCHandlers(props: UseIPCHandlersProps) {
     // Shared-index (first-class shared folders + documents) MCP tools. Each
     // routes through the SAME renderer functions a person uses so the AI's
     // changes sync to the team identically.
+    cleanupFns.push(...registerMcpCollabReadHandlers());
+
     if (window.electronAPI.onMcpCreateSharedDoc) {
       cleanupFns.push(window.electronAPI.onMcpCreateSharedDoc(async ({ title, documentType, parentFolderId, folderPath, initialContent, resultChannel }) => {
         try {

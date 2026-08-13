@@ -8,6 +8,7 @@ import { sessionOrChildProcessingAtom, sessionUnreadAtom, sessionPendingPromptAt
 import { convertToWorkstreamAtom } from '../../store/atoms/sessions';
 import { SessionContextMenu } from './SessionContextMenu';
 import { FullTitleTooltip } from './FullTitleTooltip';
+import { sessionAgentWakePendingAtom } from '../../store/atoms/teamInbox';
 
 /**
  * Combined status indicator that subscribes to this session's state atoms.
@@ -19,6 +20,7 @@ export const SessionStatusIndicator = memo<{ sessionId: string; messageCount?: n
   const hasPendingInteractivePrompt = useAtomValue(sessionHasPendingInteractivePromptAtom(sessionId));
   const isProcessing = useAtomValue(sessionOrChildProcessingAtom(sessionId));
   const hasPendingPrompt = useAtomValue(sessionPendingPromptAtom(sessionId));
+  const hasAgentWakePending = useAtomValue(sessionAgentWakePendingAtom(sessionId));
   const hasUnread = useAtomValue(sessionUnreadAtom(sessionId));
   const wakeup = useAtomValue(sessionWakeupAtom(sessionId));
 
@@ -36,6 +38,14 @@ export const SessionStatusIndicator = memo<{ sessionId: string; messageCount?: n
     return (
       <div className="session-list-item-status processing flex items-center justify-center w-5 h-5 text-[var(--nim-primary)] opacity-80" title="Processing...">
         <MaterialSymbol icon="progress_activity" size={14} className="animate-spin" />
+      </div>
+    );
+  }
+
+  if (hasAgentWakePending) {
+    return (
+      <div className="session-list-item-status agent-wake-pending flex items-center justify-center w-5 h-5 text-[var(--nim-warning)] animate-pulse" title="Room message pending agent dispatch">
+        <MaterialSymbol icon="hourglass_top" size={14} />
       </div>
     );
   }

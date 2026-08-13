@@ -6,6 +6,9 @@ import { settingAtom } from '../../../store/atoms/settingAtomFamily';
 import { CommentThread } from '../../Comments/CommentThread';
 import { createConversationCommentAdapter } from '../../Comments/ConversationCommentAdapter';
 import type { CommentCapabilities } from '../../Comments/commentTypes';
+import { FeedbackRequestRespond } from '../../FeedbackRequest/FeedbackRequestRespond';
+import { createFeedbackRespondHost } from '../../FeedbackRequest/createFeedbackRespondHost';
+import { startFeedbackRequestSync } from '../../FeedbackRequest/createFeedbackResultsHost';
 import { openActionLabel } from './inboxViewModel';
 import type { InboxRowView, InboxSubscriptionState } from './inboxTypes';
 
@@ -20,12 +23,14 @@ import type { InboxRowView, InboxSubscriptionState } from './inboxTypes';
  */
 export function InboxContextPane({
   row,
+  workspacePath,
   conversationTransport = false,
   canChangeSubscription = false,
   onSubscriptionChange,
   onOpenSource,
 }: {
   row: InboxRowView | null;
+  workspacePath?: string;
   conversationTransport?: boolean;
   /**
    * The provider can actually change the follow state. False hides the mute
@@ -101,7 +106,7 @@ export function InboxContextPane({
           {row.projectName ? ` · ${row.projectName}` : ''}
           {` · ${row.timestampLabel}`}
         </p>
-        {!unavailable && (
+        {!unavailable && row.sourceKind !== 'feedbackRequest' && (
           // The only control on this surface that moves you, and it says where
           // to. Selecting a row is free; leaving is always deliberate.
           <button
@@ -116,7 +121,15 @@ export function InboxContextPane({
         )}
       </header>
 
-      {conversationId
+      {row.sourceKind === 'feedbackRequest' && !unavailable && row.sourceId && workspacePath
+        ? (
+          <InboxFeedbackRequest
+            workspacePath={workspacePath}
+            orgId={row.orgId}
+            requestId={row.sourceId}
+          />
+        )
+        : conversationId
         ? <InboxConversationThread row={row} conversationId={conversationId} />
         : <div className="inbox-context-body min-h-0 flex-1 overflow-y-auto p-4">
         {unavailable
@@ -185,7 +198,7 @@ export function InboxContextPane({
           )}
       </div>}
 
-      {!conversationId && <footer className="inbox-context-composer border-t border-[var(--nim-border)] p-3" data-testid="inbox-context-composer">
+      {!conversationId && row.sourceKind !== 'feedbackRequest' && <footer className="inbox-context-composer border-t border-[var(--nim-border)] p-3" data-testid="inbox-context-composer">
         {row.canReply
           ? (
             <div className="inbox-composer-placeholder rounded-md border border-dashed border-[var(--nim-border)] px-3 py-2 text-[12px] text-[var(--nim-text-faint)]">
@@ -203,6 +216,32 @@ export function InboxContextPane({
           )}
       </footer>}
     </aside>
+  );
+}
+
+function InboxFeedbackRequest({
+  workspacePath,
+  orgId,
+  requestId,
+}: {
+  workspacePath: string;
+  orgId: string;
+  requestId: string;
+}) {
+  const target = useMemo(
+    () => ({ workspacePath, orgId, requestId }),
+    [workspacePath, orgId, requestId],
+  );
+  const host = useMemo(() => createFeedbackRespondHost({ target }), [target]);
+
+  React.useEffect(() => {
+    void startFeedbackRequestSync(target);
+  }, [target]);
+
+  return (
+    <div className="inbox-feedback-request min-h-0 flex-1 overflow-y-auto p-3">
+      <FeedbackRequestRespond target={target} host={host} />
+    </div>
   );
 }
 

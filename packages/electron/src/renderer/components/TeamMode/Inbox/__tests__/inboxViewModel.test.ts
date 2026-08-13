@@ -159,6 +159,35 @@ describe('type identity', () => {
   });
 });
 
+describe('a request rather than a statement', () => {
+  const feedback: HydratedInboxDelivery = {
+    ...revoked,
+    availability: 'available',
+    capabilities: { comment: true },
+    source: {
+      orgId: 'org-1',
+      sourceKind: 'feedbackRequest',
+      sourceId: 'req-1',
+      commentId: 'ask-1',
+    },
+  };
+
+  it('marks a feedback request as awaiting an answer, and a comment as not', () => {
+    expect(toRowView(feedback, { now: NOW }).awaitsResponse).toBe(true);
+    expect(
+      toRowView({ ...feedback, source: { ...feedback.source, sourceKind: 'roomMessage' } }, { now: NOW })
+        .awaitsResponse,
+    ).toBe(false);
+  });
+
+  it('stops claiming an answer is owed once access is removed', () => {
+    // The row keeps nothing about a revoked source, and "someone is waiting on
+    // you" is itself something about it.
+    const row = toRowView({ ...feedback, availability: 'accessRemoved' }, { now: NOW });
+    expect(row.awaitsResponse).toBe(false);
+  });
+});
+
 describe('filters', () => {
   it('Mentions admits human and agent mentions and nothing else', () => {
     const { rows } = select({ filter: 'mentions' });

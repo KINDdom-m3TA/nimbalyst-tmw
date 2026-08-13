@@ -45,6 +45,7 @@ function setup(
 ) {
   const shown: TeamInboxNativeNotification[] = [];
   const openConversation = vi.fn();
+  const openInbox = vi.fn();
   const openInboxSource = vi.fn(async () => true);
   const service = new TeamInboxNotificationService({
     notificationsEnabled: () => options.enabled ?? true,
@@ -55,11 +56,12 @@ function setup(
       shown.push(notification);
     },
     openConversation,
+    openInbox,
     openInboxSource,
     resolveConversationTitle: vi.fn(async () => "General"),
     resolveMemberLabel: vi.fn(async () => "Sarah"),
   });
-  return { service, shown, openConversation, openInboxSource };
+  return { service, shown, openConversation, openInbox, openInboxSource };
 }
 
 describe("TeamInboxNotificationService", () => {
@@ -131,6 +133,7 @@ describe("TeamInboxNotificationService", () => {
         fallbackShown.push(notification);
       },
       openConversation: vi.fn(),
+      openInbox: vi.fn(),
       openInboxSource: vi.fn(async () => false),
       resolveConversationTitle: vi.fn(async () => {
         throw new Error("directory unavailable");
@@ -212,6 +215,52 @@ describe("TeamInboxNotificationService", () => {
     expect(document.openInboxSource).toHaveBeenCalledWith(
       "nimbalyst://doc/document-1?orgId=org-a&commentId=activity-2"
     );
+  });
+
+  it("notifies a feedback request and lands it on the Inbox in both source shapes", async () => {
+    // Both shapes reach the same delivery: the request as a comment source, and
+    // the request as an activity resource. Neither has a deep link yet, and
+    // before `feedbackRequest` existed as a source kind one produced no title
+    // and the other opened an unrelated tracker item.
+    const asSource = setup();
+    await asSource.service.notify(
+      delivery({
+        id: "delivery-feedback-source",
+        source: {
+          orgId: "org-a",
+          sourceKind: "feedbackRequest",
+          sourceId: "request-1",
+          commentId: "ask-1",
+        },
+        preview: undefined,
+      })
+    );
+    expect(asSource.shown).toHaveLength(1);
+    expect(asSource.shown[0].title).toBe("Acme · Feedback request");
+    asSource.shown[0].onClick();
+    expect(asSource.openInbox).toHaveBeenCalledWith("org-a");
+    expect(asSource.openInboxSource).not.toHaveBeenCalled();
+    expect(asSource.openConversation).not.toHaveBeenCalled();
+
+    const asActivity = setup();
+    await asActivity.service.notify(
+      delivery({
+        id: "delivery-feedback-activity",
+        source: {
+          orgId: "org-a",
+          resourceKind: "feedbackRequest",
+          resourceId: "request-2",
+          sourceEventId: "activity-3",
+          eventClass: "created",
+        },
+        preview: undefined,
+      })
+    );
+    expect(asActivity.shown).toHaveLength(1);
+    expect(asActivity.shown[0].title).toBe("Acme · Feedback request");
+    asActivity.shown[0].onClick();
+    expect(asActivity.openInbox).toHaveBeenCalledWith("org-a");
+    expect(asActivity.openInboxSource).not.toHaveBeenCalled();
   });
 
   it("fails safely when native notifications are disabled or unsupported", async () => {

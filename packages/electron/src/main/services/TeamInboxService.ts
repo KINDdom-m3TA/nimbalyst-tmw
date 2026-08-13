@@ -140,6 +140,16 @@ export class TeamInboxService {
     await this.fanIn.dismiss(deliveryId);
   }
 
+  async claimAgentDelivery(deliveryId: string, sessionId: string): Promise<boolean> {
+    if (!this.fanIn) throw new Error('Team inbox has not started');
+    return this.fanIn.claimAgentDelivery(deliveryId, sessionId);
+  }
+
+  async completeAgentDelivery(deliveryId: string, sessionId: string): Promise<boolean> {
+    if (!this.fanIn) throw new Error('Team inbox has not started');
+    return this.fanIn.completeAgentDelivery(deliveryId, sessionId);
+  }
+
   setPresenceStatus(status: PresenceDesiredStatus): void {
     this.fanIn?.setPresenceStatus(status);
   }
@@ -288,6 +298,12 @@ function createFailedOrgClient(
       throw new Error(message);
     },
     async dismiss() {
+      throw new Error(message);
+    },
+    async claimAgentDelivery() {
+      throw new Error(message);
+    },
+    async completeAgentDelivery() {
       throw new Error(message);
     },
     subscribe(listener) {

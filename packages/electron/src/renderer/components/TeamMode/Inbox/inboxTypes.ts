@@ -108,6 +108,8 @@ export interface HydratedInboxDelivery
    */
   hasUnreadActivity?: boolean;
   agentDispatch?: InboxAgentDispatchState;
+  agentSessionIds?: string[];
+  agentDispatchedSessionIds?: string[];
   /** Effective capabilities at hydration time. */
   capabilities: { comment: boolean };
   /** Why the composer is disabled, when `capabilities.comment` is false. */
@@ -153,6 +155,12 @@ export interface InboxRowView {
    */
   itemType?: string;
   type: InboxTypeIdentity;
+  /**
+   * The row's source expects a typed answer back rather than being something to
+   * read. Drives the response affordance on the row; the answer itself belongs
+   * to the respond surface, not the list.
+   */
+  awaitsResponse: boolean;
   sourceTitle?: string;
   actor?: InboxActorView;
   preview?: string;

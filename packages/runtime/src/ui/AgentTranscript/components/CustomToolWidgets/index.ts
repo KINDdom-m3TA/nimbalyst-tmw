@@ -44,6 +44,7 @@ import type { ToolCallDiffLoadResult, TranscriptViewMessage } from '../../../../
 export { EditorScreenshotWidget, MockupScreenshotWidget } from './EditorScreenshotWidget';
 export { AskUserQuestionWidget } from './AskUserQuestionWidget';
 export { RequestUserInputWidget } from './RequestUserInputWidget';
+export { FeedbackRequestComposeWidget } from './feedback/FeedbackRequestComposeWidget';
 export { VisualDisplayWidget } from './VisualDisplayWidget';
 export { BashWidget } from './BashWidget';
 export { GitCommitConfirmationWidget } from './GitCommitConfirmationWidget';
@@ -103,6 +104,7 @@ const WINDOWS_SHELL_NAME_REGEX = /^(?:"?[A-Za-z]:\\[^"]*\\)?(?:powershell|pwsh|c
 import { EditorScreenshotWidget } from './EditorScreenshotWidget';
 import { AskUserQuestionWidget } from './AskUserQuestionWidget';
 import { RequestUserInputWidget } from './RequestUserInputWidget';
+import { FeedbackRequestComposeWidget } from './feedback/FeedbackRequestComposeWidget';
 import { VisualDisplayWidget } from './VisualDisplayWidget';
 import { BashWidget } from './BashWidget';
 import { GitCommitConfirmationWidget } from './GitCommitConfirmationWidget';
@@ -154,6 +156,13 @@ const BUILT_IN_TOOL_WIDGETS: CustomToolWidgetRegistry = {
   'PromptForUserInput': RequestUserInputWidget,
   // Back-compat: any historical sessions that recorded the old name still render.
   'RequestUserInput': RequestUserInputWidget,
+
+  // RequestFeedback tool - the cross-user ask. Draws the compose surface: the
+  // agent drafts a request to other people and the author reviews it here
+  // before anything leaves the machine. Deliberately a separate tool from
+  // AskUserQuestion so the local, blocking, no-server path cannot acquire a
+  // network dependency through an `audience` argument.
+  'RequestFeedback': FeedbackRequestComposeWidget,
 
   // ExitPlanMode tool - interactive confirmation widget for exiting planning mode
   'ExitPlanMode': ExitPlanModeWidget,

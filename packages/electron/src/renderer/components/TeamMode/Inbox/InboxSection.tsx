@@ -42,12 +42,15 @@ const RELATIVE_LABEL_TICK_MS = 60_000;
  */
 export function InboxSection({
   provider: providerProp,
+  workspacePath,
   now: nowProp,
   onBrowseRooms,
   onNewMessage,
   composeUnavailableLabel = 'Compose is available in the organization window',
 }: {
   provider?: InboxProvider;
+  /** Workspace whose team JWT and local feedback projection back this inbox. */
+  workspacePath?: string;
   /** Deterministic clock seam for grouping and relative-label tests. */
   now?: number;
   /**
@@ -346,6 +349,7 @@ export function InboxSection({
         <div className="inbox-context-slot w-[340px] shrink-0" data-testid="inbox-context-slot">
           <InboxContextPane
             row={selectedRow}
+            workspacePath={workspacePath}
             conversationTransport={provider.conversationTransport === true}
             canChangeSubscription={provider.setSubscriptionState !== undefined}
             onSubscriptionChange={handleSubscription}

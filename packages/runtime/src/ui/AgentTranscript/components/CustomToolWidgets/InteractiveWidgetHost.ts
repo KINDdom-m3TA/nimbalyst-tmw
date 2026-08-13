@@ -30,6 +30,20 @@ export interface RequestUserInputResponse {
 }
 
 // ============================================================
+// Feedback Request Types
+// ============================================================
+
+import type { FeedbackComposeSendPayload } from './feedback/feedbackComposeDraft';
+export type { FeedbackComposeSendPayload };
+
+export interface FeedbackRequestSendResult {
+  success: boolean;
+  /** Server-assigned request id, once the request exists. */
+  requestId?: string;
+  error?: string;
+}
+
+// ============================================================
 // ExitPlanMode Types
 // ============================================================
 
@@ -99,6 +113,23 @@ export interface InteractiveWidgetHost {
    * Cancel a RequestUserInput tool call.
    */
   requestUserInputCancel(promptId: string): Promise<void>;
+
+  // ============================================================
+  // Feedback Request Operations
+  // ============================================================
+
+  /**
+   * Publish any confirmed subjects and create the feedback request.
+   *
+   * Optional: the compose surface renders and validates a draft without it, and
+   * disables sending until a host that can reach the collaboration layer is
+   * installed (plan slice S3). Keeping it optional is also what stops the local
+   * AskUserQuestion path acquiring a transport dependency by proximity.
+   */
+  feedbackRequestSend?(payload: FeedbackComposeSendPayload): Promise<FeedbackRequestSendResult>;
+
+  /** Discard a drafted feedback request without sending it. */
+  feedbackRequestCancel?(draftId: string): Promise<void>;
 
   // ============================================================
   // ExitPlanMode Operations

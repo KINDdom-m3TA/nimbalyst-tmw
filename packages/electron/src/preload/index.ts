@@ -15,6 +15,13 @@ import type {
 } from '@nimbalyst/runtime/sync';
 import type { ConversationSubscription } from '@nimbalyst/collab-protocol';
 import type { ConversationSetSubscriptionRequest } from '../shared/conversationDirectory.ts';
+import type {
+  FeedbackRequestCloseIpcRequest,
+  FeedbackRequestCreateIpcRequest,
+  FeedbackRequestNudgeIpcRequest,
+  FeedbackRequestRespondIpcRequest,
+  FeedbackRequestServiceTarget,
+} from '../shared/feedbackRequest.ts';
 import type { TutorialEntryPoint, TutorialStartResult, TutorialStatusResult } from '../shared/tutorial.ts';
 
 type StytchAuthFlowOptions = {
@@ -741,6 +748,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sendMcpCollabIndexResult: (resultChannel: string, result: { success: boolean; error?: string; [key: string]: unknown }) => {
     ipcRenderer.send(resultChannel, result);
   },
+  onMcpGetResourceSharingStatus: (callback: (data: { sourceId: string; resultChannel: string }) => void) => {
+    const handler = (_event: any, data: { sourceId: string; resultChannel: string }) => callback(data);
+    ipcRenderer.on('mcp:getResourceSharingStatus', handler);
+    return () => ipcRenderer.removeListener('mcp:getResourceSharingStatus', handler);
+  },
+  sendMcpCollabReadResult: (
+    resultChannel: string,
+    result: { success: boolean; result?: unknown; error?: string },
+  ) => {
+    ipcRenderer.send(resultChannel, result);
+  },
   onMcpNavigateTo: (callback: (data: { line: number, column: number }) => void) => {
     const handler = (_event: any, data: any) => callback(data);
     ipcRenderer.on('mcp:navigateTo', handler);
@@ -905,7 +923,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setTrackerItemPublished: (payload: {
       itemId: string;
       published: boolean;
-    }) => ipcRenderer.invoke('document-service:set-tracker-item-published', payload) as Promise<{ success: boolean; item?: any; error?: string }>,
+    }) => ipcRenderer.invoke('document-service:set-tracker-item-published', payload) as Promise<{
+      success: boolean;
+      item?: any;
+      /** Effective type policy plus item flag, computed in main after the write. */
+      teamVisible?: boolean;
+      error?: string;
+    }>,
     migrateSharedFrontmatterIds: (payload?: { dryRun?: boolean }) =>
       ipcRenderer.invoke('document-service:migrate-shared-frontmatter-ids', payload) as Promise<{
         success: boolean;
@@ -1794,6 +1818,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
         success: boolean;
         error?: string;
       }>,
+  },
+
+  feedbackRequest: {
+    start: (target: FeedbackRequestServiceTarget) =>
+      ipcRenderer.invoke('feedback-request:start', target),
+    getCached: (target: FeedbackRequestServiceTarget) =>
+      ipcRenderer.invoke('feedback-request:get-cached', target),
+    create: (request: FeedbackRequestCreateIpcRequest) =>
+      ipcRenderer.invoke('feedback-request:create', request),
+    respond: (request: FeedbackRequestRespondIpcRequest) =>
+      ipcRenderer.invoke('feedback-request:respond', request),
+    close: (request: FeedbackRequestCloseIpcRequest) =>
+      ipcRenderer.invoke('feedback-request:close', request),
+    nudge: (request: FeedbackRequestNudgeIpcRequest) =>
+      ipcRenderer.invoke('feedback-request:nudge', request),
   },
 
   // Epic H1: org / project access model. `canAccess` is the single client-side

@@ -37,6 +37,12 @@ export interface ShareToTeamData {
     sharedName: string;
     selectedEmbeddedDocumentPaths: string[];
   }) => void;
+  /**
+   * Fires when the dialog closes, confirmed or not -- `DialogProvider` calls it
+   * on removal. A caller awaiting the author's answers needs the dismissal too;
+   * without it a cancelled share is indistinguishable from one still waiting.
+   */
+  onDismiss?: () => void;
 }
 
 // ============================================================================

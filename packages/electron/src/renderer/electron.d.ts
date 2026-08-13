@@ -216,6 +216,26 @@ interface ElectronAPI {
       error?: string;
     }>;
   };
+  feedbackRequest: {
+    start: (
+      target: import('../shared/feedbackRequest').FeedbackRequestServiceTarget,
+    ) => Promise<import('../shared/feedbackRequest').FeedbackRequestServiceState>;
+    getCached: (
+      target: import('../shared/feedbackRequest').FeedbackRequestServiceTarget,
+    ) => Promise<import('../shared/feedbackRequest').FeedbackRequestServiceState>;
+    create: (
+      request: import('../shared/feedbackRequest').FeedbackRequestCreateIpcRequest,
+    ) => Promise<import('../shared/feedbackRequest').FeedbackRequestServiceState>;
+    respond: (
+      request: import('../shared/feedbackRequest').FeedbackRequestRespondIpcRequest,
+    ) => Promise<import('../shared/feedbackRequest').FeedbackRequestServiceState>;
+    close: (
+      request: import('../shared/feedbackRequest').FeedbackRequestCloseIpcRequest,
+    ) => Promise<import('../shared/feedbackRequest').FeedbackRequestServiceState>;
+    nudge: (
+      request: import('../shared/feedbackRequest').FeedbackRequestNudgeIpcRequest,
+    ) => Promise<import('@nimbalyst/runtime/sync').FeedbackRequestNudgeReceipt>;
+  };
   // Global semantic search (nimbalyst-memory). Empty/false when memory is off.
   semanticSearch: {
     isAvailable: (workspacePath: string) => Promise<boolean>;
@@ -543,6 +563,8 @@ interface ElectronAPI {
   onMcpRenameSharedItem: (callback: (data: { itemId: string, kind: 'doc' | 'folder', newName: string, resultChannel: string }) => void) => () => void;
   onMcpDeleteSharedItem: (callback: (data: { itemId: string, kind: 'doc' | 'folder', resultChannel: string }) => void) => () => void;
   sendMcpCollabIndexResult: (resultChannel: string, result: { success: boolean; error?: string; [key: string]: unknown }) => void;
+  onMcpGetResourceSharingStatus: (callback: (data: { sourceId: string; resultChannel: string }) => void) => () => void;
+  sendMcpCollabReadResult: (resultChannel: string, result: { success: boolean; result?: unknown; error?: string }) => void;
   updateMcpDocumentState: (state: any) => void;
   clearMcpDocumentState: () => Promise<void>;
 
@@ -678,7 +700,13 @@ interface ElectronAPI {
     setTrackerItemPublished: (payload: {
       itemId: string;
       published: boolean;
-    }) => Promise<{ success: boolean; item?: any; error?: string }>;
+    }) => Promise<{
+      success: boolean;
+      item?: any;
+      /** Effective type policy plus item flag, computed in main after the write. */
+      teamVisible?: boolean;
+      error?: string;
+    }>;
     migrateSharedFrontmatterIds: (payload?: { dryRun?: boolean }) => Promise<{
       success: boolean;
       dryRun?: boolean;

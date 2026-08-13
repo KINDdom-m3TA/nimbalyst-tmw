@@ -76,6 +76,9 @@ export function createTeamInboxNotificationService(
     openConversation: (orgId, conversationId) => {
       createTeamManagementWindow({ orgId, conversationId });
     },
+    openInbox: (orgId) => {
+      createTeamManagementWindow({ orgId });
+    },
     openInboxSource,
     resolveConversationTitle: async (orgId, conversationId) => {
       const conversations = await cached(

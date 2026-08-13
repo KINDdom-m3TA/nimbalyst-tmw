@@ -1232,6 +1232,31 @@ class PGLiteWorker {
       console.error('[PGLite Worker] Failed to add issue identity columns:', error);
     }
 
+    // Migration: Add local_key for machine-private tracker numbers (`NIM.12`).
+    // Separate from issue_key because the room owns that column and rejects an
+    // item that already carries a different key. Never leaves this machine.
+    try {
+      const localKeyCheck = await this.db.query(`
+        SELECT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'tracker_items' AND column_name = 'local_key'
+        ) as has_local_key
+      `);
+      const { has_local_key } = localKeyCheck.rows[0] || {};
+      if (!has_local_key) {
+        await this.db.exec(`
+          ALTER TABLE tracker_items ADD COLUMN local_key TEXT;
+        `);
+      }
+      // The unique index is what stops a number being handed out twice, which
+      // is the failure that rolled back both previous attempts.
+      await this.db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tracker_workspace_local_key ON tracker_items(workspace, local_key) WHERE local_key IS NOT NULL;
+      `);
+    } catch (error) {
+      console.error('[PGLite Worker] Failed to add tracker local_key column:', error);
+    }
+
     // Migration: Add content, archived, source columns for unified tracker system
     try {
       const unifiedCheck = await this.db.query(`
@@ -3075,6 +3100,28 @@ class PGLiteWorker {
       console.log('[PGLite Worker] session_commits table created successfully');
     } catch (error) {
       console.error('[PGLite Worker] Failed to create session_commits table:', error);
+      throw error;
+    }
+
+    // Migration: workspace-scoped Feedback Request projection (schema version 32).
+    // Mirror of SQLite 0032_feedback_request_cache.sql.
+    try {
+      await this.db.exec(`
+        CREATE TABLE IF NOT EXISTS feedback_request_cache (
+          workspace_path TEXT NOT NULL,
+          org_id         TEXT NOT NULL,
+          viewer_user_id TEXT NOT NULL,
+          request_id     TEXT NOT NULL,
+          data           JSONB NOT NULL,
+          updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (workspace_path, org_id, viewer_user_id, request_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_feedback_request_cache_org
+          ON feedback_request_cache (workspace_path, org_id, viewer_user_id, updated_at);
+      `);
+      console.log('[PGLite Worker] feedback_request_cache table created successfully');
+    } catch (error) {
+      console.error('[PGLite Worker] Failed to create feedback_request_cache table:', error);
       throw error;
     }
   }

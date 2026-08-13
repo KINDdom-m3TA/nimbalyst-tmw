@@ -37,12 +37,19 @@ export type Actor = {
 
 export type CommentRef = {
   orgId: string;
+  /**
+   * `feedbackRequest` names a source that is not a conversation: the request
+   * resource itself. A delivery about one is routed through the same Inbox
+   * fanout as every other source, so it needs a spelling here even though the
+   * thing being delivered asks for a typed answer rather than stating something.
+   */
   sourceKind:
     | "roomMessage"
     | "documentDiscussion"
     | "dmMessage"
     | "trackerComment"
-    | "documentInlineComment";
+    | "documentInlineComment"
+    | "feedbackRequest";
   sourceId: string;
   commentId: string;
   threadId?: string;
@@ -147,7 +154,8 @@ export type ResourceRef = {
     | "file"
     | "commit"
     | "pullRequest"
-    | "conversation";
+    | "conversation"
+    | "feedbackRequest";
   sourceId: string;
   projectId?: string;
   messageId?: string;

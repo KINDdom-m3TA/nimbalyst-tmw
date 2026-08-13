@@ -143,6 +143,7 @@ import { publishQueuedPromptsToSync } from './queuedPromptSyncPublisher';
 import { ingestMobileQueuedPrompts } from './mobileQueuedPromptIngest';
 import { onWorkspaceWindowAvailable } from '../../window/workspaceWindowAvailability';
 import { dispatchQueuedPromptToClaudeCli } from './claudeCliQueueDispatch';
+import { publishQueuedPromptClaim } from './queuedPromptClaimEvents';
 import { ensureClaudeCliSession, claudeCliSessionSupportsPlugins } from './claudeCliLauncherSingleton';
 import { supportsWorkspaceSlashWorkflowProvider } from '../../../shared/agentWorkflowProviders';
 import { captureTutorialMilestone } from '../tutorial/tutorialAnalytics';
@@ -961,6 +962,7 @@ export class AIService {
         this.hooklessWatcher.scheduleStop(settledSessionId, 500);
       },
       onPromptClaimed: ({ sessionId: claimedSessionId, promptId }) => {
+        publishQueuedPromptClaim({ sessionId: claimedSessionId, promptId });
         targetWindow?.webContents.send('ai:promptClaimed', {
           sessionId: claimedSessionId,
           promptId,

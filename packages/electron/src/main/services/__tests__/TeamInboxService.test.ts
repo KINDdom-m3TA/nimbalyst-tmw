@@ -12,6 +12,8 @@ class FakeOrgClient implements TeamInboxOrgClientLike {
   readonly connect = vi.fn(async () => {});
   readonly markRead = vi.fn(async () => {});
   readonly dismiss = vi.fn(async () => {});
+  readonly claimAgentDelivery = vi.fn(async () => true);
+  readonly completeAgentDelivery = vi.fn(async () => true);
   readonly destroy = vi.fn();
   private listener: ((event: TeamInboxOrgEvent) => void) | null = null;
 

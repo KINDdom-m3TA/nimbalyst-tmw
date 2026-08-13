@@ -12,6 +12,7 @@
  * tests and the design-review harness, so no fixture reaches a packaged build.
  */
 
+import type { ActivityRef } from '@nimbalyst/collab-protocol';
 import type {
   TeamInboxMaterializedDelivery,
   TeamInboxSnapshot,
@@ -20,6 +21,7 @@ import type { Store } from 'jotai/vanilla/store';
 import { createContext, useContext } from 'react';
 
 import { teamInboxSnapshotAtom } from '../../../store/atoms/teamInbox';
+import { buildConversationDeepLink } from '../../../../shared/conversationDeepLinks';
 import type {
   HydratedInboxDelivery,
   InboxRowView,
@@ -80,9 +82,29 @@ export const EMPTY_INBOX_PROVIDER: InboxProvider = {
  * Activity deliveries name a resource rather than a comment, so they are
  * normalized onto the comment-ref shape the surface renders. Comment refs
  * already speak the protocol's source kinds and pass through untouched.
+ *
+ * Exhaustive on purpose. A ternary here is what let a resource kind added to
+ * the protocol land silently in the wrong bucket; with the `never` binding a
+ * new kind is a compile error in this function instead of a type error at some
+ * call site, or worse, a row that quietly claims to be a document.
  */
-function activitySourceKind(resourceKind: 'tracker' | 'document'): InboxSourceKind {
-  return resourceKind === 'tracker' ? 'trackerComment' : 'documentInlineComment';
+function activitySourceKind(resourceKind: ActivityRef['resourceKind']): InboxSourceKind {
+  switch (resourceKind) {
+    case 'tracker':
+      return 'trackerComment';
+    case 'document':
+      return 'documentInlineComment';
+    case 'feedbackRequest':
+      return 'feedbackRequest';
+    default: {
+      // Unreachable by the types. It survives only a server that is ahead of
+      // this client: an unknown kind renders as a generic room row rather than
+      // taking the whole snapshot down with it.
+      const unhandled: never = resourceKind;
+      void unhandled;
+      return 'roomMessage';
+    }
+  }
 }
 
 function mapDelivery(
@@ -144,6 +166,9 @@ function mapDelivery(
     availability: unavailable ? 'accessRemoved' : 'available',
     subscription: delivery.subscription,
     hasUnreadActivity: delivery.hasUnreadActivity,
+    agentDispatch: delivery.agentDispatch,
+    agentSessionIds: delivery.agentSessionIds,
+    agentDispatchedSessionIds: delivery.agentDispatchedSessionIds,
     capabilities: { comment: !unavailable },
   };
 }
@@ -192,11 +217,15 @@ function deepLinkForRow(row: InboxRowView): string | null {
     if (row.commentId) url.searchParams.set('commentId', row.commentId);
     return url.toString();
   }
+  if (row.sourceKind === 'feedbackRequest') {
+    // A feedback request is not a conversation, so the conversation fallback
+    // below would mint a link that opens something else entirely. Until the
+    // respond surface owns a deep-link route, the row has no destination and
+    // says so rather than navigating somewhere wrong.
+    return null;
+  }
   if (!row.commentId) return null;
-  return (
-    `nimbalyst://conversation/${encodeURIComponent(row.sourceId)}` +
-    `/message/${encodeURIComponent(row.commentId)}`
-  );
+  return buildConversationDeepLink(row.orgId, row.sourceId, row.commentId);
 }
 
 export function createAtomInboxProvider(store: Store): InboxProvider {

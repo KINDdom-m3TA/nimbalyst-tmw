@@ -86,7 +86,8 @@ vi.mock('../../services/ErrorNotificationService', () => ({
   },
 }));
 
-import { CommonFileActions, readShareToTeamSourceContent } from '../CommonFileActions';
+import { CommonFileActions } from '../CommonFileActions';
+import { readShareToTeamSourceContent } from '../../services/shareToTeamSourceContent';
 
 const spreadsheetDescriptor = {
   documentType: 'csv',
