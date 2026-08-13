@@ -35,6 +35,14 @@ export interface TwoClientCollabHarnessOptions {
   port?: number;
   extensions?: TwoClientExtensionFixture[];
   files?: TwoClientWorkspaceFile[];
+  /**
+   * Which Electron clients to launch. Defaults to both.
+   *
+   * The cross-host spec pairs one Electron client with a browser one, and a
+   * second Electron instance there is a whole extra app launch that proves
+   * nothing.
+   */
+  clients?: readonly CollabClientLabel[];
 }
 
 const DEFAULT_PORT = 8797;
@@ -51,6 +59,9 @@ export class TwoClientCollabHarness {
     B: 'e2e-two-client-user-b',
   };
 
+  /** The Electron clients this run launches. */
+  readonly launchedClients: readonly CollabClientLabel[];
+
   private readonly options: TwoClientCollabHarnessOptions;
   private readonly clients = new Map<CollabClientLabel, TwoClientCollabClient>();
   private readonly workspaces = new Map<CollabClientLabel, string>();
@@ -60,6 +71,7 @@ export class TwoClientCollabHarness {
 
   constructor(options: TwoClientCollabHarnessOptions = {}) {
     this.options = options;
+    this.launchedClients = options.clients ?? ['A', 'B'];
     this.port = options.port ?? DEFAULT_PORT;
     this.serverUrl = `ws://127.0.0.1:${this.port}`;
     this.extensionDir = path.join(os.tmpdir(), `nimbalyst-two-client-extensions-${this.runId}`);
@@ -87,7 +99,7 @@ export class TwoClientCollabHarness {
     await this.installExtensionFixtures();
     await fs.mkdir(this.videoDir, { recursive: true });
 
-    for (const label of ['A', 'B'] as const) {
+    for (const label of this.launchedClients) {
       const workspace = await createTempWorkspace();
       const userDataDir = path.join(os.tmpdir(), `nimbalyst-two-client-${label.toLowerCase()}-${this.runId}`);
       this.workspaces.set(label, workspace);
@@ -96,12 +108,13 @@ export class TwoClientCollabHarness {
     await this.writeWorkspaceFixtures();
     await this.startServer();
     await this.makeOrgServerManaged();
-    await this.launchClient('A', false);
-    await this.launchClient('B', false);
+    for (const label of this.launchedClients) {
+      await this.launchClient(label, false);
+    }
   }
 
   async stop(): Promise<void> {
-    for (const label of ['A', 'B'] as const) {
+    for (const label of this.launchedClients) {
       await this.closeClient(label);
     }
     if (this.serverRunning) {
@@ -365,27 +378,84 @@ export class TwoClientCollabHarness {
     }
   }
 
-  /** Mirrors the collab server integration helper before either client connects. */
-  private async makeOrgServerManaged(actorUserId = 'test-owner'): Promise<void> {
-    const roomId = `org:${this.orgId}:team`;
-    const post = async (internalPath: string, body: Record<string, unknown>) => {
-      const url = new URL(`http://127.0.0.1:${this.port}/sync/${roomId}/internal/${internalPath}`);
-      url.searchParams.set('test_user_id', actorUserId);
-      url.searchParams.set('test_org_id', this.orgId);
-      return fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-    };
-    await post('set-metadata', { orgId: this.orgId, name: this.orgId, createdBy: actorUserId });
-    const response = await post('set-key-custody-mode', {
-      mode: 'server-managed',
-      actorUserId,
+  /** The org owner used by every internal seeding call. */
+  readonly ownerUserId = 'test-owner';
+
+  /**
+   * POST to a TeamRoom `/internal/` endpoint as the org owner.
+   *
+   * Exposed because a browser client connects with `test_enforce_gate=1` -- it
+   * runs the real project-access gate rather than the dev bypass the Electron
+   * clients rely on -- so a cross-host spec has to seed membership and a
+   * project before it can join anything.
+   */
+  async postInternal(
+    internalPath: string,
+    body: Record<string, unknown>,
+  ): Promise<unknown> {
+    const url = new URL(
+      `http://127.0.0.1:${this.port}/sync/org:${this.orgId}:team/internal/${internalPath}`,
+    );
+    url.searchParams.set('test_user_id', this.ownerUserId);
+    url.searchParams.set('test_org_id', this.orgId);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
     });
     if (!response.ok) {
-      throw new Error(`makeOrgServerManaged failed: ${response.status} ${await response.text()}`);
+      throw new Error(`${internalPath} failed: ${response.status} ${await response.text()}`);
     }
+    const text = await response.text();
+    return text ? JSON.parse(text) : null;
+  }
+
+  /**
+   * Add an org member with edit access to a project, and return the server's
+   * `teamProjectId` for it. Idempotent per project name.
+   */
+  async provisionProjectMember(params: {
+    userId: string;
+    projectId: string;
+    name?: string;
+    role?: 'owner' | 'admin' | 'member';
+  }): Promise<string> {
+    await this.postInternal('add-member', {
+      userId: params.userId,
+      role: params.role ?? 'member',
+      name: params.name ?? params.userId,
+      email: `${params.userId}@example.test`,
+      actorUserId: this.ownerUserId,
+    });
+    const project = await this.postInternal('add-project', {
+      projectId: params.projectId,
+      createdBy: this.ownerUserId,
+      name: params.projectId,
+    }) as { teamProjectId?: unknown } | null;
+    const teamProjectId = project?.teamProjectId;
+    if (typeof teamProjectId !== 'string' || !teamProjectId) {
+      throw new Error('add-project did not mint a teamProjectId');
+    }
+    await this.postInternal('grant-project-access', {
+      projectId: teamProjectId,
+      userId: params.userId,
+      projectRole: 'project-editor',
+      actorUserId: this.ownerUserId,
+    });
+    return teamProjectId;
+  }
+
+  /** Mirrors the collab server integration helper before either client connects. */
+  private async makeOrgServerManaged(): Promise<void> {
+    await this.postInternal('set-metadata', {
+      orgId: this.orgId,
+      name: this.orgId,
+      createdBy: this.ownerUserId,
+    });
+    await this.postInternal('set-key-custody-mode', {
+      mode: 'server-managed',
+      actorUserId: this.ownerUserId,
+    });
   }
 
   private async installExtensionFixtures(): Promise<void> {
@@ -412,7 +482,7 @@ export class TwoClientCollabHarness {
 
   private async writeWorkspaceFixtures(): Promise<void> {
     for (const fixture of this.options.files ?? []) {
-      for (const label of ['A', 'B'] as const) {
+      for (const label of this.launchedClients) {
         if (fixture.client && fixture.client !== 'both' && fixture.client !== label) continue;
         const workspace = this.workspaces.get(label);
         if (!workspace) throw new Error(`Workspace ${label} is not initialized`);

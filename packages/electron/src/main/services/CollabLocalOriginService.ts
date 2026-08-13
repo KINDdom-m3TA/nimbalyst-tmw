@@ -25,6 +25,10 @@ import { uploadCollabAsset } from './CollabAssetUploader';
 import { getCollabAssetStore } from './CollabAssetStore';
 import { getPersonalUserId } from './StytchAuthService';
 import { findTeamForWorkspace, getOrgScopedJwt } from './TeamService';
+import {
+  getLocalOriginTeamOverride,
+  type LocalOriginTeam,
+} from './collabLocalOriginTeam';
 import { readCollabAsset } from '../protocols/collabAssetProtocol';
 import { historyManager } from '../HistoryManager';
 import { SessionFileWatcher } from '../file/SessionFileWatcher';
@@ -364,6 +368,18 @@ async function resolveStoredBinding(
   }
 }
 
+async function owningTeam(workspacePath: string): Promise<LocalOriginTeam | null> {
+  const override = getLocalOriginTeamOverride();
+  if (override) return override(workspacePath);
+  const team = await findTeamForWorkspace(workspacePath);
+  if (!team) return null;
+  return {
+    orgId: team.orgId,
+    teamProjectId: team.teamProjectId ?? null,
+    gitRemoteHash: team.gitRemoteHash ?? null,
+  };
+}
+
 async function resolveDocumentSyncConfig(
   workspacePath: string,
   documentId: string,
@@ -585,7 +601,7 @@ export async function recordLocalOriginShare(params: {
   lastLocalContentHash: string | null;
   lastCollabContentHash: string | null;
 }): Promise<CollabLocalOriginBinding | null> {
-  const team = await findTeamForWorkspace(params.workspacePath);
+  const team = await owningTeam(params.workspacePath);
   if (!team) {
     throw new Error('No team found for this workspace.');
   }
@@ -618,7 +634,7 @@ export async function getLocalOriginBinding(
   workspacePath: string,
   documentId: string,
 ): Promise<CollabLocalOriginBinding | null> {
-  const team = await findTeamForWorkspace(workspacePath);
+  const team = await owningTeam(workspacePath);
   if (!team) return null;
 
   const row = await fetchBindingRow(team.orgId, documentId);
@@ -630,7 +646,7 @@ export async function clearLocalOriginBinding(
   workspacePath: string,
   documentId: string,
 ): Promise<void> {
-  const team = await findTeamForWorkspace(workspacePath);
+  const team = await owningTeam(workspacePath);
   if (!team) return;
   await database.query(
     'DELETE FROM collab_local_origins WHERE org_id = $1 AND document_id = $2',
@@ -644,7 +660,7 @@ export async function relinkLocalOriginBinding(params: {
   documentType: string;
   sourceFilePath: string;
 }): Promise<CollabLocalOriginBinding | null> {
-  const team = await findTeamForWorkspace(params.workspacePath);
+  const team = await owningTeam(params.workspacePath);
   if (!team) {
     throw new Error('No team found for this workspace.');
   }
@@ -691,7 +707,7 @@ export async function findLinkedDocumentForLocalPath(
   workspacePath: string,
   sourceFilePath: string,
 ): Promise<CollabLocalOriginBinding | null> {
-  const team = await findTeamForWorkspace(workspacePath);
+  const team = await owningTeam(workspacePath);
   if (!team) return null;
 
   const relativePath = ensureWorkspaceRelativePath(workspacePath, sourceFilePath);

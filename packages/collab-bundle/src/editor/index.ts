@@ -1,5 +1,43 @@
 export { mountCollabEditor } from './mount';
 export { resolveCollabEditorUser } from './presence';
+
+// Extension-provided editors. The Lexical mount above is one tenant of the
+// collaborative session; this is the generic one, for editors an extension
+// bundle supplies. See `browserEditorCapabilities` for what a browser host
+// can and cannot do for them.
+export { mountExtensionEditor } from './mountExtensionEditor';
+export type {
+  ExtensionEditorComponent,
+  ExtensionEditorHandle,
+  ExtensionEditorMountOptions,
+} from './mountExtensionEditor';
+export {
+  BrowserEditorCapabilityError,
+  BROWSER_EDITOR_CAPABILITY_GAPS,
+  BROWSER_EDITOR_ENVIRONMENT,
+  BROWSER_EDITOR_SUPPORTED_CAPABILITIES,
+  createBrowserEditorCapabilities,
+  resolveBrowserFilesystemPermission,
+} from './browserEditorCapabilities';
+export type {
+  BrowserEditorGrantedCapabilities,
+  BrowserExtensionPermissions,
+  BrowserPermissionOutcome,
+  EditorHostCapabilities,
+  EditorHostCapability,
+  EditorHostCapabilityGap,
+} from './browserEditorCapabilities';
+export {
+  browserDocumentPath,
+  createBrowserCollaborationContext,
+  createBrowserExtensionEditorHost,
+  flushBrowserCollaborativeContent,
+} from './browserExtensionHost';
+export type {
+  BrowserCollaborationContextOptions,
+  BrowserExtensionEditorHost,
+  BrowserExtensionEditorHostOptions,
+} from './browserExtensionHost';
 export { installCollabEditorBridge } from './bridge';
 export type {
   BridgeAuthResponse,

@@ -43,6 +43,15 @@ function internalTarget(specifier) {
       ? direct
       : path.join(internalRoot, 'runtime/src', runtime[1], 'index.d.ts');
   }
+  // The extension SDK reaches the published types the same way, so the public
+  // `EditorHost` is the SDK's own declaration rather than a hand-kept copy.
+  const extensionSdk = specifier.match(/^@nimbalyst\/extension-sdk\/(.+)$/);
+  if (extensionSdk) {
+    const direct = path.join(internalRoot, 'extension-sdk/src', `${extensionSdk[1]}.d.ts`);
+    return fs.existsSync(direct)
+      ? direct
+      : path.join(internalRoot, 'extension-sdk/src', extensionSdk[1], 'index.d.ts');
+  }
   return null;
 }
 
@@ -57,7 +66,7 @@ for (const declarationFile of declarationFiles(internalRoot)) {
   if (declarationFile === generatedEntry) continue;
   const source = fs.readFileSync(declarationFile, 'utf8');
   const rewritten = source.replace(
-    /(['"])(@nimbalyst\/(?:collab-client|runtime)\/[^'"]+)\1/g,
+    /(['"])(@nimbalyst\/(?:collab-client|runtime|extension-sdk)\/[^'"]+)\1/g,
     (match, quote, specifier) => {
       const target = internalTarget(specifier);
       if (!target || !fs.existsSync(target)) {
@@ -71,7 +80,7 @@ for (const declarationFile of declarationFiles(internalRoot)) {
 
 let publicTypes = fs.readFileSync(generatedEntry, 'utf8');
 publicTypes = publicTypes.replace(
-  /(['"])(@nimbalyst\/(?:collab-client|runtime)\/[^'"]+)\1/g,
+  /(['"])(@nimbalyst\/(?:collab-client|runtime|extension-sdk)\/[^'"]+)\1/g,
   (match, quote, specifier) => {
     const target = internalTarget(specifier);
     if (!target || !fs.existsSync(target)) {

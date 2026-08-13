@@ -303,18 +303,37 @@ function visibleEditor(
  * Returns the titles it dismissed so callers can assert on them rather than
  * letting a real error pass unnoticed.
  */
+/**
+ * Clear every toast on screen; report only the ones that are actually errors.
+ *
+ * Two jobs, deliberately separate. *Everything* is dismissed because a toast
+ * parked over the tab bar turns a later click into an unexplained timeout. Only
+ * `error-toast--error` is returned, because `ErrorToastContainer` renders every
+ * severity with the same `.error-toast` class -- so a successful Share to Team,
+ * which raises `showInfo(..., { duration: 4000 })`, was being reported as an
+ * outstanding error. Its auto-dismiss timer pauses while the pointer rests on
+ * it, so it can outlive its 4s and reach the next document type's check. A
+ * certification matrix that fails on "the previous step succeeded" is reporting
+ * on Playwright's mouse position rather than on the product.
+ */
 async function dismissErrorToasts(page: Page): Promise<string[]> {
   const toasts = page.locator('.error-toast');
-  const titles: string[] = [];
+  const errors: string[] = [];
   for (let remaining = await toasts.count(); remaining > 0; remaining--) {
     const toast = toasts.first();
-    const title = await toast.locator('.error-toast-title').textContent();
-    const message = await toast.locator('.error-toast-message').textContent();
-    titles.push(`${title?.trim() ?? ''}: ${message?.trim() ?? ''}`);
-    await toast.locator('.error-toast-close').click();
-    await expect(toast).toBeHidden({ timeout: 5_000 });
+    const severityClass = (await toast.getAttribute('class')) ?? '';
+    if (severityClass.includes('error-toast--error')) {
+      const title = await toast.locator('.error-toast-title').textContent();
+      const message = await toast.locator('.error-toast-message').textContent();
+      errors.push(`${title?.trim() ?? ''}: ${message?.trim() ?? ''}`);
+    }
+    const close = toast.locator('.error-toast-close');
+    if (await close.count() > 0) await close.click();
+    // Count, not `toBeHidden` on `first()`: once this toast leaves the DOM,
+    // `first()` resolves to the next one, which is still visible.
+    await expect(toasts).toHaveCount(remaining - 1, { timeout: 10_000 });
   }
-  return titles;
+  return errors;
 }
 
 async function addMindmapChild(

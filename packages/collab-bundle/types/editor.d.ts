@@ -1,7 +1,21 @@
 import type { Binding, Provider, ProviderAwareness } from '@lexical/yjs';
 import type { Klass, LexicalEditor, LexicalNode, TextFormatType } from 'lexical';
+import type { ComponentType } from 'react';
+import type { Awareness } from 'y-protocols/awareness';
 import type { Doc } from 'yjs';
 import type { TeamJwt, TeamMemberId } from './internal/runtime/src/auth/jwtScopes';
+import type {
+  CollaborationContext,
+  CollaborationStatus,
+  EditorContext,
+  EditorContextItem,
+  EditorHost,
+  EditorHostCapabilities,
+  EditorHostCapability,
+  EditorHostCapabilityGap,
+  EditorMenuItem,
+  RevisionSnapshotAdapter,
+} from './internal/extension-sdk/src/types/editor';
 
 declare const teamOrgIdBrand: unique symbol;
 declare const teamProjectIdBrand: unique symbol;
@@ -365,5 +379,230 @@ interface CollabContentAdapter<TStructured = unknown> {
 }
 
 export declare const MarkdownCollabContentAdapter: CollabContentAdapter;
+
+// ---------------------------------------------------------------------------
+// Extension-provided editors
+//
+// The editor contract is the extension SDK's own declaration, inlined by
+// `scripts/build-types.mjs` rather than restated here: a hand-kept copy of
+// `EditorHost` would be a second definition that has to agree with the SDK
+// forever, and the first time it did not, an extension would typecheck against
+// one host and run against another.
+// ---------------------------------------------------------------------------
+
+export type {
+  CollaborationContext,
+  CollaborationStatus,
+  EditorContext,
+  EditorContextItem,
+  EditorHost,
+  EditorHostCapabilities,
+  EditorHostCapability,
+  EditorHostCapabilityGap,
+  EditorHostProps,
+  EditorMenuItem,
+  RevisionSnapshotAdapter,
+} from './internal/extension-sdk/src/types/editor';
+
+/** Identifies this host in `EditorHostCapabilities.environment`. */
+export declare const BROWSER_EDITOR_ENVIRONMENT = 'browser';
+
+/** Capabilities a browser collaborative host provides for real. */
+export declare const BROWSER_EDITOR_SUPPORTED_CAPABILITIES:
+  readonly EditorHostCapability[];
+
+/** Capabilities no browser host can provide, each with its reason. */
+export declare const BROWSER_EDITOR_CAPABILITY_GAPS:
+  readonly EditorHostCapabilityGap[];
+
+/**
+ * Capabilities the embedding page grants by supplying the matching hook.
+ * Absent hook, absent capability -- there is no partial version of these.
+ */
+export interface BrowserEditorGrantedCapabilities {
+  history?: boolean;
+  menuItems?: boolean;
+  aiContext?: boolean;
+  binaryContent?: boolean;
+  externalLinks?: boolean;
+}
+
+export declare function createBrowserEditorCapabilities(
+  granted?: BrowserEditorGrantedCapabilities,
+): EditorHostCapabilities;
+
+/**
+ * Thrown by a host member the host has already declared unavailable. Carries
+ * the capability id so a caller can map back to
+ * `EditorHostCapabilities.unavailable`.
+ */
+export declare class BrowserEditorCapabilityError extends Error {
+  readonly capability: EditorHostCapability;
+  constructor(capability: EditorHostCapability, reason: string);
+}
+
+/** The manifest permission block, narrowed to what a browser host can answer. */
+export interface BrowserExtensionPermissions {
+  filesystem?: boolean;
+  ai?: boolean;
+  network?: boolean;
+}
+
+export interface BrowserPermissionOutcome {
+  declared: boolean;
+  granted: boolean;
+  reason?: string;
+}
+
+/**
+ * How a browser host answers `permissions: { filesystem: true }`:
+ * declared-but-ungranted. Loading is never refused over the declaration, and
+ * the filesystem-backed host members are absent or reject.
+ */
+export declare function resolveBrowserFilesystemPermission(
+  permissions: BrowserExtensionPermissions | undefined,
+): BrowserPermissionOutcome;
+
+/** A stable synthetic `filePath` for a document that has no path on disk. */
+export declare function browserDocumentPath(
+  documentId: string,
+  fileName: string,
+): string;
+
+export interface BrowserCollaborationContextOptions {
+  yDoc: Doc;
+  awareness: Awareness;
+  user: { id: string; name: string; color: string };
+  getStatus(): CollaborationStatus;
+  onStatusChange(callback: (status: CollaborationStatus) => void): () => void;
+  loadInitialContent(): Promise<string | ArrayBuffer>;
+  /** Resolve only on a server-persisted ack, never merely a socket write. */
+  flushWithAck(timeoutMs?: number): Promise<boolean>;
+  hasUndecodedContent?(): boolean;
+  reportSeedOutcome?(outcome: { ok: boolean; error?: unknown }): void;
+  onRevisionAdapterChange?(adapter: RevisionSnapshotAdapter | null): void;
+}
+
+/**
+ * A `CollaborationContext` over an already-established browser session.
+ * Transport-agnostic: it takes the Y.Doc, the awareness instance and a flush.
+ */
+export declare function createBrowserCollaborationContext(
+  options: BrowserCollaborationContextOptions,
+): CollaborationContext;
+
+export interface BrowserExtensionEditorHostOptions {
+  filePath: string;
+  fileName: string;
+  collaboration: CollaborationContext;
+  permissions?: BrowserExtensionPermissions;
+  getTheme?(): string;
+  subscribeToThemeChanges?(callback: (theme: string) => void): () => void;
+  isActive?(): boolean;
+  isVisible?(): boolean;
+  subscribeToVisibilityChanges?(callback: (visible: boolean) => void): () => void;
+  isReadOnly?(): boolean;
+  subscribeToReadOnlyChanges?(callback: (readOnly: boolean) => void): () => void;
+  getInitialContent?(): string;
+  getInitialBinaryContent?(): ArrayBuffer;
+  onDirtyChange?(isDirty: boolean): void;
+  onOpenHistory?(): void;
+  onMenuItemsChange?(items: EditorMenuItem[]): void;
+  onEditorContextChange?(context: EditorContext | null): void;
+  onEditorContextItemsChange?(items: EditorContextItem[] | null): void;
+  onEditorAPIChange?(api: unknown | null): void;
+  openExternal?(url: string): Promise<void>;
+  onCapabilityRefused?(error: BrowserEditorCapabilityError): void;
+}
+
+/**
+ * Build the browser-shaped `EditorHost`. Members for a capability this host
+ * cannot provide reject or throw; optional ones are omitted entirely.
+ */
+export declare function createBrowserExtensionEditorHost(
+  options: BrowserExtensionEditorHostOptions,
+): BrowserExtensionEditorHost;
+
+export interface BrowserExtensionEditorHost {
+  readonly host: EditorHost;
+  readonly capabilities: EditorHostCapabilities;
+  readonly filesystemPermission: BrowserPermissionOutcome;
+  getEditorAPI(): unknown | null;
+  getMenuItems(): readonly EditorMenuItem[];
+  notifyThemeChanged(theme: string): void;
+  notifyVisibilityChanged(visible: boolean): void;
+  notifyReadOnlyChanged(readOnly: boolean): void;
+}
+
+/**
+ * Drain every registered binding's pending local content into the Y.Doc, then
+ * wait for the server's persisted ack.
+ */
+export declare function flushBrowserCollaborativeContent(
+  collaboration: CollaborationContext,
+): Promise<boolean>;
+
+/** What an extension's editor contribution exports. */
+export type ExtensionEditorComponent = ComponentType<{ host: EditorHost }>;
+
+export interface ExtensionEditorMountOptions {
+  element: HTMLElement;
+  source: CollabEditorSource;
+  user: CollabEditorUser;
+  component: ExtensionEditorComponent;
+  fileName: string;
+  documentId?: string;
+  initialContent?: string;
+  initialBinaryContent?: ArrayBuffer;
+  permissions?: BrowserExtensionPermissions;
+  readOnly?: boolean;
+  theme?: string;
+  onStateChange?(state: CollabEditorState): void;
+  onPresenceChange?(presence: CollabEditorPresence): void;
+  onWriteRejected?(rejection: CollabEditorWriteRejection): void;
+  onTermination?(termination: CollabEditorTermination): void;
+  onReady?(handle: ExtensionEditorHandle): void;
+  onError?(error: Error): void;
+  /**
+   * The editor reached for something this host declared unavailable. The call
+   * already failed; this is the page's chance to see it, because a rejection
+   * inside an extension's effect is otherwise silent.
+   */
+  onCapabilityRefused?(error: BrowserEditorCapabilityError): void;
+  onOpenHistory?(): void;
+  onMenuItemsChange?(items: EditorMenuItem[]): void;
+  onEditorContextChange?(context: EditorContext | null): void;
+  onEditorContextItemsChange?(items: EditorContextItem[] | null): void;
+  onRevisionAdapterChange?(adapter: RevisionSnapshotAdapter | null): void;
+  openExternal?(url: string): Promise<void>;
+}
+
+export interface ExtensionEditorHandle {
+  getDocument(): Doc;
+  getState(): CollabEditorState;
+  getPresence(): CollabEditorPresence;
+  getHost(): EditorHost;
+  readonly capabilities: EditorHostCapabilities;
+  getEditorAPI(): unknown | null;
+  getMenuItems(): readonly EditorMenuItem[];
+  setPresenceActive(active: boolean): void;
+  setTheme(theme: string): void;
+  setVisible(visible: boolean): void;
+  setReadOnly(readOnly: boolean): void;
+  /** Drain pending binding content into the Y.Doc, then await the server ack. */
+  flushContent(): Promise<boolean>;
+  flush(options?: { timeoutMs?: number }): Promise<CollabEditorFlushResult>;
+  markClean(): void;
+  destroy(): void;
+}
+
+/**
+ * Mount an extension-provided editor over a collaborative document: the
+ * non-Lexical sibling of `mountCollabEditor`, sharing its transport,
+ * termination and flush semantics.
+ */
+export declare function mountExtensionEditor(
+  options: ExtensionEditorMountOptions,
+): ExtensionEditorHandle;
 
 export type { TextFormatType };

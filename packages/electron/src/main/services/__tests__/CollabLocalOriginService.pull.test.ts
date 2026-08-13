@@ -69,7 +69,8 @@ vi.mock('../../file/SessionFileWatcher', () => ({
   SessionFileWatcher: { markEditorSave: mocks.markEditorSave },
 }));
 
-import { pullFromSharedOrigin } from '../CollabLocalOriginService';
+import { pullFromSharedOrigin, recordLocalOriginShare } from '../CollabLocalOriginService';
+import { setLocalOriginTeamResolverForTests } from '../collabLocalOriginTeam';
 import { hashCollabFileContent } from '../CollabLocalOriginSync';
 
 function createBindingRow(
@@ -212,5 +213,55 @@ describe('pullFromSharedOrigin', () => {
     expect(forced.conflictToken).not.toBe(first.conflictToken);
     expect(Array.from(await fs.readFile(sourcePath))).toEqual(Array.from(secondLocalChange));
     expect(mocks.markEditorSave).not.toHaveBeenCalled();
+  });
+});
+
+describe('local-origin team resolution', () => {
+  let workspacePath: string;
+
+  beforeEach(async () => {
+    workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), 'nimbalyst-origin-team-'));
+    mocks.bindingRow = null;
+    mocks.databaseQuery.mockReset();
+    mocks.databaseQuery.mockImplementation(async () => ({ rows: [] }));
+  });
+
+  afterEach(async () => {
+    setLocalOriginTeamResolverForTests(null);
+    await fs.rm(workspacePath, { recursive: true, force: true });
+  });
+
+  async function shareAndReadInsertedOrgId(): Promise<unknown> {
+    const sourceFilePath = path.join(workspacePath, 'notes.csv');
+    await fs.writeFile(sourceFilePath, 'a,b\n');
+    await recordLocalOriginShare({
+      workspacePath,
+      documentId: 'doc-1',
+      documentType: 'csv',
+      sourceFilePath,
+      lastLocalContentHash: null,
+      lastCollabContentHash: null,
+    });
+    const insert = mocks.databaseQuery.mock.calls.find(
+      ([sql]) => String(sql).includes('INSERT INTO collab_local_origins'),
+    );
+    return (insert?.[1] as unknown[] | undefined)?.[0];
+  }
+
+  it('binds the share to the team discovered for the workspace', async () => {
+    expect(await shareAndReadInsertedOrgId()).toBe('org-1');
+  });
+
+  it('lets the Playwright collab bridge supply the org discovery cannot', async () => {
+    // `findTeamForWorkspace` fails closed on `isAuthenticated()`, and the collab
+    // E2E harness has no Stytch session, so every harness Share to Team threw
+    // "No team found for this workspace" and left a sticky error toast that
+    // outlived the certification step that produced it.
+    setLocalOriginTeamResolverForTests(async () => ({
+      orgId: 'e2e-org',
+      teamProjectId: null,
+      gitRemoteHash: null,
+    }));
+    expect(await shareAndReadInsertedOrgId()).toBe('e2e-org');
   });
 });

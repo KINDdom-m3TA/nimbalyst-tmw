@@ -43,6 +43,11 @@ export {
 } from './useEditorLifecycle.js';
 
 export {
+  editorHostSupports,
+  editorHostCapabilityGap,
+} from './editorHostCapabilities.js';
+
+export {
   useCollaborativeEditor,
   COLLAB_INIT_ORIGIN,
   type UseCollaborativeEditorConfig,

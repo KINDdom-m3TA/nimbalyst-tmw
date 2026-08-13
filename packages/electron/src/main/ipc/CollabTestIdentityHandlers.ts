@@ -8,6 +8,10 @@
  * `document-sync:get-jwt`, and `document-sync:resolve-index-config` normally
  * derive from Stytch + team discovery is supplied by the test harness instead.
  *
+ * It also substitutes the team lookup that local-origin bindings use, for the
+ * same reason: a `Share to Team` in the harness has no Stytch session to
+ * resolve an org from.
+ *
  * The bypass lives here, not inline in `DocumentSyncHandlers.ts`, so the
  * production handlers have no auth-bypass branch to reason about and so the
  * bridge is never registered outside a Playwright dev run. Gating mirrors
@@ -31,6 +35,7 @@ import { removeHandler, safeHandle } from '../utils/ipcRegistry';
 import { logger } from '../utils/logger';
 import { getWorkspaceState } from '../utils/store';
 import { resolveCollabDocumentType } from './collabDocumentTypeResolver';
+import { setLocalOriginTeamResolverForTests } from '../services/collabLocalOriginTeam';
 import {
   clearCollabAssetSender,
   registerCollabAssetDocument,
@@ -80,9 +85,10 @@ function resolveCollabTestIdentity(): CollabTestIdentity | null {
 const senderDestroyedHooked = new Set<number>();
 
 /**
- * Replaces the three auth-bearing document-sync channels with the harness
- * identity. No-ops unless every gate in `resolveCollabTestIdentity` passes, so
- * a normal build keeps the production handlers registered.
+ * Replaces the three auth-bearing document-sync channels, and local-origin team
+ * discovery, with the harness identity. No-ops unless every gate in
+ * `resolveCollabTestIdentity` passes, so a normal build keeps the production
+ * handlers and the real team lookup.
  *
  * Must be called AFTER `registerDocumentSyncHandlers()`.
  */
@@ -94,6 +100,22 @@ export function registerCollabTestIdentityHandlers(): void {
     '[CollabTestIdentity] Playwright collab identity bridge active -- '
     + `document-sync auth replaced for ${identity.serverUrl} (org ${identity.orgId})`,
   );
+
+  // Local-origin bindings resolve their org through the same team discovery
+  // this bridge replaces, and that discovery fails closed without a Stytch
+  // session. Left alone, every harness `Share to Team` records no binding and
+  // raises a "No team found for this workspace" toast that outlives the step
+  // that caused it -- which is how the certification matrix failed on a later
+  // document type for an error the previous one produced.
+  //
+  // No project or git remote: the harness workspace is a temp directory with
+  // neither, and `resolve-index-config` above already reports teamProjectId as
+  // null for the same reason.
+  setLocalOriginTeamResolverForTests(async () => ({
+    orgId: identity.orgId,
+    teamProjectId: null,
+    gitRemoteHash: null,
+  }));
 
   removeHandler('document-sync:open');
   safeHandle('document-sync:open', async (event, payload: {

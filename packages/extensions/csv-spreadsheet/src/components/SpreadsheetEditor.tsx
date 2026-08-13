@@ -32,6 +32,7 @@ import {
 import { CsvBinding } from '../collab/csvBinding';
 import { isCsvYDocEmpty, seedCsvYDoc, getYCsv } from '../collab/seed';
 import type { RemotePresence } from '../collab/presence';
+import { LocalPresenceTracker } from '../collab/localPresence';
 import { CollabPresenceOverlay } from './CollabPresenceOverlay';
 import { useSpreadsheetMetadata } from '../hooks/useSpreadsheetMetadata';
 import {
@@ -669,6 +670,12 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
   const presenceRafRef = useRef<number | null>(null);
   // Trailing throttle for local selection publishes (rapid arrow-key nav).
   const awarenessThrottleRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; last: number }>({ timer: null, last: 0 });
+  // Single writer for the local `selectedCell`/`editingCell` pair. Lazily
+  // constructed rather than `useRef(new ...)` so a hot re-render does not
+  // allocate a tracker it immediately discards.
+  const localPresenceRef = useRef<LocalPresenceTracker | undefined>(undefined);
+  localPresenceRef.current ??= new LocalPresenceTracker();
+  const localPresence = localPresenceRef.current;
   const { isCollaborative: isCollabActive } = useCollaborativeEditor(host, {
     isEmpty: isCsvYDocEmpty,
     initializeFromContent: seedCsvYDoc,
@@ -788,8 +795,10 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
   }, []);
 
   // Publish the local selected cell to awareness, trailing-throttled so rapid
-  // arrow-key navigation doesn't churn the awareness channel. Selecting a cell
-  // is not editing it, so editingCell is cleared here; it is set on edit start.
+  // arrow-key navigation doesn't churn the awareness channel. The editing cell
+  // rides along unchanged: RevoGrid emits focus and range events while a cell
+  // editor is open, and a selection publish that asserted "not editing" there
+  // retracted the flag mid-edit (see localPresence.ts).
   const AWARENESS_THROTTLE_MS = 100;
   const publishLocalSelection = useCallback((cell: { row: number; col: number } | null) => {
     if (!collabActiveRef.current) return;
@@ -797,7 +806,7 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
     const flush = () => {
       state.last = Date.now();
       state.timer = null;
-      collabBindingRef.current?.setLocalAwareness({ selectedCell: cell, editingCell: null });
+      collabBindingRef.current?.setLocalAwareness(localPresence.select(cell));
     };
     const elapsed = Date.now() - state.last;
     if (state.timer) clearTimeout(state.timer);
@@ -806,7 +815,7 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
     } else {
       state.timer = setTimeout(flush, AWARENESS_THROTTLE_MS - elapsed);
     }
-  }, []);
+  }, [localPresence]);
 
   // Clean up the throttle timer / pending rAF on unmount.
   useEffect(() => {
@@ -827,8 +836,23 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
     return () => ro.disconnect();
   }, [isCollabActive, schedulePresenceRepaint]);
 
-  // Stable editors object
-  const editors = useMemo(() => ({ sheets: SheetsTextEditor }), []);
+  // Stable editors object.
+  //
+  // The subclass exists so the open-editor lifetime -- not a later focus event
+  // -- is what ends the published `editingCell`. `disconnectedCallback` covers
+  // every close RevoGrid has: commit, Escape, and unmount. Each instance
+  // captures the session it opened under so an outgoing editor disconnecting
+  // after the next one opened cannot clear the incoming flag.
+  const editors = useMemo(() => ({
+    sheets: class PresenceAwareSheetsTextEditor extends SheetsTextEditor {
+      private readonly presenceSession = localPresence.currentSession();
+
+      disconnectedCallback(): void {
+        const patch = localPresence.endEdit(this.presenceSession);
+        if (patch) collabBindingRef.current?.setLocalAwareness(patch);
+      }
+    },
+  }), [localPresence]);
 
   // Display dimensions
   const displayColumnCount = spreadsheetMeta.metadata.columnCount + DISPLAY_BUFFER_COLS;
@@ -1153,10 +1177,12 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
       }
       host.setDirty(true);
       await updateSelection(selectedCellRef.current, selectionRangeRef.current);
-      // Edit committed/closed: keep the selection box, drop the editing flag.
-      collabBindingRef.current?.setLocalAwareness({ editingCell: null });
+      // Edit committed: keep the selection box, drop the editing flag. The
+      // editor's own disconnect covers the closes that never commit.
+      const patch = localPresence.endEdit();
+      if (patch) collabBindingRef.current?.setLocalAwareness(patch);
     },
-    [host, updateSelection]
+    [host, updateSelection, localPresence]
   );
 
   // Handle edit start - flag the currently-selected cell as actively editing so
@@ -1164,8 +1190,9 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
   // already-translated selectedCellRef rather than re-parsing event coords.
   const handleBeforeEditStart = useCallback(() => {
     if (!collabActiveRef.current) return;
-    collabBindingRef.current?.setLocalAwareness({ editingCell: selectedCellRef.current ?? null });
-  }, []);
+    const { patch } = localPresence.beginEdit(selectedCellRef.current ?? null);
+    collabBindingRef.current?.setLocalAwareness(patch);
+  }, [localPresence]);
 
   // Handle column resize - persist the new width
   const handleColumnResize = useCallback(

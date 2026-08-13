@@ -60,6 +60,12 @@ export {
 } from './types';
 
 export { createCollabV3Sync } from './CollabV3Sync';
+export { createExtensionAwarenessBridge } from './extensionAwarenessBridge';
+export type {
+  ExtensionAwarenessBridge,
+  ExtensionAwarenessTransport,
+  ExtensionAwarenessUser,
+} from './extensionAwarenessBridge';
 export { deriveTrackerPersonalStateKey } from './trackerPersonalStateKey';
 export { setSyncImageCompressor } from './syncContentTruncator';
 export type { SyncImageCompressor } from './syncContentTruncator';

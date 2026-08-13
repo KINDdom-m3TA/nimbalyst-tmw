@@ -10,7 +10,8 @@
     "rootDir": ".."
   },
   "include": [
-    "src/docs-ui.ts"
+    "src/docs-ui.ts",
+    "src/editor/hostTypes.ts"
   ],
   "exclude": [
     "**/__tests__/**",
