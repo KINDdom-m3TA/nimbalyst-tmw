@@ -1642,7 +1642,9 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
                         title={`Link session: ${session.title || 'Untitled session'}`}
                       >
                         <div className="flex items-center gap-2">
-                          <ProviderIcon provider={session.provider || 'claude'} size={14} />
+                          <span className="shrink-0 flex items-center text-nim-muted">
+                            <ProviderIcon provider={session.provider || 'claude'} size={14} />
+                          </span>
                           <span className="flex-1 truncate text-xs text-nim">
                             {session.title || 'Untitled session'}
                           </span>
@@ -1674,7 +1676,9 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
                     onClick={() => onSwitchToAgentMode?.(session.id)}
                     title={`Open session: ${session.title}`}
                   >
-                    <ProviderIcon provider={session.provider || 'claude'} size={14} />
+                    <span className="shrink-0 flex items-center text-nim-muted">
+                      <ProviderIcon provider={session.provider || 'claude'} size={14} />
+                    </span>
                     <span className="flex-1 text-xs text-nim truncate">
                       {session.title || 'Untitled session'}
                     </span>
