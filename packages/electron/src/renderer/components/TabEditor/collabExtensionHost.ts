@@ -151,14 +151,22 @@ const contentFlushRegistry = new WeakMap<
 export async function flushCollaborativeContent(
   collaboration: CollaborationContext,
 ): Promise<boolean> {
+  let drained = true;
   for (const flush of contentFlushRegistry.get(collaboration) ?? []) {
     try {
       await flush();
     } catch (error) {
+      // Every binding still gets its turn, and the ack still runs -- one
+      // binding's failure must not strand the others' pending content. What it
+      // must do is fail the result: a binding that could not push its newest
+      // edit leaves a document the server ack says nothing about, and reporting
+      // that as a completed write is how an edit goes missing in silence.
       console.error('[collabExtensionHost] Pending content flush failed:', error);
+      drained = false;
     }
   }
-  return collaboration.flushWithAck();
+  const acked = await collaboration.flushWithAck();
+  return drained && acked;
 }
 
 // ---------------------------------------------------------------------------

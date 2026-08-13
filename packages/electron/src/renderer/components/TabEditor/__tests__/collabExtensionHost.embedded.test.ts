@@ -108,7 +108,7 @@ describe('flushCollaborativeContent', () => {
     expect(flushWithAck).toHaveBeenCalledTimes(1);
   });
 
-  it('does not let one binding failure skip the rest or the ack', async () => {
+  it('drains the rest and acks after one binding fails, but reports the failure', async () => {
     const calls: string[] = [];
     const context = makeContext(async () => {
       calls.push('ack');
@@ -121,7 +121,9 @@ describe('flushCollaborativeContent', () => {
       calls.push('second');
     });
 
-    await expect(flushCollaborativeContent(context)).resolves.toBe(true);
+    // A binding that threw never pushed its newest edit, so the write is not
+    // complete however cleanly the server acked what it did receive.
+    await expect(flushCollaborativeContent(context)).resolves.toBe(false);
     expect(calls).toEqual(['second', 'ack']);
   });
 

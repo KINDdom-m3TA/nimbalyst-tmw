@@ -754,10 +754,13 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
         // are in the document.
         syncNow: () => binding.syncNow(),
         destroy: () => {
-          // Flush any pending sync so a closing tab doesn't drop the last
-          // edit. Fire-and-forget keeps close non-blocking; CsvBinding lets a
-          // serialization that already started here finish after destroy().
-          void binding.syncNow().catch(() => {});
+          // No flush here. `destroy` runs from a passive effect cleanup, which
+          // React schedules after it has already detached the grid's ref, so
+          // this could only ever call `toCSV()` against a grid that is gone --
+          // it threw "Grid not available" on every close and, until `syncNow`
+          // started reporting failure, hid that behind a resolved promise.
+          // The drain that can still read the grid is the one the host runs
+          // through `registerContentFlush` before it destroys the mount.
           binding.destroy();
           collabBindingRef.current = null;
           collabActiveRef.current = false;
@@ -931,7 +934,14 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
       getColumnFormats: () => spreadsheetMetaRef.current.metadata.columnFormats,
       getColumnWidths: () => spreadsheetMetaRef.current.metadata.columnWidths,
       getFrozenColumnCount: () => spreadsheetMetaRef.current.metadata.frozenColumnCount,
-      onDirty: () => hostRef.current.setDirty(true),
+      onDirty: () => {
+        hostRef.current.setDirty(true);
+        // Every mutation path funnels through here, so this is the one place
+        // that knows an edit happened. Without it the only push is the 1s
+        // poll, which leaves up to a second of edits sitting outside the Y.Doc
+        // -- and the teardown flush cannot read the grid to recover them.
+        collabBindingRef.current?.scheduleSync();
+      },
       getUndoPlugin: () => undoPluginRef.current,
       getTrimmedRows: () => getAppliedTrimmedRows(grid),
       formulaViewState: formulaViewStateRef.current,

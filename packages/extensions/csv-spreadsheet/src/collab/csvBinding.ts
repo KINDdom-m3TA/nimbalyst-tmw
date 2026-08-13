@@ -126,7 +126,11 @@ export class CsvBinding {
     if (this.syncTimer) return;
     this.syncTimer = setTimeout(() => {
       this.syncTimer = null;
-      void this.syncNow();
+      // The debounced push has no caller to report to, so it logs. `syncNow`
+      // throws now, and an unhandled rejection here would be a page error.
+      void this.syncNow().catch((err) => {
+        console.error('[CsvBinding] Debounced sync failed:', err);
+      });
     }, SYNC_DEBOUNCE_MS);
   }
 
@@ -140,8 +144,15 @@ export class CsvBinding {
     try {
       current = await this.opts.getCurrentCsv();
     } catch (err) {
-      console.error('[CsvBinding] getCurrentCsv failed:', err);
-      return;
+      // A flush exists to prove the newest local edit reached the Y.Doc.
+      // Swallowing this reported success on a document whose latest edit was
+      // never pushed, which is worse than the failure it was hiding: the host
+      // tells the user "an edit was not confirmed saved" off the flush result,
+      // and a resolved promise suppresses that warning. If the content cannot
+      // be read, the only truthful answer is that the flush did not happen.
+      throw new Error(
+        `[CsvBinding] Could not read the current CSV to flush: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
     // Once serialization has started, teardown must not cancel the write that
     // exists specifically to preserve edits made after the last polling tick.

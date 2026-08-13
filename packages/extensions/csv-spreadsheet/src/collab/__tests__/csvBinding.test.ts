@@ -56,4 +56,28 @@ describe('CsvBinding teardown', () => {
     await expect(finalSync).resolves.toBeUndefined();
     expect(yText.toString()).toBe(initial);
   });
+
+  /**
+   * The invariant that would have caught NIM-2933. `syncNow` is what the host
+   * registers as its content drain, and the host decides whether to warn the
+   * user about a possibly-lost edit from whether it resolves. Reporting success
+   * for a flush that never read — let alone pushed — the content is the one
+   * failure mode this drain must not have.
+   */
+  it('reports failure when the current content cannot be read', async () => {
+    const yDoc = new Y.Doc();
+    const initial = 'Name,Count\nAlpha,1\n';
+    getYCsv(yDoc).insert(0, initial);
+
+    const binding = new CsvBinding(yDoc, initial, {
+      getCurrentCsv: () => {
+        throw new Error('Grid not available');
+      },
+      onRemoteContent: () => {},
+    });
+
+    await expect(binding.syncNow()).rejects.toThrow(/Grid not available/);
+    binding.destroy();
+    yDoc.destroy();
+  });
 });
