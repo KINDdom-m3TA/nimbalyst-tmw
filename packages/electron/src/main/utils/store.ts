@@ -541,6 +541,17 @@ export interface WorkspaceState {
   // Issue key prefix for tracker items (e.g., "NIM", "APP"). Used for local-only trackers.
   // For synced trackers, the prefix is stored server-side in TrackerRoom metadata.
   issueKeyPrefix?: string;
+  // Prefix for this project's machine-private tracker numbers (`NIM.12`).
+  // Pinned on first use and never recomputed: a number already handed out
+  // cannot change meaning, so a later project routes around this one rather
+  // than this one moving. Distinct from `issueKeyPrefix` because the room may
+  // assign the team a different prefix long after local numbers exist.
+  localKeyPrefix?: string;
+  // High-water mark for this project's local numbers. Only ever counts up, and
+  // is NEVER recomputed from existing rows -- deriving it from the rows is the
+  // exact mistake that made `LC-###` reissue numbers after items were acked or
+  // deleted. A deleted item's number stays spent.
+  localKeyCounter?: number;
   // Account identity bound to this workspace (personalOrgId).
   // Set once when the workspace is first synced. Different workspaces can use different accounts.
   // Defaults to the account selected for personal sync if not set.
@@ -738,6 +749,8 @@ function createDefaultWorkspaceState(workspacePath: string): WorkspaceState {
     trackerSharingMigrationSeenAt: undefined,
     localOrgBinding: undefined,
     issueKeyPrefix: deriveIssueKeyPrefix(workspacePath),
+    localKeyPrefix: undefined,
+    localKeyCounter: undefined,
     lastUpdated: Date.now(),
   };
 }
@@ -1005,6 +1018,24 @@ export function updateWorkspaceState(
   const draft = cloneWorkspaceState(current);
   const result = updater(draft) || draft;
   return cloneWorkspaceState(persistWorkspaceState(workspacePath, result));
+}
+
+/**
+ * Local-number prefixes already pinned by other projects on this machine.
+ *
+ * A local number carries no hint of which project it came from, so two
+ * projects sharing a prefix means `NIM.4` has more than one answer on one
+ * machine -- and agents read trackers across projects in a single session.
+ * Team prefixes have the room's registry to arbitrate; local ones have only
+ * this comparison.
+ */
+export function getTakenLocalKeyPrefixes(excludeWorkspacePath?: string): string[] {
+  const excludeKey = excludeWorkspacePath ? workspaceKey(excludeWorkspacePath) : null;
+  const all = getWorkspaceStore().store ?? {};
+  return Object.entries(all)
+    .filter(([key]) => key.startsWith('ws:') && key !== excludeKey)
+    .map(([, state]) => state?.localKeyPrefix)
+    .filter((prefix): prefix is string => typeof prefix === 'string' && prefix.length > 0);
 }
 
 export function getWorkspaceRecentFiles(workspacePath: string): string[] {
