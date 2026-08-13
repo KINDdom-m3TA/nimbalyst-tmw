@@ -20,7 +20,7 @@ import { globalRegistry } from '@nimbalyst/runtime/plugins/TrackerPlugin/models'
 import type { FieldDefinition } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/TrackerDataModel';
 import { getRecordTitle, getRecordStatus, getRecordPriority, getRecordField, isItemPublished as recordIsPublished, getItemPublicationState, type TrackerItemPublicationState } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerRecordAccessors';
 import { TrackerPublicationChip } from '@nimbalyst/runtime/plugins/TrackerPlugin/components/TrackerPublicationChip';
-import { resolveTrackerWriteAccess, TRACKER_UNASSIGNED_ISSUE_KEY_MESSAGE } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerLifecycle';
+import { resolveTrackerWriteAccess, TRACKER_LOCAL_ISSUE_KEY_MESSAGE, TRACKER_UNASSIGNED_ISSUE_KEY_MESSAGE } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerLifecycle';
 import { isLocalIssueKey } from '../../../shared/localIssueKey';
 import { TrackerFieldEditor, type TeamMemberOption } from '@nimbalyst/runtime/plugins/TrackerPlugin/components/TrackerFieldEditor';
 import { TrackerFieldPills } from '@nimbalyst/runtime/plugins/TrackerPlugin/components/TrackerFieldPills';
@@ -1348,12 +1348,22 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
               </span>
             )}
             {/*
-              A draft has no key at all (D2), and that is normal rather than
-              pending or broken -- so it says so in words instead of falling
-              back to the internal row id, which reads like a malformed key.
+              A team key first, since it is the only form that means the same
+              thing to everyone. Failing that, this machine's local number --
+              private, but a real handle. Only an item with neither says so in
+              words, rather than falling back to the internal row id, which
+              reads like a malformed key.
             */}
             {assignedIssueKey ? (
               <span className="text-[10px] text-nim-faint font-mono">{assignedIssueKey}</span>
+            ) : item.localKey ? (
+              <span
+                className="tracker-item-local-key text-[10px] text-nim-faint font-mono"
+                title={TRACKER_LOCAL_ISSUE_KEY_MESSAGE}
+                data-testid="tracker-item-local-key"
+              >
+                {item.localKey}
+              </span>
             ) : (
               <span
                 className="tracker-item-key-unassigned text-[10px] text-nim-faint"

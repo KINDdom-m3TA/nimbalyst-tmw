@@ -1,6 +1,6 @@
 import type { TrackerItem } from '@nimbalyst/runtime';
 import { parseFullDocumentTrackerId } from '@nimbalyst/runtime/plugins/TrackerPlugin/documentHeader/frontmatterUtils';
-import { isLocalIssueKey } from '../../../shared/localIssueKey';
+import { isLocalIssueKey, isLocalKeyReference } from '../../../shared/localIssueKey';
 import type { ElectronDocumentService } from '../../services/ElectronDocumentService';
 
 export async function resolveTrackerRowByReference(
@@ -13,6 +13,22 @@ export async function resolveTrackerRowByReference(
   // resolving to whichever historical row happens to carry it.
   if (isLocalIssueKey(reference)) {
     return null;
+  }
+
+  // A dotted local number means something different in every project on the
+  // machine, and this table holds every workspace's rows. Resolving one
+  // without knowing which project is how "have a look at NIM.4" picks the
+  // wrong item -- so it resolves only when the caller names the workspace.
+  if (isLocalKeyReference(reference)) {
+    if (!workspacePath) return null;
+    const localResult = await db.query<any>(
+      `SELECT * FROM tracker_items
+        WHERE local_key = $1 AND workspace = $2
+        ORDER BY updated DESC
+        LIMIT 1`,
+      [reference.trim().toUpperCase(), workspacePath],
+    );
+    return localResult.rows[0] ?? null;
   }
 
   const params: any[] = [reference];

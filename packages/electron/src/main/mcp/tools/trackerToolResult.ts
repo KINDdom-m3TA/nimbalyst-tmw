@@ -78,8 +78,15 @@ export function getAssignedIssueKey(item: { issueKey?: string | null }): string 
   return item.issueKey && !isLocalIssueKey(item.issueKey) ? item.issueKey : undefined;
 }
 
-export function getTrackerDisplayRef(item: { issueKey?: string; id: string }): string {
-  return getAssignedIssueKey(item) ?? item.id;
+/**
+ * The best reference to show an agent for an item.
+ *
+ * A team key first, because it is the only form that means the same thing to
+ * everyone. Then this machine's local number, which at least reads as a number
+ * and resolves in this project. The raw id last.
+ */
+export function getTrackerDisplayRef(item: { issueKey?: string; localKey?: string; id: string }): string {
+  return getAssignedIssueKey(item) ?? item.localKey ?? item.id;
 }
 
 export function issueKeyAvailabilityNote(

@@ -43,6 +43,17 @@ describe('parseIssueKeys', () => {
       { issueKey: 'NIM-42', shouldClose: true },
     ]);
   });
+
+  // Local numbers leak: an agent handed one writes it into the commit message,
+  // which is what a number is for. The dot is what makes that harmless -- a
+  // team prefix is letters only, so `NIM.12` cannot be read as `NIM-12` and
+  // cannot close somebody's item.
+  it('ignores a leaked local number without touching the team key beside it', () => {
+    expect(parseIssueKeys('fix: thing\n\nFixes NIM.12')).toEqual([]);
+    expect(parseIssueKeys('fix login per NIM.12\n\nFixes NIM-212')).toEqual([
+      { issueKey: 'NIM-212', shouldClose: true },
+    ]);
+  });
 });
 
 describe('CommitTrackerLinker', () => {

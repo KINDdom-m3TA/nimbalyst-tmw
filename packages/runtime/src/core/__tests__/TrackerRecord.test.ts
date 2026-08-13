@@ -553,3 +553,40 @@ describe('trackerItemToRecord comments/activity via customFields', () => {
     expect(record.system.activity![0].action).toBe('created');
   });
 });
+
+describe('localKey stays off the wire', () => {
+  /**
+   * `trackerItemToRecord` sweeps every unrecognised property into `fields`, and
+   * `trackerItemToPayload` ships `fields` wholesale to the tracker room. So the
+   * only thing keeping a machine-private number off the wire is `localKey`
+   * being in NON_FIELD_KEYS. Drop it from that list and every local number
+   * silently syncs to teammates, where the same value means a different item.
+   */
+  it('is a top-level record prop, never a field', () => {
+    const record = trackerItemToRecord(makeTrackerItem({ localKey: 'NIM.12' }));
+
+    expect(record.localKey).toBe('NIM.12');
+    expect(record.fields).not.toHaveProperty('localKey');
+  });
+
+  it('survives the record -> item round trip', () => {
+    const item = trackerRecordToItem(trackerItemToRecord(makeTrackerItem({ localKey: 'NIM.12' })));
+
+    expect(item.localKey).toBe('NIM.12');
+  });
+
+  it('reads back from the local_key column', () => {
+    const record = dbRowToRecord({
+      id: 'bug_1',
+      type: 'bug',
+      data: { title: 'x' },
+      workspace: '/ws',
+      local_key: 'NIM.12',
+      issue_key: 'NIM-212',
+    });
+
+    // An item can hold both at once: the team's key and this machine's number.
+    expect(record.localKey).toBe('NIM.12');
+    expect(record.issueKey).toBe('NIM-212');
+  });
+});

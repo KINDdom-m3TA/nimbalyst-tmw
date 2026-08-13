@@ -25,6 +25,16 @@ import type { TrackerDataModel } from './TrackerDataModel';
  */
 export const TRACKER_UNASSIGNED_ISSUE_KEY_MESSAGE = 'This item has no key until it is published.';
 
+/**
+ * The settled wording for this machine's private number. The point it has to
+ * land is that the number is not shareable: the same value on a colleague's
+ * machine is a different item, so pasting it into a commit or a message sends
+ * them somewhere else or nowhere at all.
+ */
+export const TRACKER_LOCAL_ISSUE_KEY_MESSAGE =
+  'This number is private to this project on this machine. It is not a shared key — '
+  + 'do not use it in commit messages or anywhere another person will read it.';
+
 /** Whether a tracker has been retired. Absent means active. */
 export function isTrackerArchived(model: Pick<TrackerDataModel, 'archived'> | null | undefined): boolean {
   return model?.archived === true;
