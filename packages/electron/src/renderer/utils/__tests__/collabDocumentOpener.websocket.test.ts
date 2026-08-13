@@ -5,6 +5,7 @@ vi.mock('../logger', () => ({
 }));
 
 import {
+  appendCollabUrlQuery,
   createProxiedWebSocket,
   getCollabConfig,
   registerCollabConfig,
@@ -114,5 +115,33 @@ describe('createProxiedWebSocket', () => {
 
     expect(closingSocket.readyState).toBe(TestWebSocket.CLOSED);
     expect(closingListener).toHaveBeenCalledOnce();
+  });
+});
+
+describe('appendCollabUrlQuery', () => {
+  const room = 'wss://sync.example.test/room';
+
+  it('carries the identity bridge parameters and joins an existing query', () => {
+    expect(appendCollabUrlQuery(room, 'test_user_id=u-1&test_org_id=o-1'))
+      .toBe(`${room}?test_user_id=u-1&test_org_id=o-1`);
+    expect(appendCollabUrlQuery(`${room}?documentId=d-1`, 'test_user_id=u-1'))
+      .toBe(`${room}?documentId=d-1&test_user_id=u-1`);
+    expect(appendCollabUrlQuery(room, undefined)).toBe(room);
+  });
+
+  it('drops parameters outside the allowlist instead of forwarding them', () => {
+    // The whole point of the allowlist: a config value that picked up extra
+    // parameters must not have them ride along on an authenticated room URL.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(appendCollabUrlQuery(room, 'test_user_id=u-1&jwt=stolen&admin=true'))
+      .toBe(`${room}?test_user_id=u-1`);
+    // Nothing survives the filter, so the URL is left exactly as it was.
+    expect(appendCollabUrlQuery(room, 'jwt=stolen')).toBe(room);
+  });
+
+  it('re-encodes values rather than trusting the caller to have done it', () => {
+    expect(appendCollabUrlQuery(room, `test_user_id=${encodeURIComponent('a b&c=d')}`))
+      .toBe(`${room}?test_user_id=a+b%26c%3Dd`);
   });
 });

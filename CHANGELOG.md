@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 <!-- Changes to existing functionality go here -->
 - Mockup project files can no longer be shared to a team, since their screens do not yet sync between people.
+- Opening an editor no longer fetches a font from a third-party server.
 
 ### Fixed
 <!-- Bug fixes go here -->

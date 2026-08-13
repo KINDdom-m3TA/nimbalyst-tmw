@@ -858,6 +858,12 @@ The web console is the second codec host named above. It runs a single browser t
 
 **Bundle resolution is pinned, not dynamic, today.** The console loads one extension bundle, chosen and built into the console at console-build time rather than fetched from the marketplace registry at runtime. There is no mechanism yet for an extension to register itself into the browser host by publishing a version, and how that will work once more than one extension ships to the console is not decided.
 
+**The capability table is an API contract, not a sandbox — and that is load-bearing for the previous paragraph.** A browser bundle is imported into the console's own realm: one `window`, one origin, one module graph, shared with the code that holds the team JWT. Nothing in `browserEditorCapabilities.ts` prevents bundle code from calling `fetch`, reading `localStorage`, or reaching that JWT through a closure. `supports()` answering `false` means "the host will not do this for you", never "you cannot do this". The same goes for the manifest permission block: `permissions.filesystem` is answered `declared: true, granted: false` because a browser tab has no disk, not because the host is confining anyone. `ai` and `network` are not in the browser's narrowed permission type at all — a browser host cannot mediate either, and declaring a field nothing enforces reads as a gate that does not exist.
+
+This is safe today for a reason that lives outside the capability table: the one bundle the console loads is first-party, pinned at build time from a workspace package, and shipped by the console's own production build — which refuses dirty `file:` dependencies and records source provenance. The bundle is exactly as trusted as the console.
+
+**So the isolation boundary is a precondition on dynamic resolution, not a follow-up to it.** Before the console loads a bundle it did not build — a marketplace fetch, a publisher-supplied URL, a version named by the server or influenced by a document — the extension needs to run behind a real boundary: an iframe or Worker, with the Y.Doc and the `EditorHost` reached over `postMessage`. Widening `EditorHostCapability`, or adding permission fields, does not approximate this and should not be mistaken for progress toward it.
+
 ### yJS as a peer dependency
 
 Extensions declare `yjs` and `y-protocols` as `peerDependencies` (the host externalizes both at runtime so there is exactly one yjs instance — the same constraint as React). The extension's `vite.config.ts` must add both to `rollupOptions.external`:

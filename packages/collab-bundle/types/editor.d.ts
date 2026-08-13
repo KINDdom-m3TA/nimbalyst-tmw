@@ -441,11 +441,15 @@ export declare class BrowserEditorCapabilityError extends Error {
   constructor(capability: EditorHostCapability, reason: string);
 }
 
-/** The manifest permission block, narrowed to what a browser host can answer. */
+/**
+ * The manifest permission block, narrowed to what a browser host actually
+ * answers. `ai` and `network` are deliberately absent: a browser host shares
+ * its realm with the bundle and can enforce neither, so declaring them would
+ * read as a gate that does not exist. The capability table is an API contract,
+ * not a sandbox -- see `src/editor/browserEditorCapabilities.ts`.
+ */
 export interface BrowserExtensionPermissions {
   filesystem?: boolean;
-  ai?: boolean;
-  network?: boolean;
 }
 
 export interface BrowserPermissionOutcome {

@@ -477,17 +477,14 @@ const EditorMode = forwardRef<EditorModeRef, EditorModeProps>(function EditorMod
         );
       }
       const cfg = testResult.config;
-      const { openCollabDocument, createProxiedWebSocket } = await import(
+      const { openCollabDocument, createProxiedWebSocket, appendCollabUrlQuery } = await import(
         '../../utils/collabDocumentOpener'
       );
       const hasWsProxy = !!(window as any).electronAPI?.documentSync?.wsConnect;
       const createWebSocket = hasWsProxy
-        ? (url: string) => {
-            const target = params.urlExtraQuery
-              ? `${url}${url.includes('?') ? '&' : '?'}${params.urlExtraQuery}`
-              : url;
-            return createProxiedWebSocket(target);
-          }
+        ? (url: string) => createProxiedWebSocket(
+            appendCollabUrlQuery(url, params.urlExtraQuery),
+          )
         : undefined;
 
       const tabId = openCollabDocument({
@@ -547,17 +544,14 @@ const EditorMode = forwardRef<EditorModeRef, EditorModeProps>(function EditorMod
         );
       }
       const cfg = testResult.config;
-      const { registerCollabConfig, createProxiedWebSocket } = await import(
+      const { registerCollabConfig, createProxiedWebSocket, appendCollabUrlQuery } = await import(
         '../../utils/collabDocumentOpener'
       );
       const hasWsProxy = !!(window as any).electronAPI?.documentSync?.wsConnect;
       const createWebSocket = hasWsProxy
-        ? (url: string) => {
-            const target = params.urlExtraQuery
-              ? `${url}${url.includes('?') ? '&' : '?'}${params.urlExtraQuery}`
-              : url;
-            return createProxiedWebSocket(target);
-          }
+        ? (url: string) => createProxiedWebSocket(
+            appendCollabUrlQuery(url, params.urlExtraQuery),
+          )
         : undefined;
       return registerCollabConfig({
         scope: {

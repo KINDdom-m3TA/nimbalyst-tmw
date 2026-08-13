@@ -17,6 +17,31 @@
  *    document had been written to a file that does not exist, and the editor
  *    would clear its dirty state on the strength of it. It rejects with
  *    {@link BrowserEditorCapabilityError} instead.
+ *
+ * ---
+ *
+ * **THIS TABLE IS AN API CONTRACT, NOT A SECURITY BOUNDARY.**
+ *
+ * Read that before adding anything here that sounds like a permission. An
+ * extension bundle is imported into the embedding page's own realm: it shares
+ * one `window`, one module graph and one origin with the console. Nothing in
+ * this file can stop bundle code from calling `fetch`, reading `localStorage`,
+ * or reaching the team JWT through a closure it can see. `supports()` answering
+ * `false` means "the host will not do this for you"; it has never meant "you
+ * cannot do this".
+ *
+ * That is acceptable today for exactly one reason, and it is not a property of
+ * this code: the console loads a single first-party bundle, pinned at build
+ * time from a workspace package, with the production build refusing dirty
+ * `file:` inputs and recording source provenance. The bundle is as trusted as
+ * the console itself because it *is* shipped by the console's own build.
+ *
+ * So: **before the browser host loads a bundle it did not build -- a
+ * marketplace fetch, a user-supplied URL, a third-party publisher -- it needs a
+ * real isolation boundary first** (an iframe or Worker, with the Y.Doc and this
+ * host reached over `postMessage`). Widening `EditorHostCapability` or the
+ * permission block below is not a substitute and will not get you one. See the
+ * "Browser codec hosts" section of `docs/EXTENSION_ARCHITECTURE.md`.
  */
 
 import type {
@@ -215,11 +240,22 @@ export function browserEditorCapabilityReason(
 // Manifest permissions
 // ---------------------------------------------------------------------------
 
-/** The manifest permission block, narrowed to what a browser host can answer. */
+/**
+ * The manifest permission block, narrowed to what a browser host actually
+ * answers -- which is one field.
+ *
+ * The manifest also carries `ai` and `network`. They are deliberately absent
+ * here rather than declared-and-ignored: this host consults neither, and a
+ * browser host could not enforce either one if it wanted to, because extension
+ * code shares the page's realm and reaches `fetch` directly (see the module
+ * header). Declaring them would read as a gate that does not exist.
+ *
+ * If a future host can genuinely mediate one of them -- an iframe-isolated
+ * bundle whose network egress goes through the parent -- add the field back
+ * together with the code that enforces it, not before.
+ */
 export interface BrowserExtensionPermissions {
   filesystem?: boolean;
-  ai?: boolean;
-  network?: boolean;
 }
 
 export interface BrowserPermissionOutcome {
@@ -252,6 +288,12 @@ export interface BrowserPermissionOutcome {
  * What must NOT happen is a quiet grant. The gap is recorded, `supports()`
  * answers false, and the members reject -- so an extension that does reach for
  * disk finds out immediately instead of writing into a void.
+ *
+ * "Granted" here describes what this host offers, not what the bundle is
+ * confined to. There is no disk in a browser tab, so `granted: false` costs an
+ * attacker nothing and denies a well-behaved extension a real service; it is
+ * the honest answer to a manifest question, not an enforced sandbox. The
+ * module header says why that distinction matters.
  */
 export function resolveBrowserFilesystemPermission(
   permissions: BrowserExtensionPermissions | undefined,

@@ -231,7 +231,7 @@ export function openCollabDocument(options: CollabDocumentConfig & {
 
 // Re-exported for existing callers; the implementation lives in its own module
 // so collab providers can use it without importing this file (import cycle).
-export { createProxiedWebSocket };
+export { appendCollabUrlQuery, createProxiedWebSocket };
 
 /**
  * Resolve a collab config from the main process and populate the registry.
