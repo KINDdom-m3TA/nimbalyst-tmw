@@ -261,17 +261,42 @@ function checkPublicJwtTypeBoundary() {
   }
 }
 
+/**
+ * Comments are stripped before scanning: these declaration files document the
+ * public API, and documenting the recommended `@nimbalyst/runtime` import means
+ * writing that import in an example. A raw source scan reads the example as a
+ * real one and fails on a tree that has no leak at all, which is worse than
+ * useless — it makes the check unpassable, so every push has to skip the hook
+ * and the check stops guarding anything.
+ *
+ * Strings are preserved, so a genuine `from '@nimbalyst/runtime'` is still
+ * caught wherever it appears in code.
+ */
+export function stripComments(source) {
+  // Replace with a space rather than nothing: `from/**/'@nimbalyst/runtime'`
+  // must not be spliced into a token that no longer matches.
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\n]*/g, ' ');
+}
+
+export function findPublicTypeLeaks(declarationFiles, readFile) {
+  return declarationFiles.flatMap((fileName) => Array.from(
+    stripComments(readFile(fileName)).matchAll(
+      /(?:from\s+|import\s*\()(['"])(@nimbalyst\/(?:collab-client|runtime)(?:\/[^'"]*)?)\1/g,
+    ),
+    (match) => `${fileName}: ${match[2]}`,
+  ));
+}
+
 function checkSelfContainedPublicTypes() {
   const typesRoot = path.join(packageRoot, 'types');
   const declarationFiles = fs.readdirSync(typesRoot, { recursive: true })
     .filter((fileName) => fileName.endsWith('.d.ts'));
-  const leaks = declarationFiles.flatMap((fileName) => {
-    const source = fs.readFileSync(path.join(typesRoot, fileName), 'utf8');
-    return Array.from(
-      source.matchAll(/(?:from\s+|import\s*\()(['"])(@nimbalyst\/(?:collab-client|runtime)(?:\/[^'\"]*)?)\1/g),
-      (match) => `${fileName}: ${match[2]}`,
-    );
-  });
+  const leaks = findPublicTypeLeaks(
+    declarationFiles,
+    (fileName) => fs.readFileSync(path.join(typesRoot, fileName), 'utf8'),
+  );
   if (leaks.length > 0) {
     throw new Error(
       'public declarations leak private workspace package boundaries:\n'
