@@ -389,4 +389,55 @@ describe("claudeApiProxy", () => {
     expect(res.status).toBe(400);
     expect(res.body).toContain("invalid_request_error");
   });
+
+  it("does not observe a /v1/messages body it cannot parse", async () => {
+    // The classifier has to read the body to recognise a side request, so a body
+    // it cannot parse is a body it cannot clear. Failing open would observe the
+    // one request we know least about; the filter is only worth having if an
+    // unreadable body is treated as unobservable.
+    upstream = await startFakeUpstream();
+
+    const sseEvents: SSEEvent[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    proxy = await startClaudeApiProxy(
+      {
+        onSSEEvent: (event) => sseEvents.push(event),
+        onRequestBody: (body) => bodies.push(body),
+        onProxyError: (err) => { throw err; },
+      },
+      { upstreamUrl: upstream.url },
+    );
+
+    const res = await postToProxy(proxy.port, "{not json at all", {});
+
+    expect(bodies).toEqual([]);
+    expect(sseEvents).toEqual([]);
+    // Passthrough is unconditional here too: we decline to interpret the body,
+    // we do not decline to forward it.
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('"type":"message_stop"');
+  });
+
+  it("does not surface an upstream error for a /v1/messages body it cannot parse", async () => {
+    // Same reasoning as the fork's 400s: a request we never observed must not
+    // render its failures as the user's turn failing.
+    const errorBody = JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "nope" } });
+    upstream = await startFakeErrorUpstream(400, errorBody);
+
+    const errors: Array<{ statusCode: number }> = [];
+    proxy = await startClaudeApiProxy(
+      {
+        onSSEEvent: () => {},
+        onUpstreamError: (info) => errors.push(info),
+        onProxyError: (err) => { throw err; },
+      },
+      { upstreamUrl: upstream.url },
+    );
+
+    const res = await postToProxy(proxy.port, "{not json at all", {});
+
+    expect(errors).toEqual([]);
+    expect(res.status).toBe(400);
+    expect(res.body).toContain("invalid_request_error");
+  });
 });

@@ -147,7 +147,12 @@ export function createClaudeApiProxy(
           // otherwise indistinguishable from the observation layer being broken.
           else console.log(`[ClaudeApiProxy] CLI side request, not observed: ${requestId}`);
         } catch {
-          // Non-JSON body — forward it untouched; just don't observe.
+          // Non-JSON body — forward it untouched; just don't observe. Recognising
+          // a side request means reading its body, so a body we cannot parse is
+          // one we cannot clear: fail closed, or the request we understand least
+          // is the one we tee into the transcript as a genuine turn.
+          observe = false;
+          info.observe = false;
         }
       }
 
