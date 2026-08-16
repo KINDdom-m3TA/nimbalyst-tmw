@@ -323,4 +323,70 @@ describe("claudeApiProxy", () => {
     expect(errors[0].retryAfter).toBe("42");
     expect(errors[0].body).toContain("rate_limit_error");
   });
+
+  it("neither observes nor tees a side request the filter rejects", async () => {
+    // The CLI's prompt-suggestion fork rides the same connection. Teeing it would
+    // persist a predicted *user* prompt as an assistant turn.
+    upstream = await startFakeUpstream();
+
+    const sseEvents: SSEEvent[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    proxy = await startClaudeApiProxy(
+      {
+        onSSEEvent: (event) => sseEvents.push(event),
+        onRequestBody: (body) => bodies.push(body),
+        onProxyError: (err) => { throw err; },
+      },
+      { upstreamUrl: upstream.url },
+    );
+
+    const res = await postToProxy(
+      proxy.port,
+      JSON.stringify({
+        model: "claude-x",
+        messages: [
+          { role: "user", content: "hi" },
+          { role: "assistant", content: [{ type: "text", text: "hello" }] },
+          { role: "user", content: "[SUGGESTION MODE: Suggest what the user might naturally type next]" },
+        ],
+      }),
+      {},
+    );
+
+    expect(bodies).toEqual([]);
+    expect(sseEvents).toEqual([]);
+    // Passthrough is unconditional — the CLI still gets its suggestion.
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('"type":"message_stop"');
+  });
+
+  it("suppresses onUpstreamError for an unobserved side request, and still forwards the error body", async () => {
+    // The fork's own 400s are not the user's turn failing, so they must not
+    // render as a failed turn — but the bytes still have to reach the CLI.
+    const errorBody = JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "nope" } });
+    upstream = await startFakeErrorUpstream(400, errorBody);
+
+    const errors: Array<{ statusCode: number }> = [];
+    proxy = await startClaudeApiProxy(
+      {
+        onSSEEvent: () => {},
+        onUpstreamError: (info) => errors.push(info),
+        onProxyError: (err) => { throw err; },
+      },
+      { upstreamUrl: upstream.url },
+    );
+
+    const res = await postToProxy(
+      proxy.port,
+      JSON.stringify({
+        model: "claude-x",
+        messages: [{ role: "user", content: "[SUGGESTION MODE: predict the next prompt]" }],
+      }),
+      {},
+    );
+
+    expect(errors).toEqual([]);
+    expect(res.status).toBe(400);
+    expect(res.body).toContain("invalid_request_error");
+  });
 });
