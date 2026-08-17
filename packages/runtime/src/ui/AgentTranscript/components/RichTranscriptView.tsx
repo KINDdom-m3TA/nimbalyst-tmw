@@ -548,10 +548,11 @@ const defaultSettings: TranscriptSettings = {
 // 'applypatch'/'apply_patch' covers Codex ACP's apply_patch tool, which
 // emits its diff via a `changes: { [path]: { type, unified_diff } }` shape
 // (parsed in extractEditsFromToolMessage).
-// OpenAI Codex SDK's `file_change` tool is NOT in this set -- the raw
-// item.completed payload has no diff content, so its dispatch goes through
-// the main-process transcript enrichment path, which resolves fileDiffs before
-// the renderer sees the transcript row.
+// Codex app-server's `file_change` is NOT in this set -- its `changes` is an
+// array of `{path, kind, diff}` rather than the {old_string,new_string}/
+// {content} shapes extractEditsFromToolMessage understands, so it routes
+// through extractCodexFileChanges in renderToolCard instead. (#1191: it used
+// to depend on main-side fileDiffs enrichment, which lazy diff loading removed.)
 const EDIT_TOOL_NAMES = new Set([
   'edit', 'write', 'multi-edit', 'multiedit', 'multi_edit',
   'applypatch', 'apply_patch',
@@ -871,6 +872,66 @@ const extractApplyPatchChanges = (changes: unknown): any[] => {
   }
   return out;
 };
+
+/**
+ * Detect the Codex app-server `file_change` shape -- an ARRAY of
+ * `{ path, kind: 'add'|'update'|'delete', move_path?: string|null, diff: string }`
+ * (see CodexAppServerRawParser.parseFileChangeItem). The `diff` field's meaning
+ * depends on `kind`, per providers/codex/patchReverse.ts:
+ *
+ *   add    -> raw post-edit file content (NOT a unified diff)
+ *   update -> one or more standard unified-diff hunks
+ *   delete -> the removed content, formatted as `-` lines
+ *
+ * Rendering straight off these arguments keeps Codex edits on the red/green
+ * EditToolResultCard without touching the lazy history-diff machinery: the
+ * patch text is already in the persisted tool call, so no snapshot reads and
+ * no diff computation are needed.
+ *
+ * The legacy `@openai/codex-sdk` transport passes the SDK's `changes` through
+ * verbatim and those entries carry no `diff`, so they yield no edits here and
+ * fall through to the generic tool card.
+ */
+export const extractCodexFileChanges = (changes: unknown): any[] => {
+  if (!Array.isArray(changes)) return [];
+  const out: any[] = [];
+  for (const raw of changes) {
+    if (!raw || typeof raw !== 'object') continue;
+    const entry = raw as Record<string, unknown>;
+    const filePath = typeof entry.path === 'string' ? entry.path : undefined;
+    const diff = typeof entry.diff === 'string' ? entry.diff : undefined;
+    if (!filePath || !diff) continue;
+    const kind = typeof entry.kind === 'string' ? entry.kind : 'update';
+
+    if (kind === 'add') {
+      out.push({ filePath, type: 'add', operation: 'create', content: diff });
+      continue;
+    }
+
+    if (kind === 'delete') {
+      out.push({
+        filePath,
+        type: 'delete',
+        operation: 'delete',
+        old_string: stripLeadingDiffMarkers(diff),
+        new_string: '',
+      });
+      continue;
+    }
+
+    const replacements = parseUnifiedDiffToReplacements(diff);
+    if (replacements.length === 0) continue;
+    out.push({ filePath, type: 'update', operation: 'edit', replacements });
+  }
+  return out;
+};
+
+/** Strip the leading `-` from each line of a Codex delete diff. */
+const stripLeadingDiffMarkers = (diff: string): string =>
+  diff
+    .split('\n')
+    .map((line) => (line.startsWith('-') ? line.slice(1) : line))
+    .join('\n');
 
 /**
  * Map resolved `ToolCallDiffResult[]` into the edit-record shape
@@ -1728,8 +1789,13 @@ export const RichTranscriptView = React.forwardRef<
       );
     }
 
-    const editTool = isEditToolName(tool.toolName);
-    const editEntries = editTool ? extractEditsFromToolMessage(toolMsg) : [];
+    // Codex `file_change` carries its patch text in the tool arguments, so it
+    // renders as a red/green diff without any main-side enrichment.
+    const isCodexFileChange = tool.toolName === 'file_change';
+    const editTool = isEditToolName(tool.toolName) || isCodexFileChange;
+    const editEntries = isCodexFileChange
+      ? extractCodexFileChanges((tool.arguments as Record<string, any> | undefined)?.changes)
+      : editTool ? extractEditsFromToolMessage(toolMsg) : [];
     const toolDisplayName = formatToolDisplayName(tool.toolName || '') || tool.toolName || 'Tool';
 
     if (editTool && editEntries.length > 0) {

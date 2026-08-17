@@ -182,9 +182,9 @@ const BUILT_IN_TOOL_WIDGETS: CustomToolWidgetRegistry = {
   // Tool permission - interactive permission widget for tools requiring approval
   'ToolPermission': ToolPermissionWidget,
 
-  // Note: Codex `file_change` is intentionally NOT registered here. It is handled by
-  // EditToolResultCard via the EDIT_TOOL_NAMES path in RichTranscriptView so it renders
-  // as an inline red/green diff instead of the older snapshot-only widget.
+  // Note: Codex `file_change` is intentionally NOT registered here. RichTranscriptView
+  // routes it to EditToolResultCard via extractCodexFileChanges so it renders as an
+  // inline red/green diff instead of the older snapshot-only widget.
 
   // Super Loop progress snapshot - shows progress.json at iteration start/end
   'SuperProgressSnapshot': SuperProgressSnapshotWidget,
