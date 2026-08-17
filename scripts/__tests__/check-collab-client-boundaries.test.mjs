@@ -32,7 +32,14 @@ test('current core and docs entry graphs satisfy the boundary', () => {
   const result = spawnSync(process.execPath, [scriptPath], { encoding: 'utf8' });
 
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.match(result.stdout, /core\/docs graph clean/);
+  // The label lists every headless export, so it grows as new domains are added.
+  const summary = result.stdout.match(
+    /^\[collab-client-boundaries\] (\S+) graph clean \(\d+ modules\)\.$/m,
+  );
+  assert.ok(summary, `unexpected summary line: ${result.stdout}`);
+  const checkedEntries = summary[1].split('/');
+  assert.ok(checkedEntries.includes('core'), summary[1]);
+  assert.ok(checkedEntries.includes('docs'), summary[1]);
 });
 
 test('derives future headless domains from package exports and excludes UI entries', () => {
