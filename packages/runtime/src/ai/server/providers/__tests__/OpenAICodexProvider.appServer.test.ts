@@ -236,3 +236,54 @@ describe('OpenAICodexProvider MCP startup status', () => {
     expect(emitted).toHaveLength(0);
   });
 });
+
+// Phase 4 -- the declared capability contract.
+//
+// #1251-#1254 all shared one root cause: capabilities were optional
+// duck-typed methods, so "this provider never implemented it" and "this
+// provider has none right now" were the same observable -- an empty array.
+// Codex is the case that proves the two apart: it declares slash commands
+// UNSUPPORTED (nothing in the app-server interprets them, so
+// KNOWN_SLASH_COMMANDS is deliberately empty) while declaring skills
+// SUPPORTED, whose list is legitimately empty until the transport answers
+// skills/list.
+describe('OpenAICodexProvider declared capabilities', () => {
+  const mockProtocol = (extra: Record<string, unknown> = {}) => ({
+    platform: 'mock',
+    createSession: vi.fn() as never,
+    resumeSession: vi.fn() as never,
+    forkSession: vi.fn() as never,
+    sendMessage: () => (async function* () {})() as never,
+    abortSession: vi.fn() as never,
+    cleanupSession: vi.fn() as never,
+    ...extra,
+  });
+
+  beforeEach(() => {
+    BaseAgentProvider.setTrustChecker({ shouldBypassPermissions: () => false } as never);
+    BaseAgentProvider.setPermissionPatternSaver({ savePattern: vi.fn() } as never);
+    BaseAgentProvider.setPermissionPatternChecker({ checkPattern: () => null } as never);
+  });
+
+  it('reports unsupported slash commands and supported-but-empty skills distinctly', () => {
+    const provider = new OpenAICodexProvider({}, { transport: 'sdk', protocol: mockProtocol() as never });
+    const capabilities = provider.getAgentCapabilities();
+
+    // Both accessors return [] -- only the declaration tells them apart.
+    expect(provider.getSlashCommands()).toEqual([]);
+    expect(provider.getSkills()).toEqual([]);
+    expect(capabilities.slashCommands).toBe(false);
+    expect(capabilities.skills).toBe(true);
+  });
+
+  it('narrows compaction to the live transport rather than the provider type', () => {
+    const noCompact = new OpenAICodexProvider({}, { transport: 'sdk', protocol: mockProtocol() as never });
+    const withCompact = new OpenAICodexProvider({}, {
+      transport: 'sdk',
+      protocol: mockProtocol({ compactSession: vi.fn() }) as never,
+    });
+
+    expect(noCompact.getAgentCapabilities().compaction).toBe('unsupported');
+    expect(withCompact.getAgentCapabilities().compaction).toBe('rpc');
+  });
+});

@@ -31,6 +31,7 @@ import { parse as parseShellCommand } from 'shell-quote';
 
 import { BaseAgentProvider } from './BaseAgentProvider';
 import {
+  AIProviderType,
   DocumentContext,
   ProviderConfig,
   ProviderCapabilities,
@@ -446,7 +447,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
     return JSON.parse(snapshotJson) as Record<string, any>;
   }
 
-  getProviderName(): string {
+  getProviderName(): AIProviderType {
     return 'claude-code';
   }
 

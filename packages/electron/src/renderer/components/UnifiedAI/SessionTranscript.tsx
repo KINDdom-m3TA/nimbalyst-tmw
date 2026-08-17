@@ -18,6 +18,7 @@ import React, { useCallback, useRef, useImperativeHandle, forwardRef, useEffect,
 import { useAtom, useSetAtom, useAtomValue } from 'jotai';
 import { store, registerInteractiveWidgetHost, unregisterInteractiveWidgetHost } from '@nimbalyst/runtime/store';
 import type { SessionData, ChatAttachment, TranscriptViewMessage } from '@nimbalyst/runtime/ai/server/types';
+import { agentCapabilitiesForProviderType } from '@nimbalyst/runtime/ai/server/agentCapabilities';
 import type { ToolCallDiffLoadResult } from '@nimbalyst/runtime/ai/server/transcript';
 import { AgentTranscriptPanel } from '@nimbalyst/runtime/ui/AgentTranscript/components/AgentTranscriptPanel';
 import { ClaudeCliTerminalStrip } from './ClaudeCliTerminalStrip';
@@ -444,6 +445,9 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
   // ============================================================
   const messages = useAtomValue(sessionMessagesAtom(sessionId));
   const provider = useAtomValue(sessionProviderAtom(sessionId));
+  // Declared, not guessed: 'unsupported' hides the Compact affordance instead
+  // of offering a button that silently does nothing (#1252).
+  const compactionSupport = agentCapabilitiesForProviderType(provider).compaction;
   const tokenUsage = useAtomValue(sessionTokenUsageAtom(sessionId));
   const isDataLoading = useAtomValue(sessionLoadingAtom(sessionId));
   const chatShowToolCalls = useAtomValue(chatShowToolCallsAtom);
@@ -1435,22 +1439,26 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
   const handleCompact = useCallback(async () => {
     if (!sessionData) return;
 
-    // #1252: Codex has a real compaction RPC. Sending "/compact" as a user turn
-    // reaches its model as literal prompt text and does nothing, so the button
-    // used to look like it worked while the context kept growing.
-    if (provider === 'openai-codex') {
+    // Phase 4: the provider's declared capability chooses the mechanism. This
+    // used to read `provider === 'openai-codex'`, which is fine until the next
+    // provider grows a compaction RPC and nobody remembers this line exists.
+    if (compactionSupport === 'rpc') {
       try {
         const result = await window.electronAPI.invoke('ai:compactSession', sessionId) as
           { success: boolean; error?: string };
         if (!result?.success) {
-          console.error('[SessionTranscript] Codex compaction failed:', result?.error);
+          console.error('[SessionTranscript] Compaction failed:', result?.error);
         }
       } catch (error) {
-        console.error('[SessionTranscript] Codex compaction failed:', error);
+        console.error('[SessionTranscript] Compaction failed:', error);
       }
       return;
     }
 
+    // #1252: sending "/compact" as a user turn only compacts anything when the
+    // agent itself interprets slash commands. For every other provider it
+    // reaches the model as literal prompt text and does nothing, which is why
+    // the affordance is hidden entirely rather than offered as a no-op.
     const message = '/compact';
     const userMessage = makeOptimisticUserMessage(
       message,
@@ -1476,7 +1484,7 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
     } catch (error) {
       console.error('[SessionTranscript] Failed to send /compact command:', error);
     }
-  }, [sessionId, sessionData, messages, getEffectiveDocumentContext, aiMode, workspacePath, updateSessionStore, provider]);
+  }, [sessionId, sessionData, messages, getEffectiveDocumentContext, aiMode, workspacePath, updateSessionStore, compactionSupport]);
 
   const handleTodoClick = useCallback((todo: TodoItem) => {
     onTodoClick?.(todo);
@@ -2501,7 +2509,7 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
             onGroupByDirectoryChange={setGroupByDirectory}
             onOpenInExternalEditor={hasExternalEditor ? handleOpenInExternalEditor : undefined}
             externalEditorName={externalEditorName}
-            onCompact={handleCompact}
+            onCompact={compactionSupport === 'unsupported' ? undefined : handleCompact}
             promptAdditions={showPromptAdditions ? promptAdditions : null}
             currentTeammates={transcriptTeammates}
             waitingForNoun={waitingForNoun}

@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mockup project files can no longer be shared to a team, since their screens do not yet sync between people.
 - Opening an editor no longer fetches a font from a third-party server.
 - Codex no longer offers slash commands it cannot actually run.
+- The Compact action is now hidden for agents that cannot compact, instead of offering a button that quietly does nothing.
 
 ### Fixed
 <!-- Bug fixes go here -->

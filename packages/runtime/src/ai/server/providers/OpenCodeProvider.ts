@@ -112,7 +112,7 @@ export class OpenCodeProvider extends BaseAgentProvider {
     this.config = config;
   }
 
-  getProviderName(): string {
+  getProviderName(): AIProviderType {
     return 'opencode';
   }
 

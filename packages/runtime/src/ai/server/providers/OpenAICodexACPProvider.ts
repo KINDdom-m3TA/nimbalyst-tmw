@@ -137,7 +137,7 @@ export class OpenAICodexACPProvider extends BaseAgentProvider {
     });
   }
 
-  getProviderName(): string {
+  getProviderName(): AIProviderType {
     return 'openai-codex-acp';
   }
 

@@ -136,6 +136,33 @@ export interface AiAgentProviderContribution {
    */
   supportsAttachments?: boolean;
 
+  /**
+   * Whether the provider can enumerate slash commands it will genuinely
+   * service. Defaults to `false`.
+   *
+   * These three default to "no" on purpose. An extension that says nothing
+   * gets the affordance hidden, not offered-and-silently-broken: a command the
+   * agent never interprets reaches its model as literal prompt text and does
+   * nothing, which the user cannot tell apart from "ran and did nothing".
+   */
+  supportsSlashCommands?: boolean;
+
+  /**
+   * Whether the provider can enumerate skills it can resolve.
+   * Defaults to `false`.
+   */
+  supportsSkills?: boolean;
+
+  /**
+   * How the provider compacts a session's context, if at all.
+   *
+   * - `'rpc'`: the backend module implements `AgentProtocol.compactSession`.
+   * - `'slash-command'`: the agent itself interprets a `/compact` user turn.
+   *
+   * Defaults to `'unsupported'`.
+   */
+  compaction?: 'rpc' | 'slash-command' | 'unsupported';
+
   /** How model discovery is performed. */
   modelDiscovery: AiAgentProviderModelDiscovery;
 

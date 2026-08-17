@@ -16,6 +16,7 @@ import {
   ModelIdentifier,
   ChatAttachment,
 } from '../types';
+import { AgentCapabilities, BUILTIN_AGENT_CAPABILITIES } from '../agentCapabilities';
 import { CodexSDKProtocol } from '../protocols/CodexSDKProtocol';
 import { CodexAppServerProtocol, type CodexAppServerHostBindings } from '../protocols/CodexAppServerProtocol';
 import { AgentProtocol, ProtocolEvent, ProtocolSession } from '../protocols/ProtocolInterface';
@@ -397,7 +398,7 @@ export class OpenAICodexProvider extends BaseAgentProvider {
     });
   }
 
-  getProviderName(): string {
+  getProviderName(): AIProviderType {
     return 'openai-codex';
   }
 
@@ -2791,6 +2792,18 @@ export class OpenAICodexProvider extends BaseAgentProvider {
   /** Whether this provider's active transport can compact in-place. */
   supportsCompaction(): boolean {
     return typeof this.protocol.compactSession === 'function';
+  }
+
+  /**
+   * Narrows the provider-type declaration to the transport actually running:
+   * `thread/compact/start` exists on the app-server, not on the legacy SDK
+   * path, and this provider can be constructed with either.
+   */
+  getAgentCapabilities(): AgentCapabilities {
+    return {
+      ...BUILTIN_AGENT_CAPABILITIES['openai-codex'],
+      compaction: this.supportsCompaction() ? 'rpc' : 'unsupported',
+    };
   }
 
   handleAppServerMcpStatus(event: ProtocolEvent, sessionId: string | undefined): void {

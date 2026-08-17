@@ -19,7 +19,6 @@ import {
   AIProvider,
   isAskUserQuestionProvider,
   isAgentProvider,
-  isSlashCommandCatalogProvider,
   ClaudeCodeProvider,
   OpenAICodexProvider,
 } from '@nimbalyst/runtime/ai/server';
@@ -44,6 +43,7 @@ import {
   type AIModel,
   type SessionData,
   type SessionType,
+  AI_PROVIDER_TYPES,
 } from '@nimbalyst/runtime/ai/server/types';
 // MCP imports removed - no longer using MCP HTTP server
 import { ToolExecutor, toolRegistry, BUILT_IN_TOOLS } from './tools';
@@ -145,7 +145,10 @@ import { onWorkspaceWindowAvailable } from '../../window/workspaceWindowAvailabi
 import { dispatchQueuedPromptToClaudeCli } from './claudeCliQueueDispatch';
 import { publishQueuedPromptClaim } from './queuedPromptClaimEvents';
 import { ensureClaudeCliSession, claudeCliSessionSupportsPlugins } from './claudeCliLauncherSingleton';
-import { supportsWorkspaceSlashWorkflowProvider } from '../../../shared/agentWorkflowProviders';
+import {
+  resolveProviderWorkflowCatalog,
+  type ProviderWorkflowCatalog,
+} from './providerWorkflowCatalog';
 import { captureTutorialMilestone } from '../tutorial/tutorialAnalytics';
 
 const execFileAsync = promisify(execFile);
@@ -1631,58 +1634,38 @@ export class AIService {
   private getProviderWorkflowCatalog(request: {
     sessionId?: string;
     provider?: string | null;
-  }): { commands: string[]; skills: string[] } {
+  }): ProviderWorkflowCatalog {
+    // Absent an explicit provider, probe the agent providers for a live
+    // instance on this session; the first one that exists tells us the type.
     const providerCandidates = request.provider
       ? [request.provider]
       : ['claude-code', 'openai-codex', 'openai-codex-acp', 'opencode'];
 
-    let provider: AIProvider | undefined;
-    for (const providerType of providerCandidates) {
-      if (!request.sessionId) {
-        break;
-      }
-
-      provider = ProviderFactory.getProvider(providerType as AIProviderType, request.sessionId) ?? undefined;
-      if (provider) {
-        break;
-      }
-    }
-
-    if (isSlashCommandCatalogProvider(provider)) {
-      const commands = typeof provider.getSlashCommands === 'function'
-        ? provider.getSlashCommands()
-        : [];
-      const skills = typeof provider.getSkills === 'function'
-        ? provider.getSkills()
-        : [];
-
-      if (commands.length > 0 || skills.length > 0) {
-        return { commands, skills };
+    let instance: AIProvider | undefined;
+    let resolvedType: string | null = request.provider ?? null;
+    if (request.sessionId) {
+      for (const providerType of providerCandidates) {
+        instance = ProviderFactory.getProvider(providerType as AIProviderType, request.sessionId) ?? undefined;
+        if (instance) {
+          resolvedType = providerType;
+          break;
+        }
       }
     }
+    // Callers that name no provider are asking about the default one.
+    const effectiveType = resolvedType ?? 'claude-code';
 
-    if (request.provider === 'claude-code' || !request.provider) {
-      return {
-        commands: ClaudeCodeProvider.getCachedSdkSlashCommands(),
-        skills: ClaudeCodeProvider.getCachedSdkSkills(),
-      };
-    }
-
-    if (request.provider === 'openai-codex' || request.provider === 'openai-codex-acp') {
-      // Skills are session-scoped (they come from the live transport's
-      // skills/list), so there is nothing to report without a provider
-      // instance. The branch above returns the real list once one exists.
-      return {
-        commands: OpenAICodexProvider.getKnownSlashCommands(),
-        skills: [],
-      };
-    }
-
-    if (supportsWorkspaceSlashWorkflowProvider(request.provider)) {
-      return { commands: [], skills: [] };
-    }
-
-    return { commands: [], skills: [] };
+    return resolveProviderWorkflowCatalog(effectiveType, {
+      instance,
+      // claude-code learns its catalog from the SDK init payload, so it is the
+      // only provider with anything to say before a session exists.
+      cachedCatalog: effectiveType === 'claude-code'
+        ? () => ({
+            commands: ClaudeCodeProvider.getCachedSdkSlashCommands(),
+            skills: ClaudeCodeProvider.getCachedSdkSkills(),
+          })
+        : undefined,
+    });
   }
 
   /**
@@ -3678,7 +3661,24 @@ export class AIService {
       if (!sessionId) {
         throw new Error('ai:compactSession requires a sessionId');
       }
-      const provider = ProviderFactory.getProvider('openai-codex', sessionId);
+      // Compaction acts on a running agent, so the live instance is the only
+      // thing worth asking -- and it is what knows which transport it is on.
+      // This used to hardcode `getProvider('openai-codex', ...)`, which is the
+      // provider-name check the capability contract exists to replace.
+      let provider: AIProvider | null = null;
+      for (const type of AI_PROVIDER_TYPES) {
+        provider = ProviderFactory.getProvider(type, sessionId);
+        if (provider) break;
+      }
+      if (!provider) {
+        return { success: false, error: 'Cannot compact: this session has no active provider yet.' };
+      }
+      // A provider declaring anything other than 'rpc' has no compaction call
+      // to make here -- 'slash-command' providers compact by sending a
+      // `/compact` turn, which is the renderer's path, not this one.
+      if (provider.getAgentCapabilities().compaction !== 'rpc') {
+        return { success: false, error: 'This provider does not support compaction.' };
+      }
       const compactable = provider as unknown as { compactSession?: (id: string) => Promise<void> };
       if (typeof compactable?.compactSession !== 'function') {
         return { success: false, error: 'This provider does not support compaction.' };
