@@ -64,6 +64,8 @@ import type {
   ThreadResumeResponse,
   ThreadStartParams,
   ThreadStartResponse,
+  SkillsListResponse,
+  ThreadTokenUsageUpdatedNotification,
   TokenUsage,
   TurnCompletedNotification,
   TurnInterruptParams,
@@ -211,6 +213,8 @@ function extractNotificationRouting(paramsUnknown: unknown): {
 
 export class CodexAppServerProtocol implements AgentProtocol {
   readonly platform = 'codex-app-server';
+  /** Populated asynchronously by registerSkillRoots (#1253). */
+  private skillNames: string[] = [];
 
   private apiKey: string;
   private readonly resolveCodexPathOverride: () => string | undefined;
@@ -286,9 +290,17 @@ export class CodexAppServerProtocol implements AgentProtocol {
       // console.log('[CODEX][APPSERVER] thread resumed:', raw.threadId);
       return { id: raw.threadId, platform: this.platform, raw: raw as unknown as ProtocolSession['raw'] };
     } catch (err) {
-      console.warn('[CODEX][APPSERVER] thread/resume failed, falling back to thread/start:', err);
+      // #1254: this used to fall back to thread/start. The transcript still
+      // rendered every prior message, so a dropped history looked like the
+      // agent had spontaneously forgotten the conversation rather than like
+      // something had failed. Surface it and let the caller decide -- an
+      // interrupted turn is recoverable, silently discarded context is not.
       this.killChild(raw);
-      return this.createSession(options);
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `[CodexAppServer] thread/resume failed for thread ${sessionId}: ${detail}. `
+        + 'The previous conversation history was not restored; start a new session to continue.',
+      );
     }
   }
 
@@ -322,6 +334,8 @@ export class CodexAppServerProtocol implements AgentProtocol {
     };
 
     let usage: { input_tokens: number; output_tokens: number; total_tokens: number } | undefined;
+    let contextFillTokens: number | undefined;
+    let contextWindow: number | undefined;
     let fullText = '';
 
     const unsubscribers: Array<() => void> = [];
@@ -348,7 +362,18 @@ export class CodexAppServerProtocol implements AgentProtocol {
       }
 
       try {
-        this.dispatchNotification(method, params, push, raw, (delta) => { fullText += delta; }, (u) => { usage = u; });
+        this.dispatchNotification(
+          method,
+          params,
+          push,
+          raw,
+          (delta) => { fullText += delta; },
+          (u) => { usage = u; },
+          (c) => {
+            if (c.contextFillTokens !== undefined) contextFillTokens = c.contextFillTokens;
+            if (c.contextWindow !== undefined) contextWindow = c.contextWindow;
+          },
+        );
       } catch (err) {
         push({ kind: 'fail', error: err instanceof Error ? err : new Error(String(err)) });
       }
@@ -447,6 +472,10 @@ export class CodexAppServerProtocol implements AgentProtocol {
             type: 'complete',
             content: fullText,
             usage: usage ?? { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+            // turn/completed carries no usage on this transport, so both of
+            // these come from thread/tokenUsage/updated earlier in the turn.
+            ...(contextFillTokens !== undefined ? { contextFillTokens } : {}),
+            ...(contextWindow !== undefined ? { contextWindow } : {}),
           };
           return;
         }
@@ -456,6 +485,29 @@ export class CodexAppServerProtocol implements AgentProtocol {
         try { unsub(); } catch { /* noop */ }
       }
       raw.activeTurnId = null;
+    }
+  }
+
+  /**
+   * Compact the thread's context via the app-server's own RPC (#1252).
+   *
+   * Codex runs compaction as a full turn of its own: `turn/started` ->
+   * `item/started` with `{ type: 'contextCompaction' }` -> `item/completed` ->
+   * `turn/completed`. The RPC itself resolves as soon as that turn is
+   * accepted, so this returning is "compaction started", not "compaction
+   * finished". The follow-up `thread/tokenUsage/updated` is what reports the
+   * reduced fill.
+   */
+  async compactSession(session: ProtocolSession): Promise<void> {
+    const raw = this.assertRaw(session);
+    if (!raw.threadId) {
+      throw new Error('[CodexAppServer] cannot compact: no active thread');
+    }
+    try {
+      await raw.client.request('thread/compact/start', { threadId: raw.threadId });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(`[CodexAppServer] thread/compact/start failed: ${detail}`);
     }
   }
 
@@ -536,6 +588,7 @@ export class CodexAppServerProtocol implements AgentProtocol {
       const configHint = describeCodexConfigError(rawError);
       throw new Error(`[CodexAppServer] initialize failed: ${rawError}${configHint ? `\n\n${configHint}` : ''}`);
     }
+    this.registerSkillRoots(client, cwd);
     return {
       child,
       client,
@@ -547,6 +600,49 @@ export class CodexAppServerProtocol implements AgentProtocol {
       stderrTail,
       cleanupStarted: false,
     };
+  }
+
+  /**
+   * Point codex at Nimbalyst's exported skills (#1253).
+   *
+   * `AgentWorkflowService.syncCodexExports` already writes every Codex-targeted
+   * skill to `<workspace>/.agents/skills/.nimbalyst-generated/<name>/SKILL.md`,
+   * but codex only scans its own roots, so the agent saw none of them and
+   * plans built with the planning skills had no instructions to execute
+   * against. Registering the root closes that gap natively -- no prompt
+   * injection, and codex keeps owning skill resolution.
+   *
+   * Deliberately NOT awaited. The request is written to stdin before
+   * `thread/start`, and codex processes stdin in order, so the roots are
+   * registered first either way -- blocking on the response would just add a
+   * round trip to every session start and make an older codex that never
+   * answers hang the whole spawn. Failures are logged, never fatal: skills are
+   * an enhancement, not a precondition for running a turn.
+   */
+  private registerSkillRoots(client: JsonRpcClient, cwd: string): void {
+    Promise.resolve(
+      client.request('skills/extraRoots/set', {
+        extraRoots: [path.join(cwd, '.agents', 'skills', '.nimbalyst-generated')],
+      }),
+    )
+      .then(() => client.request<SkillsListResponse>('skills/list', {}))
+      .then((response) => {
+        // Cached for the `/` typeahead, which is synchronous and cannot wait on
+        // an RPC. An empty cache renders as "no skills" rather than blocking.
+        const names = (response?.data ?? [])
+          .flatMap((group) => group?.skills ?? [])
+          .map((skill) => skill?.name)
+          .filter((name): name is string => typeof name === 'string' && name.length > 0);
+        this.skillNames = Array.from(new Set(names)).sort();
+      })
+      .catch((err) => {
+        console.warn('[CODEX][APPSERVER] skills registration failed; Nimbalyst skills will not be visible to the agent:', err);
+      });
+  }
+
+  /** Skill names reported by the last `skills/list`, for the `/` typeahead. */
+  getSkillNames(): string[] {
+    return [...this.skillNames];
   }
 
   private extractDynamicTools(options: SessionOptions): DynamicToolSpec[] {
@@ -723,6 +819,7 @@ export class CodexAppServerProtocol implements AgentProtocol {
     raw: AppServerSessionRaw,
     appendText: (delta: string) => void,
     setUsage: (u: { input_tokens: number; output_tokens: number; total_tokens: number }) => void,
+    setContext: (c: { contextFillTokens?: number; contextWindow?: number }) => void,
   ): void {
     const params = paramsUnknown as Record<string, unknown> | undefined;
     const summary = summarizeNotificationParams(method, paramsUnknown);
@@ -768,9 +865,26 @@ export class CodexAppServerProtocol implements AgentProtocol {
         return;
       }
       case 'thread/tokenUsage/updated': {
-        const usage = params?.usage as TokenUsage | undefined;
-        const normalized = normalizeUsage(usage);
+        // The payload nests everything under `tokenUsage`; reading `usage`
+        // here is what kept every Codex turn at zero tokens (#1251).
+        const n = params as unknown as ThreadTokenUsageUpdatedNotification;
+        const breakdown = n?.tokenUsage;
+        if (!breakdown) return;
+
+        // `total` is cumulative thread spend -- that is what the billing
+        // counters want. `last` is the live context fill, which is the only
+        // one that drops when the thread is compacted.
+        const normalized = normalizeUsage(breakdown.total ?? breakdown.last);
         if (normalized) setUsage(normalized);
+
+        // Settles on the `complete` event. A mid-turn snapshot would need a
+        // `usage` case in AgentProtocolTranscriptAdapter, which drops the type
+        // today -- emitting one here without that would be dead code.
+        const fill = pickTokenTotal(breakdown.last);
+        const window = breakdown.modelContextWindow;
+        if (fill !== undefined || window !== undefined) {
+          setContext({ contextFillTokens: fill, contextWindow: window });
+        }
         return;
       }
       case 'turn/completed': {
@@ -1176,4 +1290,21 @@ function normalizeUsage(u: TokenUsage | undefined): { input_tokens: number; outp
   const total = u.total_tokens ?? u.totalTokens ?? input + output;
   if (input === 0 && output === 0 && total === 0) return undefined;
   return { input_tokens: input, output_tokens: output, total_tokens: total };
+}
+
+/**
+ * Total tokens from a codex breakdown, tolerating both casings. Returns
+ * undefined rather than 0 for a missing breakdown so callers can tell "no
+ * reading yet" from "genuinely empty context".
+ */
+function pickTokenTotal(u: TokenUsage | undefined): number | undefined {
+  if (!u) return undefined;
+  const total = u.total_tokens ?? u.totalTokens;
+  if (typeof total === 'number') return total;
+  const input = u.input_tokens ?? u.inputTokens;
+  const output = u.output_tokens ?? u.outputTokens;
+  if (typeof input === 'number' || typeof output === 'number') {
+    return (input ?? 0) + (output ?? 0);
+  }
+  return undefined;
 }

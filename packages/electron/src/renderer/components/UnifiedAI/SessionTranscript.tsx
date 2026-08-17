@@ -1435,6 +1435,22 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
   const handleCompact = useCallback(async () => {
     if (!sessionData) return;
 
+    // #1252: Codex has a real compaction RPC. Sending "/compact" as a user turn
+    // reaches its model as literal prompt text and does nothing, so the button
+    // used to look like it worked while the context kept growing.
+    if (provider === 'openai-codex') {
+      try {
+        const result = await window.electronAPI.invoke('ai:compactSession', sessionId) as
+          { success: boolean; error?: string };
+        if (!result?.success) {
+          console.error('[SessionTranscript] Codex compaction failed:', result?.error);
+        }
+      } catch (error) {
+        console.error('[SessionTranscript] Codex compaction failed:', error);
+      }
+      return;
+    }
+
     const message = '/compact';
     const userMessage = makeOptimisticUserMessage(
       message,
@@ -1460,7 +1476,7 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
     } catch (error) {
       console.error('[SessionTranscript] Failed to send /compact command:', error);
     }
-  }, [sessionId, sessionData, messages, getEffectiveDocumentContext, aiMode, workspacePath, updateSessionStore]);
+  }, [sessionId, sessionData, messages, getEffectiveDocumentContext, aiMode, workspacePath, updateSessionStore, provider]);
 
   const handleTodoClick = useCallback((todo: TodoItem) => {
     onTodoClick?.(todo);

@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Changes to existing functionality go here -->
 - Mockup project files can no longer be shared to a team, since their screens do not yet sync between people.
 - Opening an editor no longer fetches a font from a third-party server.
+- Codex no longer offers slash commands it cannot actually run.
 
 ### Fixed
 <!-- Bug fixes go here -->
@@ -31,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Grouping by milestone or goal names each lane, row, and card chip after the milestone itself, instead of showing a raw id or an out-of-date name.
 - Collaborator avatars and the sync indicator no longer flicker on every character you type in a shared document.
 - Codex file edits show a red/green diff in the transcript again, instead of a raw tool call.
+- Codex sessions now show context usage, and Compact actually compacts instead of quietly doing nothing.
+- Your skills now reach Codex, so a plan made with the planning tools can be carried out.
+- A Codex session that cannot resume now says so, instead of starting over with an empty history while still showing the old conversation.
+- A Codex tool server that fails to start now shows as failed, instead of the agent quietly losing its tools.
 - Team messages, mentions, and notifications now arrive when the app finishes starting before you are signed in, instead of going quiet for the rest of the session.
 
 ### Removed

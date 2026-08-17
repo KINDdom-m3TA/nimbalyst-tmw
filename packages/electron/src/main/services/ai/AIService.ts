@@ -1669,6 +1669,9 @@ export class AIService {
     }
 
     if (request.provider === 'openai-codex' || request.provider === 'openai-codex-acp') {
+      // Skills are session-scoped (they come from the live transport's
+      // skills/list), so there is nothing to report without a provider
+      // instance. The branch above returns the real list once one exists.
       return {
         commands: OpenAICodexProvider.getKnownSlashCommands(),
         skills: [],
@@ -3664,6 +3667,28 @@ export class AIService {
       } catch (error) {
         console.error('[AIService] Error getting slash commands:', error);
         return { success: false, commands: [], skills: [], error: error instanceof Error ? error.message : 'Unknown error' };
+      }
+    });
+
+    // #1252: compact via the provider's real RPC. The renderer used to send
+    // the literal string "/compact" as a user turn, which only ever worked for
+    // providers whose SDK happens to interpret slash commands -- for Codex it
+    // reached the model as prompt text and silently did nothing.
+    safeHandle('ai:compactSession', async (_event, sessionId: string) => {
+      if (!sessionId) {
+        throw new Error('ai:compactSession requires a sessionId');
+      }
+      const provider = ProviderFactory.getProvider('openai-codex', sessionId);
+      const compactable = provider as unknown as { compactSession?: (id: string) => Promise<void> };
+      if (typeof compactable?.compactSession !== 'function') {
+        return { success: false, error: 'This provider does not support compaction.' };
+      }
+      try {
+        await compactable.compactSession(sessionId);
+        return { success: true };
+      } catch (error) {
+        console.error('[AIService] compactSession failed:', error);
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
       }
     });
 
