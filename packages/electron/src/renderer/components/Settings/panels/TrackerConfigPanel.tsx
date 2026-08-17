@@ -30,6 +30,7 @@ import {
   TrackerSchemaChangeConfirm,
   type TrackerSchemaChangePreview,
 } from './TrackerSchemaChangeConfirm';
+import { LocalKeyPrefixInput, type LocalKeyPrefixConfig } from './LocalKeyPrefixInput';
 import {
   TrackerOwnershipChip,
   trackerOwnershipIcon,
@@ -489,10 +490,10 @@ function IssueKeyPrefixInput({ value, onChange, readOnly = false }: {
   return (
     <div className="provider-panel-section py-4 mb-4 border-b border-[var(--nim-border)] last:border-b-0 last:mb-0 last:pb-0">
       <h4 className="provider-panel-section-title text-[15px] font-semibold mb-2 text-[var(--nim-text)]">
-        Issue Key Prefix
+        Team Issue Key Prefix
       </h4>
       <p className="text-[13px] leading-relaxed text-[var(--nim-text-muted)] mb-3">
-        New tracker items will use this prefix (e.g., <code className="text-[11px] text-[var(--nim-code-text)] bg-[var(--nim-code-bg)] px-1 py-[1px] rounded">{draft || 'NIM'}-42</code>).
+        Published tracker items use this shared prefix (e.g., <code className="text-[11px] text-[var(--nim-code-text)] bg-[var(--nim-code-bg)] px-1 py-[1px] rounded">{draft || 'NIM'}-42</code>).
       </p>
       <div className="flex items-center gap-2">
         {readOnly ? (
@@ -724,6 +725,11 @@ export function TrackerConfigPanel({ workspacePath }: TrackerConfigPanelProps) {
   const [schemaOverrides, setSchemaOverrides] = useState<Record<string, TrackerSchemaOverrideState>>({});
   const [isAdmin, setIsAdmin] = useState(false);
   const [issueKeyPrefix, setIssueKeyPrefix] = useState(() => deriveIssueKeyPrefix(workspacePath ?? ''));
+  const [localKeyPrefixConfig, setLocalKeyPrefixConfig] = useState<LocalKeyPrefixConfig>(() => ({
+    prefix: deriveIssueKeyPrefix(workspacePath ?? ''),
+    locked: false,
+    matchesTeamPrefix: true,
+  }));
   const [isSyncConnected, setIsSyncConnected] = useState(false);
   const [agentAccessEnabled, setAgentAccessEnabled] = useState(true);
   const [schemaChangeConfirm, setSchemaChangeConfirm] = useState<
@@ -824,6 +830,21 @@ export function TrackerConfigPanel({ workspacePath }: TrackerConfigPanelProps) {
     };
   }, [refreshSchemaOverrides, workspacePath]);
 
+  useEffect(() => {
+    if (!workspacePath) return;
+    let cancelled = false;
+    void (window as any).electronAPI.invoke('tracker-local-key:get-prefix-config', workspacePath)
+      .then((config: LocalKeyPrefixConfig) => {
+        if (!cancelled) setLocalKeyPrefixConfig(config);
+      })
+      .catch(() => {
+        // Keep the derived fallback visible if the main-process settings read fails.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [issueKeyPrefix, workspacePath]);
+
   // React to `tracker-sync:config-changed` events broadcast by main. The IPC
   // event is handled centrally in store/listeners/trackerSyncListeners.ts
   // which writes trackerSyncConfigChangeAtom; we apply only updates whose
@@ -857,6 +878,16 @@ export function TrackerConfigPanel({ workspacePath }: TrackerConfigPanelProps) {
       }
     }
   }, [workspacePath, isSyncConnected]);
+
+  const handleLocalPrefixChange = useCallback(async (prefix: string): Promise<LocalKeyPrefixConfig> => {
+    if (!workspacePath) throw new Error('Open a project before changing its local tracker prefix.');
+    const config = await (window as any).electronAPI.invoke('tracker-local-key:set-prefix', {
+      workspacePath,
+      prefix,
+    }) as LocalKeyPrefixConfig;
+    setLocalKeyPrefixConfig(config);
+    return config;
+  }, [workspacePath]);
 
   const handleAgentAccessChange = useCallback((enabled: boolean) => {
     setAgentAccessEnabled(enabled);
@@ -960,6 +991,12 @@ export function TrackerConfigPanel({ workspacePath }: TrackerConfigPanelProps) {
       />
 
       <TrackerSchemaDriftWarning workspacePath={workspacePath} />
+
+      <LocalKeyPrefixInput
+        config={localKeyPrefixConfig}
+        teamPrefix={issueKeyPrefix}
+        onChange={handleLocalPrefixChange}
+      />
 
       <IssueKeyPrefixInput
         value={issueKeyPrefix}

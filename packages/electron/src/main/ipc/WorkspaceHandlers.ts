@@ -31,6 +31,11 @@ import {
 } from '../utils/store';
 import { loadFileIntoWindow } from '../file/FileOperations';
 import { safeHandle, safeOn } from '../utils/ipcRegistry';
+import {
+    configureLocalKeyPrefix,
+    getLocalKeyPrefixConfig,
+} from '../services/tracker/localKeyAllocator';
+import { workspaceLocalKeyStore } from '../services/tracker/workspaceLocalKeyStore';
 
 /**
  * Deep merge utility for workspace state updates.
@@ -720,8 +725,44 @@ export function registerWorkspaceHandlers() {
         return getWorkspaceState(workspacePath);
     });
 
+    safeHandle('tracker-local-key:get-prefix-config', async (_event, workspacePath: string) => {
+        if (typeof workspacePath !== 'string' || workspacePath.trim().length === 0) {
+            throw new Error('tracker-local-key:get-prefix-config requires workspacePath');
+        }
+        const teamPrefix = getWorkspaceState(workspacePath).issueKeyPrefix;
+        return getLocalKeyPrefixConfig(workspaceLocalKeyStore, workspacePath, teamPrefix);
+    });
+
+    safeHandle('tracker-local-key:set-prefix', async (_event, payload: {
+        workspacePath: string;
+        prefix: string;
+    }) => {
+        if (!payload || typeof payload.workspacePath !== 'string' || payload.workspacePath.trim().length === 0) {
+            throw new Error('tracker-local-key:set-prefix requires workspacePath');
+        }
+        if (typeof payload.prefix !== 'string') {
+            throw new Error('tracker-local-key:set-prefix requires prefix');
+        }
+        const teamPrefix = getWorkspaceState(payload.workspacePath).issueKeyPrefix;
+        return configureLocalKeyPrefix(
+            workspaceLocalKeyStore,
+            payload.workspacePath,
+            payload.prefix,
+            teamPrefix,
+        );
+    });
+
     // Update workspace state - takes partial update, merges atomically with deep merge
     safeHandle('workspace:update-state', async (event, workspacePath: string, updates: any) => {
+        if (
+            updates
+            && (
+                Object.prototype.hasOwnProperty.call(updates, 'localKeyPrefix')
+                || Object.prototype.hasOwnProperty.call(updates, 'localKeyCounter')
+            )
+        ) {
+            throw new Error('Local tracker numbering state must be changed through the validated tracker-local-key API.');
+        }
         return updateWorkspaceState(workspacePath, (state) => {
             // Extension storage writes carry the complete cache. Replace this one
             // field so deletions survive; deepMerge intentionally preserves keys.

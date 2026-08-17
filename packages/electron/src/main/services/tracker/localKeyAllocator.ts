@@ -31,8 +31,111 @@ export interface LocalKeyStateStore {
   takenPrefixes(workspacePath: string): string[];
 }
 
+export interface LocalKeyPrefixConfig {
+  prefix: string;
+  locked: boolean;
+  matchesTeamPrefix: boolean;
+  warning?: string;
+}
+
+const LOCAL_KEY_PREFIX_PATTERN = /^[A-Z]{2,5}$/;
+
+function normalizePrefix(prefix: string): string {
+  return prefix.trim().toUpperCase();
+}
+
+/**
+ * The local-prefix state shown in tracker settings.
+ *
+ * Merely opening settings does not pin the derived suggestion. The prefix is
+ * persisted only when the user chooses it or the first local number is issued,
+ * which keeps an untouched project free to route around prefixes claimed by
+ * projects opened later in the same app session.
+ */
+export function getLocalKeyPrefixConfig(
+  store: LocalKeyStateStore,
+  workspacePath: string,
+  teamPrefix?: string,
+): LocalKeyPrefixConfig {
+  const state = store.read(workspacePath);
+  const prefix = state.prefix ?? resolveLocalKeyPrefix({
+    projectNameOrPath: workspacePath,
+    takenPrefixes: store.takenPrefixes(workspacePath),
+  });
+  const normalizedTeamPrefix = teamPrefix ? normalizePrefix(teamPrefix) : undefined;
+  const matchesTeamPrefix = normalizedTeamPrefix === prefix;
+
+  return {
+    prefix,
+    locked: (state.counter ?? 0) > 0,
+    matchesTeamPrefix,
+    ...(matchesTeamPrefix ? {
+      warning: 'Using different local and team prefixes makes private numbers easier to recognize. The dot still keeps them mechanically distinct.',
+    } : {}),
+  };
+}
+
+/**
+ * Persist the user's local prefix while changing it is still safe.
+ *
+ * A matching team prefix is intentionally only a warning. The team prefix may
+ * already be immutable when a project joins a team; the dot is the durable
+ * private-vs-shared boundary. Machine-local collisions are refused because two
+ * projects using the same dotted reference would make lookup ambiguous.
+ */
+export function configureLocalKeyPrefix(
+  store: LocalKeyStateStore,
+  workspacePath: string,
+  requestedPrefix: string,
+  teamPrefix?: string,
+): LocalKeyPrefixConfig {
+  const prefix = normalizePrefix(requestedPrefix);
+  if (!LOCAL_KEY_PREFIX_PATTERN.test(prefix)) {
+    throw new Error('Local tracker prefix must be 2-5 uppercase letters.');
+  }
+
+  const current = store.read(workspacePath);
+  if ((current.counter ?? 0) > 0 && current.prefix !== prefix) {
+    throw new Error('The local tracker prefix cannot be changed after the first local number is issued.');
+  }
+
+  const taken = new Set(store.takenPrefixes(workspacePath).map(normalizePrefix));
+  if (taken.has(prefix)) {
+    throw new Error(`Local tracker prefix ${prefix} is already used by another project on this machine.`);
+  }
+
+  store.write(workspacePath, { prefix, counter: current.counter ?? 0 });
+  return getLocalKeyPrefixConfig(store, workspacePath, teamPrefix);
+}
+
 interface QueryableDb {
   query<T = unknown>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
+}
+
+const workspaceAllocationTails = new Map<string, Promise<void>>();
+
+/**
+ * Allocation touches both workspace settings and the tracker database, so the
+ * database's write lane alone cannot make the combined operation atomic. Keep
+ * one in-process queue per workspace and let unrelated projects proceed in
+ * parallel.
+ */
+async function withWorkspaceAllocationLock<T>(
+  workspacePath: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const previous = workspaceAllocationTails.get(workspacePath) ?? Promise.resolve();
+  const run = previous.then(task, task);
+  const tail = run.then(() => undefined, () => undefined);
+  workspaceAllocationTails.set(workspacePath, tail);
+
+  try {
+    return await run;
+  } finally {
+    if (workspaceAllocationTails.get(workspacePath) === tail) {
+      workspaceAllocationTails.delete(workspacePath);
+    }
+  }
 }
 
 /**
@@ -98,31 +201,58 @@ export async function assignLocalKeysToRows(
   workspacePath: string,
   rowIds: string[],
 ): Promise<Map<string, string>> {
-  const assigned = new Map<string, string>();
-  if (rowIds.length === 0) return assigned;
+  if (rowIds.length === 0) return new Map();
 
-  const prefix = ensureLocalKeyPrefix(store, workspacePath);
-  let counter = store.read(workspacePath).counter ?? 0;
+  return withWorkspaceAllocationLock(workspacePath, async () => {
+    const assigned = new Map<string, string>();
+    const prefix = ensureLocalKeyPrefix(store, workspacePath);
+    let counter = store.read(workspacePath).counter ?? 0;
 
-  for (const rowId of rowIds) {
-    counter += 1;
-    // Persist the advance before the row is written, so a crash here spends a
-    // number rather than reissuing it.
-    store.write(workspacePath, { prefix, counter });
+    for (const rowId of rowIds) {
+      // `rowIds` came from a list query that may have completed before another
+      // sweep acquired this lock. Re-read inside the lock so a stale caller
+      // reports the key the database already holds instead of spending and
+      // returning a new key that its guarded UPDATE never wrote.
+      const before = await db.query<{ local_key: string | null }>(
+        `SELECT local_key FROM tracker_items
+          WHERE id = $1 AND workspace = $2
+          LIMIT 1`,
+        [rowId, workspacePath],
+      );
+      if (!before.rows[0]) continue;
+      if (before.rows[0].local_key) {
+        assigned.set(rowId, before.rows[0].local_key);
+        continue;
+      }
 
-    const localKey = formatLocalKey(prefix, counter);
-    // `local_key IS NULL` in the predicate keeps a concurrent sweep from
-    // overwriting a number that another pass just assigned; the unique index
-    // is the second line of defence.
-    await db.query(
-      `UPDATE tracker_items SET local_key = $1
-        WHERE id = $2 AND workspace = $3 AND local_key IS NULL`,
-      [localKey, rowId, workspacePath],
-    );
-    assigned.set(rowId, localKey);
-  }
+      counter += 1;
+      // Persist the advance before the row is written, so a crash here spends a
+      // number rather than reissuing it.
+      store.write(workspacePath, { prefix, counter });
 
-  return assigned;
+      const localKey = formatLocalKey(prefix, counter);
+      await db.query(
+        `UPDATE tracker_items SET local_key = $1
+          WHERE id = $2 AND workspace = $3 AND local_key IS NULL`,
+        [localKey, rowId, workspacePath],
+      );
+
+      // Only return the value the database confirms. This is deliberately not
+      // `assigned.set(rowId, localKey)`: if any future writer bypasses this
+      // in-process queue, the guarded UPDATE can still lose its race.
+      const after = await db.query<{ local_key: string | null }>(
+        `SELECT local_key FROM tracker_items
+          WHERE id = $1 AND workspace = $2
+          LIMIT 1`,
+        [rowId, workspacePath],
+      );
+      if (after.rows[0]?.local_key) {
+        assigned.set(rowId, after.rows[0].local_key);
+      }
+    }
+
+    return assigned;
+  });
 }
 
 /**

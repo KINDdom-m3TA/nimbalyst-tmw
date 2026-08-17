@@ -7,8 +7,11 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  assignLocalKeysToRows,
   assignMissingLocalKeys,
+  configureLocalKeyPrefix,
   ensureLocalKeyPrefix,
+  getLocalKeyPrefixConfig,
   resolveRowByLocalKey,
   type LocalKeyStateStore,
 } from '../localKeyAllocator';
@@ -35,6 +38,11 @@ function fakeDb(rows: Row[]) {
           .filter((r) => r.workspace === workspace && r.local_key === null && r.deleted_at === null)
           .sort((a, b) => a.created.localeCompare(b.created) || a.id.localeCompare(b.id));
         return { rows: matching.map((r) => ({ id: r.id })) as T[] };
+      }
+      if (sql.includes('SELECT local_key FROM tracker_items')) {
+        const [id, workspace] = params as [string, string];
+        const found = rows.find((r) => r.id === id && r.workspace === workspace);
+        return { rows: (found ? [{ local_key: found.local_key }] : []) as T[] };
       }
       if (sql.startsWith('UPDATE tracker_items SET local_key')) {
         const [localKey, id, workspace] = params as [string, string, string];
@@ -81,6 +89,52 @@ describe('ensureLocalKeyPrefix', () => {
     expect(ensureLocalKeyPrefix(store, '/src/nimbalyst-collab')).toBe('NIC');
     // Re-resolving the first project must not renegotiate now that NIC exists.
     expect(ensureLocalKeyPrefix(store, '/src/nimbalyst-code')).toBe('NIM');
+  });
+});
+
+describe('local prefix configuration', () => {
+  it('offers the collision-free derived prefix until the user chooses one', () => {
+    const store = fakeStore({
+      '/src/nimbalyst-code': { prefix: 'NIM', counter: 4 },
+    });
+
+    expect(getLocalKeyPrefixConfig(store, '/src/nimbalyst-collab', 'TEAM')).toMatchObject({
+      prefix: 'NIC',
+      locked: false,
+      matchesTeamPrefix: false,
+    });
+  });
+
+  it('accepts a user prefix before allocation and warns when it matches the team prefix', () => {
+    const store = fakeStore();
+
+    expect(configureLocalKeyPrefix(store, '/src/app', ' app ', 'APP')).toMatchObject({
+      prefix: 'APP',
+      locked: false,
+      matchesTeamPrefix: true,
+    });
+    expect(store.state['/src/app']).toEqual({ prefix: 'APP', counter: 0 });
+  });
+
+  it('rejects invalid and machine-local duplicate prefixes', () => {
+    const store = fakeStore({
+      '/src/first': { prefix: 'ONE', counter: 1 },
+    });
+
+    expect(() => configureLocalKeyPrefix(store, '/src/second', '1x')).toThrow('2-5 uppercase letters');
+    expect(() => configureLocalKeyPrefix(store, '/src/second', 'one')).toThrow('already used');
+  });
+
+  it('pins the prefix after the first number is spent', () => {
+    const store = fakeStore({
+      '/src/app': { prefix: 'APP', counter: 1 },
+    });
+
+    expect(() => configureLocalKeyPrefix(store, '/src/app', 'NEW')).toThrow('cannot be changed');
+    expect(configureLocalKeyPrefix(store, '/src/app', 'APP')).toMatchObject({
+      prefix: 'APP',
+      locked: true,
+    });
   });
 });
 
@@ -143,6 +197,24 @@ describe('assignMissingLocalKeys', () => {
 
     expect(db.rows.find((r) => r.id === 'a')?.local_key).toBe('APP.1');
     expect(db.rows.find((r) => r.id === 'b')?.local_key).toBe('SIT.1');
+  });
+
+  it('serializes overlapping sweeps and reports the keys actually stored', async () => {
+    const db = fakeDb([
+      row('a', '/src/app', '2026-08-01'),
+      row('b', '/src/app', '2026-08-02'),
+    ]);
+    const store = fakeStore({ '/src/app': { prefix: 'APP', counter: 0 } });
+
+    const [first, second] = await Promise.all([
+      assignLocalKeysToRows(db, store, '/src/app', ['a', 'b']),
+      assignLocalKeysToRows(db, store, '/src/app', ['a', 'b']),
+    ]);
+
+    const committed = { a: 'APP.1', b: 'APP.2' };
+    expect(Object.fromEntries(first)).toEqual(committed);
+    expect(Object.fromEntries(second)).toEqual(committed);
+    expect(store.state['/src/app']?.counter).toBe(2);
   });
 });
 
