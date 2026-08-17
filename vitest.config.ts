@@ -80,7 +80,11 @@ const include = [
   'packages/**/__tests__/**/*.spec.{ts,tsx}',
 ];
 
-const baseExclude = ['node_modules', 'dist', 'build', '.idea', '.git', '.cache'];
+// `temptests/` is the gitignored home for throwaway probes (see CLAUDE.md), so
+// its files never reach CI. Collecting them locally means a scratch probe --
+// often written to fail on purpose so it prints a value -- blocks the pre-push
+// gate for unrelated work.
+const baseExclude = ['node_modules', 'dist', 'build', '.idea', '.git', '.cache', '**/temptests/**'];
 
 // Paths that must run under the node environment (vitest 4 removed
 // `environmentMatchGlobs`; expressed with `test.projects` instead).
