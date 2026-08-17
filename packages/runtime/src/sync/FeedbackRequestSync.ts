@@ -2,12 +2,14 @@ import {
   feedbackRequestRoomId,
   getFeedbackRequestProgress,
   type FeedbackAnswer,
+  type FeedbackDiscussionComment,
   type FeedbackRequestClientMessage,
   type FeedbackRequestCreateInput,
   type FeedbackRequestLifecycleStatus,
   type FeedbackRequestProgress,
   type FeedbackRequestReadModel,
   type FeedbackRequestServerMessage,
+  type RichCommentBody,
 } from '@nimbalyst/collab-protocol';
 
 import type { TeamJwt } from '../auth/jwtScopes';
@@ -235,6 +237,24 @@ export class FeedbackRequestSync {
     // into readable state. The server's following snapshot is the visibility
     // boundary and replaces the response set wholesale.
     return this.state;
+  }
+
+  async comment(
+    clientMutationId: string,
+    body: RichCommentBody,
+    replyToCommentId?: string,
+  ): Promise<FeedbackDiscussionComment> {
+    const response = await this.requestMutation({
+      type: 'feedbackRequestComment',
+      clientMutationId,
+      requestId: this.target.requestId,
+      body,
+      replyToCommentId,
+    }, 'feedbackRequestCommentAck');
+    if (response.type !== 'feedbackRequestCommentAck') {
+      throw this.unexpectedResponse('feedbackRequestCommentAck', response.type);
+    }
+    return response.comment;
   }
 
   async close(

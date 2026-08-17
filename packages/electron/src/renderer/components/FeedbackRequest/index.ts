@@ -57,7 +57,6 @@ export {
 export {
   FeedbackRequestRespond,
   type FeedbackRequestRespondProps,
-  type FeedbackRespondDiscussion,
   type FeedbackRespondHost,
   type FeedbackRespondSubmitResult,
 } from './FeedbackRequestRespond';

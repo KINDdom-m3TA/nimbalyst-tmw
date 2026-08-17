@@ -17,11 +17,17 @@ const distRoot = path.join(packageRoot, 'dist');
 const reportPath = path.join(distRoot, 'bundle-report.json');
 
 // Initial eager measurements were 253,357 gzip bytes for editor. The migrated
-// docs-ui shell measures 55,405 gzip bytes; its ceiling leaves ~26% headroom.
-// Both budgets remain explicit so shell growth is a conscious review decision.
+// docs-ui shell initially measured 55,405 gzip bytes; feedback-ui measured
+// 27,754 gzip bytes; the inbox transport measured 4,586 gzip bytes. Their
+// ceilings leave ~26% headroom so shell growth is a conscious review decision.
 export const COLLAB_BUNDLE_EAGER_GZIP_BUDGET_BYTES = {
   editor: 320_000,
   'docs-ui': 70_000,
+  'feedback-ui': 35_000,
+  // Deliberately tight. This entry is a WebSocket client over the protocol
+  // package and nothing else; anything that makes it jump has dragged a UI
+  // graph in behind it.
+  inbox: 6_000,
 };
 
 const builtinNames = new Set(
@@ -261,14 +267,29 @@ function checkPublicJwtTypeBoundary() {
   }
 }
 
+/**
+ * Comments are stripped before scanning for workspace specifiers. The inlined
+ * SDK declarations carry JSDoc examples that show extensions importing from
+ * `@nimbalyst/runtime`, and a documentation line is not a boundary leak -- only
+ * a real import/export is. (Block-comment stripping is naive; a `/*` inside a
+ * string literal in a `.d.ts` would confuse it, and none exists.)
+ */
+function stripDeclarationComments(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^[^\n'"`]*\/\/.*$/gm, '');
+}
+
 function checkSelfContainedPublicTypes() {
   const typesRoot = path.join(packageRoot, 'types');
   const declarationFiles = fs.readdirSync(typesRoot, { recursive: true })
     .filter((fileName) => fileName.endsWith('.d.ts'));
   const leaks = declarationFiles.flatMap((fileName) => {
-    const source = fs.readFileSync(path.join(typesRoot, fileName), 'utf8');
+    const source = stripDeclarationComments(
+      fs.readFileSync(path.join(typesRoot, fileName), 'utf8'),
+    );
     return Array.from(
-      source.matchAll(/(?:from\s+|import\s*\()(['"])(@nimbalyst\/(?:collab-client|runtime)(?:\/[^'\"]*)?)\1/g),
+      source.matchAll(/(?:from\s+|import\s*\()(['"])(@nimbalyst\/(?:collab-client|runtime|extension-sdk)(?:\/[^'\"]*)?)\1/g),
       (match) => `${fileName}: ${match[2]}`,
     );
   });

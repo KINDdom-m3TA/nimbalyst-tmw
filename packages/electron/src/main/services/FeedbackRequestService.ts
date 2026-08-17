@@ -9,8 +9,10 @@ import {
 import {
   validateFeedbackRequest,
   type FeedbackAnswer,
+  type FeedbackDiscussionComment,
   type FeedbackRequestCreateInput,
   type FeedbackRequestLifecycleStatus,
+  type RichCommentBody,
 } from '@nimbalyst/collab-protocol';
 
 import type {
@@ -138,6 +140,19 @@ export class FeedbackRequestService {
     const state = await sync.respond(clientMutationId, askId, answer);
     await this.applySyncedState(scopedTarget, state, true);
     return this.currentState(scopedTarget);
+  }
+
+  async comment(
+    target: FeedbackRequestServiceTarget,
+    clientMutationId: string,
+    body: RichCommentBody,
+    replyToCommentId?: string,
+  ): Promise<FeedbackDiscussionComment> {
+    assertTarget(target);
+    assertMutationId(clientMutationId);
+    const scopedTarget = await this.scopeTarget(target);
+    const sync = await this.ensureState(scopedTarget);
+    return sync.comment(clientMutationId, body, replyToCommentId);
   }
 
   async close(

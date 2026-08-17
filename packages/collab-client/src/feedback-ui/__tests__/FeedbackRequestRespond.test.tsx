@@ -14,20 +14,9 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { createStore, Provider as JotaiProvider } from 'jotai';
 import type { FeedbackRequestReadModel } from '@nimbalyst/collab-protocol';
 
-import {
-  feedbackRequestActiveViewerAtomFamily,
-  feedbackRequestAtomKey,
-  feedbackRequestStateAtomFamily,
-  feedbackRequestTargetKey,
-} from '../../../store/atoms/feedbackRequests';
 import { FeedbackRequestRespond, type FeedbackRespondHost } from '../FeedbackRequestRespond';
-
-vi.mock('../../Comments/CommentThread', () => ({
-  CommentThread: () => <div data-testid="mock-comment-thread" />,
-}));
 
 const TARGET = {
   workspacePath: '/work/acme',
@@ -105,28 +94,22 @@ function renderRespond(options: {
   host?: FeedbackRespondHost;
   request?: FeedbackRequestReadModel;
   viewerUserId?: string;
+  discussion?: React.ReactNode;
 } = {}) {
-  const store = createStore();
   const viewerUserId = options.viewerUserId ?? VIEWER;
-  store.set(
-    feedbackRequestActiveViewerAtomFamily(feedbackRequestTargetKey(TARGET)),
-    viewerUserId,
-  );
-  store.set(feedbackRequestStateAtomFamily(feedbackRequestAtomKey({
-    ...TARGET,
-    viewerUserId,
-  })), {
-    ...TARGET,
-    viewerUserId,
-    status: 'connected',
-    request: options.request ?? makeRequest(),
-  });
   render(
-    <JotaiProvider store={store}>
-      <FeedbackRequestRespond target={TARGET} host={options.host} now={1_000} />
-    </JotaiProvider>,
+    <FeedbackRequestRespond
+      state={{
+        ...TARGET,
+        viewerUserId,
+        status: 'connected',
+        request: options.request ?? makeRequest(),
+      }}
+      host={options.host}
+      discussion={options.discussion}
+      now={1_000}
+    />,
   );
-  return store;
 }
 
 /** Answers both of Karl's asks; the reorder arrives pre-ordered. */
@@ -164,7 +147,10 @@ describe('FeedbackRequestRespond', () => {
 
   it('keeps the comment link available after submitting', async () => {
     const submitAnswers = vi.fn().mockResolvedValue({ success: true });
-    renderRespond({ host: { submitAnswers } });
+    renderRespond({
+      host: { submitAnswers },
+      discussion: <div data-testid="host-discussion">Host discussion</div>,
+    });
 
     answerAssignedAsks();
     fireEvent.click(screen.getByTestId('feedback-respond-submit'));
@@ -174,6 +160,15 @@ describe('FeedbackRequestRespond', () => {
     // as an addition rather than a way out of answering.
     const link = screen.getByTestId('feedback-respond-add-comment');
     fireEvent.click(link);
-    expect(screen.getByTestId('feedback-respond-discussion')).toBeDefined();
+    expect(screen.getByTestId('host-discussion')).toBeDefined();
+  });
+
+  it('explains when the host has no discussion surface', () => {
+    renderRespond();
+
+    fireEvent.click(screen.getByTestId('feedback-respond-add-comment'));
+
+    expect(screen.getByTestId('feedback-respond-discussion-unavailable').textContent)
+      .toBe('Commenting on this request is not available here yet.');
   });
 });

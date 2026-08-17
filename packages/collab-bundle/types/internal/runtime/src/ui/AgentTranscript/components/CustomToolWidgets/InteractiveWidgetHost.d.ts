@@ -23,6 +23,13 @@ export interface FeedbackRequestSendResult {
     success: boolean;
     /** Server-assigned request id, once the request exists. */
     requestId?: string;
+    /**
+     * The pasteable web link for the request, built by the host from its
+     * configured console origin. Present on success; the widget offers it as the
+     * confirmation's copy action, because a recipient without the desktop app is
+     * notified through no other channel.
+     */
+    shareUrl?: string;
     error?: string;
 }
 export interface ExitPlanModeResponse {

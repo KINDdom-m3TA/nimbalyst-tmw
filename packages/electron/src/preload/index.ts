@@ -17,6 +17,7 @@ import type { ConversationSubscription } from '@nimbalyst/collab-protocol';
 import type { ConversationSetSubscriptionRequest } from '../shared/conversationDirectory.ts';
 import type {
   FeedbackRequestCloseIpcRequest,
+  FeedbackRequestCommentIpcRequest,
   FeedbackRequestCreateIpcRequest,
   FeedbackRequestNudgeIpcRequest,
   FeedbackRequestRespondIpcRequest,
@@ -1785,7 +1786,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('team:find-pending-invite-for-email', email),
     acceptInvitation: (orgId: string) => ipcRenderer.invoke('team:accept-invite', orgId),
     listMembers: (orgId: string) => ipcRenderer.invoke('team:list-members', orgId),
-    inviteMember: (orgId: string, email: string) => ipcRenderer.invoke('team:invite', orgId, email),
+    inviteMember: (orgId: string, email: string, role?: 'owner' | 'admin' | 'member' | 'viewer' | 'guest') =>
+      ipcRenderer.invoke('team:invite', orgId, email, role),
     removeMember: (orgId: string, memberId: string) => ipcRenderer.invoke('team:remove-member', orgId, memberId),
     updateMemberRole: (orgId: string, memberId: string, role: string) => ipcRenderer.invoke('team:update-role', orgId, memberId, role),
     listProjects: (orgId: string) => ipcRenderer.invoke('team:list-projects', orgId),
@@ -1829,6 +1831,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('feedback-request:create', request),
     respond: (request: FeedbackRequestRespondIpcRequest) =>
       ipcRenderer.invoke('feedback-request:respond', request),
+    comment: (request: FeedbackRequestCommentIpcRequest) =>
+      ipcRenderer.invoke('feedback-request:comment', request),
     close: (request: FeedbackRequestCloseIpcRequest) =>
       ipcRenderer.invoke('feedback-request:close', request),
     nudge: (request: FeedbackRequestNudgeIpcRequest) =>

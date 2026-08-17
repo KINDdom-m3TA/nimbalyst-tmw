@@ -9,8 +9,10 @@ import { spawnSync } from 'node:child_process';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const typesRoot = path.join(packageRoot, 'types');
 const internalRoot = path.join(typesRoot, 'internal');
-const generatedEntry = path.join(internalRoot, 'collab-bundle/src/docs-ui.d.ts');
-const publicEntry = path.join(typesRoot, 'docs-ui.d.ts');
+const publicEntries = ['docs-ui', 'feedback-ui', 'inbox'].map((entryName) => ({
+  generated: path.join(internalRoot, `collab-bundle/src/${entryName}.d.ts`),
+  public: path.join(typesRoot, `${entryName}.d.ts`),
+}));
 const require = createRequire(import.meta.url);
 
 fs.rmSync(internalRoot, { recursive: true, force: true });
@@ -32,7 +34,7 @@ function declarationFiles(directory) {
 }
 
 function internalTarget(specifier) {
-  const collabClient = specifier.match(/^@nimbalyst\/collab-client\/(core|docs|docs-ui)$/);
+  const collabClient = specifier.match(/^@nimbalyst\/collab-client\/(core|docs|docs-ui|feedback|feedback-ui)$/);
   if (collabClient) {
     return path.join(internalRoot, 'collab-client/src', collabClient[1], 'index.d.ts');
   }
@@ -63,7 +65,7 @@ function relativeDeclarationSpecifier(fromFile, targetFile) {
 }
 
 for (const declarationFile of declarationFiles(internalRoot)) {
-  if (declarationFile === generatedEntry) continue;
+  if (publicEntries.some((entry) => entry.generated === declarationFile)) continue;
   const source = fs.readFileSync(declarationFile, 'utf8');
   const rewritten = source.replace(
     /(['"])(@nimbalyst\/(?:collab-client|runtime|extension-sdk)\/[^'"]+)\1/g,
@@ -78,16 +80,18 @@ for (const declarationFile of declarationFiles(internalRoot)) {
   fs.writeFileSync(declarationFile, rewritten);
 }
 
-let publicTypes = fs.readFileSync(generatedEntry, 'utf8');
-publicTypes = publicTypes.replace(
-  /(['"])(@nimbalyst\/(?:collab-client|runtime|extension-sdk)\/[^'"]+)\1/g,
-  (match, quote, specifier) => {
-    const target = internalTarget(specifier);
-    if (!target || !fs.existsSync(target)) {
-      throw new Error(`No emitted declaration target for ${specifier} imported by ${generatedEntry}`);
-    }
-    return `${quote}${relativeDeclarationSpecifier(publicEntry, target)}${quote}`;
-  },
-);
-fs.writeFileSync(publicEntry, publicTypes);
+for (const entry of publicEntries) {
+  let publicTypes = fs.readFileSync(entry.generated, 'utf8');
+  publicTypes = publicTypes.replace(
+    /(['"])(@nimbalyst\/(?:collab-client|runtime|extension-sdk)\/[^'"]+)\1/g,
+    (match, quote, specifier) => {
+      const target = internalTarget(specifier);
+      if (!target || !fs.existsSync(target)) {
+        throw new Error(`No emitted declaration target for ${specifier} imported by ${entry.generated}`);
+      }
+      return `${quote}${relativeDeclarationSpecifier(entry.public, target)}${quote}`;
+    },
+  );
+  fs.writeFileSync(entry.public, publicTypes);
+}
 fs.rmSync(path.join(internalRoot, 'collab-bundle'), { recursive: true, force: true });

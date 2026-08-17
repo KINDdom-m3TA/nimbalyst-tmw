@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InboxSection } from '../InboxSection';
 import { createInboxFixtures } from '../inboxFixtures';
 import { createFixtureInboxProvider } from '../inboxFixtureProvider';
+import { requestInboxRowSelection } from '../../orgWindowCommandBus';
 
 const NOW = Date.parse('2026-07-26T18:00:00.000Z');
 
@@ -411,5 +412,66 @@ describe('InboxSection', () => {
     );
     expect((screen.getByTestId('inbox-new-message') as HTMLButtonElement).title)
       .toBe('Rooms and direct messages are turned off for this organization');
+  });
+
+  /**
+   * The payoff of the whole feedback-request link: a recipient who clicks one
+   * has to end up looking at that request's respond card, which lives in this
+   * surface's context pane. Both waits are real — the window opens before the
+   * inbox has synced, and the row may be behind whatever filter the recipient
+   * left in force.
+   */
+  it('resolves a latched row-selection request against a late delivery', async () => {
+    const fixtures = createInboxFixtures({ now: NOW });
+    const feedbackDelivery = {
+      ...fixtures[0],
+      id: 'delivery-feedback',
+      source: {
+        orgId: fixtures[0].orgId,
+        sourceKind: 'feedbackRequest' as const,
+        sourceId: 'request-1',
+        commentId: '',
+      },
+    };
+    let snapshot = { status: 'ready' as const, deliveries: fixtures, lastSyncedAt: NOW };
+    const listeners = new Set<() => void>();
+    const provider = {
+      getSnapshot: () => snapshot,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      markRead: async () => {},
+      dismiss: async () => {},
+      migrateOrganization: async () => {},
+      navigate: async () => true,
+    };
+
+    render(<InboxSection provider={provider} now={NOW} />);
+    await screen.findByTestId('inbox-list');
+
+    // A search the target row does not match, left over from before the link.
+    fireEvent.change(screen.getByTestId('inbox-search-input'), { target: { value: 'zzz-no-match' } });
+
+    requestInboxRowSelection({
+      orgId: feedbackDelivery.orgId,
+      sourceKind: 'feedbackRequest',
+      sourceId: 'request-1',
+    });
+
+    // Still nothing to select: the delivery has not synced yet, and the request
+    // has to survive that rather than being dropped on the floor.
+    expect(screen.queryByTestId('inbox-row-delivery-feedback')).toBeNull();
+
+    act(() => {
+      snapshot = { ...snapshot, deliveries: [feedbackDelivery, ...fixtures] };
+      listeners.forEach((listener) => listener());
+    });
+
+    const row = await screen.findByTestId('inbox-row-delivery-feedback');
+    expect(row.getAttribute('aria-current')).toBe('true');
+    // The stale query is cleared, because a selected row the filter hides shows
+    // the recipient an empty pane — the exact failure the link exists to avoid.
+    expect((screen.getByTestId('inbox-search-input') as HTMLInputElement).value).toBe('');
   });
 });

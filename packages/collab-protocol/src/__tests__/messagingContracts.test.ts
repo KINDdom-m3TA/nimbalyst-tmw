@@ -43,6 +43,7 @@ import {
   applyFeedbackResponse,
   getFeedbackRequestProgress,
   getFeedbackResponsesForViewer,
+  MAX_FEEDBACK_TEXT_ANSWER_LENGTH,
   transitionFeedbackRequestLifecycle,
   validateFeedbackRequest,
   validateFeedbackResponse,
@@ -837,6 +838,56 @@ describe("Feedback Request protocol", () => {
         })
       ).errors.map((error) => error.code)
     ).toContain("invalidAnswer");
+  });
+
+  it("caps incoming text answers by default without invalidating stored history", () => {
+    const oversizedText = "x".repeat(MAX_FEEDBACK_TEXT_ANSWER_LENGTH + 1);
+    const oversizedResponse = feedbackResponse("edit", {
+      type: "editText",
+      text: oversizedText,
+      edited: true,
+    });
+    expect(
+      validateFeedbackResponse(
+        feedbackRequest(),
+        oversizedResponse
+      ).errors.map((error) => error.code)
+    ).toContain("invalidAnswer");
+
+    const request = feedbackRequest({
+      asks: feedbackAsks.map((ask) =>
+        ask.id === "edit"
+          ? { ...ask, maxLength: MAX_FEEDBACK_TEXT_ANSWER_LENGTH * 2 }
+          : ask
+      ),
+    });
+
+    expect(
+      validateFeedbackResponse(request, oversizedResponse).errors.map(
+        (error) => error.code
+      )
+    ).toContain("invalidAnswer");
+
+    const smallerRequest = feedbackRequest({
+      asks: feedbackAsks.map((ask) =>
+        ask.id === "edit" ? { ...ask, maxLength: 3 } : ask
+      ),
+    });
+    expect(
+      validateFeedbackResponse(
+        smallerRequest,
+        feedbackResponse("edit", {
+          type: "editText",
+          text: "four",
+          edited: true,
+        })
+      ).errors.map((error) => error.code)
+    ).toContain("invalidAnswer");
+
+    const stored = feedbackRequest({ responses: [oversizedResponse] });
+    expect(
+      getFeedbackResponsesForViewer(stored, "author-user")[0]?.answer
+    ).toMatchObject({ text: oversizedText });
   });
 
   it("computes quorum from each recipient's full assigned ask set and seals terminal lifecycles", () => {

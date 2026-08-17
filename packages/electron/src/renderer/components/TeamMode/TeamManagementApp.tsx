@@ -16,8 +16,10 @@ import {
 } from './Inbox/inboxProvider';
 import {
   conversationRoute,
+  INBOX_ROUTE,
   orgWindowRouteAtom,
 } from './orgWindowState';
+import { requestInboxRowSelection } from './orgWindowCommandBus';
 import {
   persistLastSelectedOrgId,
   readLastSelectedOrgId,
@@ -50,6 +52,8 @@ interface WindowTarget {
   orgId: string | null;
   workspacePath: string | null;
   conversationId: string | null;
+  /** Set by a `nimbalyst://feedback-request/...` link; selects an Inbox row. */
+  feedbackRequestId: string | null;
   /**
    * Bumped on every `team-window:set-target`. Retargeting at the org already in
    * the URL must still re-seed the atom — the user may have switched the window
@@ -65,6 +69,7 @@ function readTarget(): WindowTarget {
     orgId: params.get('orgId') || null,
     workspacePath: params.get('workspacePath') || null,
     conversationId: params.get('conversationId') || null,
+    feedbackRequestId: params.get('feedbackRequestId') || null,
     retargetNonce: 0,
   };
 }
@@ -171,6 +176,34 @@ export function TeamManagementApp() {
     targetResolved,
   ]);
 
+  // A feedback-request link points the window at the Inbox and asks it to
+  // select the row for that request — the respond card renders in the Inbox's
+  // context pane. It deliberately does not open the `virtual://feedback-request/`
+  // tab, which is the author's results view.
+  useEffect(() => {
+    if (
+      !targetResolved
+      || !target.orgId
+      || selectedOrgId !== target.orgId
+      || !target.feedbackRequestId
+    ) {
+      return;
+    }
+    setOrgWindowRoute(INBOX_ROUTE);
+    requestInboxRowSelection({
+      orgId: target.orgId,
+      sourceKind: 'feedbackRequest',
+      sourceId: target.feedbackRequestId,
+    });
+  }, [
+    selectedOrgId,
+    setOrgWindowRoute,
+    target.feedbackRequestId,
+    target.orgId,
+    target.retargetNonce,
+    targetResolved,
+  ]);
+
   useEffect(() => {
     const off = window.electronAPI?.on?.(
       'team-window:set-target',
@@ -178,11 +211,13 @@ export function TeamManagementApp() {
         orgId?: string | null;
         workspacePath?: string | null;
         conversationId?: string | null;
+        feedbackRequestId?: string | null;
       }) => {
         setTarget((previous) => ({
           orgId: next?.orgId ?? null,
           workspacePath: next?.workspacePath ?? null,
           conversationId: next?.conversationId ?? null,
+          feedbackRequestId: next?.feedbackRequestId ?? null,
           retargetNonce: previous.retargetNonce + 1,
         }));
       },

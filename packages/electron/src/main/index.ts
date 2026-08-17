@@ -272,6 +272,10 @@ import { registerLinuxAppImageProtocolHandler } from './services/LinuxProtocolRe
 import { installWindowOpenGuard } from './window/windowOpenGuard';
 import { resolveClaudeConfigDir } from '@nimbalyst/runtime/ai/server/providers/claudeCode/claudeConfigDir';
 import { parseConversationDeepLink } from '../shared/conversationDeepLinks';
+import {
+    FEEDBACK_REQUEST_DEEP_LINK_HOST,
+    parseFeedbackRequestDeepLink,
+} from '../shared/feedbackRequestLinks';
 
 setAuthCallbackSuccessHandler(async () => {
   try {
@@ -877,6 +881,12 @@ async function openInboxSourceFromDeepLink(rawUrl: string): Promise<boolean> {
             });
             return true;
         }
+        if (parsed.host === FEEDBACK_REQUEST_DEEP_LINK_HOST) {
+            const feedback = parseFeedbackRequestDeepLink(rawUrl);
+            return feedback
+                ? openFeedbackRequestFromDeepLink(feedback.requestId, feedback.orgId)
+                : false;
+        }
         return false;
     } catch {
         return false;
@@ -1021,6 +1031,16 @@ async function handleDeepLink(url: string): Promise<void> {
             }
 
             await openSharedFolderFromDeepLink(folderId, orgId);
+        } else if (parsed.host === FEEDBACK_REQUEST_DEEP_LINK_HOST) {
+            // nimbalyst://feedback-request/{requestId}?orgId={orgId} — the app
+            // half of the pasteable link, and the console's "Open in Nimbalyst"
+            // hand-off. Lands on the request's Inbox row.
+            const feedback = parseFeedbackRequestDeepLink(url);
+            if (!feedback) {
+                logger.main.warn('[DeepLink] Feedback request link is incomplete:', summarizeDeepLink(url));
+                return;
+            }
+            await openFeedbackRequestFromDeepLink(feedback.requestId, feedback.orgId);
         } else if (parsed.host === 'invite' || parsed.pathname?.startsWith('/invite/')) {
             // Handle team invitation handoff from the web console:
             // nimbalyst://invite/{orgId}?email={email}
@@ -1258,6 +1278,39 @@ async function openSharedFolderFromDeepLink(folderId: string, orgId: string): Pr
 
     logger.main.info('[DeepLink] Opening new window for shared folder workspace:', { workspacePath, folderId });
     createWindow(false, true, workspacePath);
+}
+
+/**
+ * Route a feedback-request deep link to the organization window's Inbox.
+ *
+ * The destination is a *selected row*, not a tab: the respond card renders
+ * inline in the Inbox's context pane, while `virtual://feedback-request/` is the
+ * author's results view and would be the wrong place to land a recipient.
+ *
+ * That pane reads the request through a workspace-scoped target, so a workspace
+ * bound to this org has to be resolvable first. Without one the link fails
+ * honestly — the inbox row that offered it stays unread rather than opening a
+ * window that could only show an empty pane.
+ */
+async function openFeedbackRequestFromDeepLink(
+    requestId: string,
+    orgId: string,
+): Promise<boolean> {
+    const reason = !isAuthenticated() ? 'not-authenticated' : 'no-workspace';
+    const workspacePath = isAuthenticated() ? await findWorkspaceForOrgId(orgId) : null;
+
+    if (!workspacePath) {
+        logger.main.warn('[DeepLink] Cannot route feedback request:', { reason, orgId, requestId });
+        return false;
+    }
+
+    createTeamManagementWindow({ orgId, workspacePath, feedbackRequestId: requestId });
+    logger.main.info('[DeepLink] Routed feedback request to the organization window:', {
+        orgId,
+        requestId,
+        workspacePath,
+    });
+    return true;
 }
 
 /**

@@ -11,6 +11,8 @@
   },
   "include": [
     "src/docs-ui.ts",
+    "src/feedback-ui.ts",
+    "src/inbox.ts",
     "src/editor/hostTypes.ts"
   ],
   "exclude": [

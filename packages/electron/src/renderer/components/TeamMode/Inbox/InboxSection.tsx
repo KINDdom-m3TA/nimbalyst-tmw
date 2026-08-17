@@ -11,8 +11,11 @@ import { InboxStatusBanner } from './InboxStatusBanner';
 import { InboxStatePicker } from './InboxStatePicker';
 import { DEFAULT_INBOX_PREFERENCES, persistInboxPreferences, readInboxPreferences } from './inboxPreferences';
 import {
+  consumeInboxRowSelectionRequest,
   consumeInboxSearchFocusRequest,
+  subscribeInboxRowSelection,
   subscribeInboxSearchFocus,
+  type InboxRowSelectionRequest,
 } from '../orgWindowCommandBus';
 import { useInboxProvider, type InboxProvider } from './inboxProvider';
 import {
@@ -84,6 +87,8 @@ export function InboxSection({
   const [tick, setTick] = useState(0);
   const preferencesLoaded = useRef(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingSelectionRef = useRef<InboxRowSelectionRequest | null>(null);
+  const [selectionRequestTick, setSelectionRequestTick] = useState(0);
 
   // Messages > Search Messages. The command routes the window to the Inbox
   // first, so it may well arrive before this surface exists — hence the latched
@@ -98,6 +103,21 @@ export function InboxSection({
     };
     focusSearch();
     return subscribeInboxSearchFocus(focusSearch);
+  }, []);
+
+  // A deep link (`nimbalyst://feedback-request/...`) names a source, not a
+  // delivery, and may arrive before this surface exists or before the inbox has
+  // synced. Latch the request here; the effect below resolves it against every
+  // snapshot until the delivery shows up.
+  useEffect(() => {
+    const latch = () => {
+      const pending = consumeInboxRowSelectionRequest();
+      if (!pending) return;
+      pendingSelectionRef.current = pending;
+      setSelectionRequestTick((value) => value + 1);
+    };
+    latch();
+    return subscribeInboxRowSelection(latch);
   }, []);
 
   useEffect(() => {
@@ -193,6 +213,24 @@ export function InboxSection({
     setScope(EMPTY_INBOX_SCOPE);
     setQuery('');
   }, []);
+
+  useEffect(() => {
+    const pending = pendingSelectionRef.current;
+    if (!pending) return;
+    const delivery = snapshot.deliveries.find((entry) =>
+      entry.source.orgId === pending.orgId
+      && entry.source.sourceKind === pending.sourceKind
+      && entry.source.sourceId === pending.sourceId);
+    if (!delivery) return;
+    pendingSelectionRef.current = null;
+    setSelectedId(delivery.id);
+    setActivationNotice(null);
+    // Landing on a row the filter in force hides would show an empty pane,
+    // which is the exact failure the link exists to avoid. Clearing writes the
+    // preferences back — deliberately: the inbox is left in the state that
+    // shows what the recipient was sent.
+    if (!rows.some((row) => row.id === delivery.id)) clearFilters();
+  }, [clearFilters, rows, selectionRequestTick, snapshot.deliveries]);
 
   return (
     <section

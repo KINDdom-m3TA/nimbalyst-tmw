@@ -109,7 +109,14 @@ describe('createFeedbackComposeHost', () => {
 
     const result = await host.send(readyPayload(draft));
 
-    expect(result).toEqual({ success: true, requestId: 'fr-generated' });
+    // The pasteable link comes back with the send: a recipient without the
+    // desktop app is reached by it or by nothing, so the confirmation must not
+    // have to go looking for it.
+    expect(result).toEqual({
+      success: true,
+      requestId: 'fr-generated',
+      shareUrl: 'https://console.nimbalyst.com/org/org-1/feedback/fr-generated',
+    });
     // The already-shared subject is not republished, and nothing outside the
     // author's confirmation is touched.
     expect(prepareSubject).toHaveBeenCalledTimes(1);
@@ -219,7 +226,7 @@ describe('createFeedbackComposeHost', () => {
     const retry = harness();
     const result = await retry.host.send(payload);
 
-    expect(result).toEqual({ success: true, requestId: 'fr-generated' });
+    expect(result).toMatchObject({ success: true, requestId: 'fr-generated' });
     const request = retry.invoke.mock.calls[0][1] as FeedbackRequestCreateIpcRequest;
     expect(request.request.asks.map((ask) => ask.id)).toEqual(['ask-ship']);
     expect(request.request.recipients.map((person) => person.userId)).toEqual(['u-karl']);

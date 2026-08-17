@@ -1,10 +1,10 @@
 /**
  * The IPC-backed respond host.
  *
- * Kept out of the component on purpose: `FeedbackRequestRespond` reads atoms and
- * calls host methods, and nothing in it knows an IPC channel name. A delivery
- * surface builds one of these and hands it down; a surface that cannot reach the
- * collaboration layer hands down nothing and the card says so.
+ * Kept out of the component on purpose: `FeedbackRequestRespond` receives state
+ * and calls host methods, and nothing in it knows an IPC channel name. A
+ * delivery surface builds one of these and hands it down; a surface that cannot
+ * reach the collaboration layer hands down nothing and the card says so.
  *
  * The wire takes one ask at a time (`FeedbackRequestRespondIpcRequest`), so a
  * multi-ask submit is sent in order and stops at the first refusal. Answers

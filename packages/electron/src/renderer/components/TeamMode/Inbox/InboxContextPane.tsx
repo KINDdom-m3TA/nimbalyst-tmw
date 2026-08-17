@@ -3,11 +3,17 @@ import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import { useAtomValue, useStore } from 'jotai';
 
 import { settingAtom } from '../../../store/atoms/settingAtomFamily';
+import {
+  feedbackRequestStateForTargetAtomFamily,
+  feedbackRequestTargetKey,
+} from '../../../store/atoms/feedbackRequests';
+import type { FeedbackRequestCommentIpcRequest } from '../../../../shared/feedbackRequest';
 import { CommentThread } from '../../Comments/CommentThread';
 import { createConversationCommentAdapter } from '../../Comments/ConversationCommentAdapter';
 import type { CommentCapabilities } from '../../Comments/commentTypes';
 import { FeedbackRequestRespond } from '../../FeedbackRequest/FeedbackRequestRespond';
 import { createFeedbackRespondHost } from '../../FeedbackRequest/createFeedbackRespondHost';
+import { createFeedbackDiscussionAdapter } from '../../FeedbackRequest/feedbackDiscussionAdapter';
 import { startFeedbackRequestSync } from '../../FeedbackRequest/createFeedbackResultsHost';
 import { openActionLabel } from './inboxViewModel';
 import type { InboxRowView, InboxSubscriptionState } from './inboxTypes';
@@ -125,7 +131,7 @@ export function InboxContextPane({
         ? (
           <InboxFeedbackRequest
             workspacePath={workspacePath}
-            orgId={row.orgId}
+            row={row}
             requestId={row.sourceId}
           />
         )
@@ -221,18 +227,67 @@ export function InboxContextPane({
 
 function InboxFeedbackRequest({
   workspacePath,
-  orgId,
+  row,
   requestId,
 }: {
   workspacePath: string;
-  orgId: string;
+  row: InboxRowView;
   requestId: string;
 }) {
+  const { orgId } = row;
   const target = useMemo(
     () => ({ workspacePath, orgId, requestId }),
     [workspacePath, orgId, requestId],
   );
+  const targetStore = useStore();
   const host = useMemo(() => createFeedbackRespondHost({ target }), [target]);
+  const state = useAtomValue(
+    feedbackRequestStateForTargetAtomFamily(feedbackRequestTargetKey(target)),
+  );
+  const viewerUserId = state.viewerUserId || row.viewerUserId;
+  const viewerActor = useMemo(() => ({
+    kind: 'user' as const,
+    userId: viewerUserId,
+    onBehalfOfUserId: viewerUserId,
+  }), [viewerUserId]);
+  const capabilities = useMemo<CommentCapabilities>(() => ({
+    read: true,
+    comment: row.canReply && state.request?.lifecycle.status === 'open',
+    react: false,
+    editOwn: false,
+    deleteOwn: false,
+    moderate: false,
+    manageRoom: false,
+  }), [row.canReply, state.request?.lifecycle.status]);
+  const adapter = useMemo(
+    () => createFeedbackDiscussionAdapter({
+      target,
+      viewerActor,
+      capabilities,
+      store: targetStore,
+      post: (input) => {
+        const request: FeedbackRequestCommentIpcRequest = {
+          target,
+          clientMutationId: input.clientMutationId,
+          body: input.body,
+          replyToCommentId: input.replyToCommentId,
+        };
+        return window.electronAPI.invoke('feedback-request:comment', request);
+      },
+    }),
+    [capabilities, target, targetStore, viewerActor],
+  );
+  const directory = useMemo(() => ({
+    people: [{
+      userId: viewerUserId,
+      displayName: 'You',
+      handle: 'you',
+      avatarInitials: 'YO',
+    }],
+    agents: [],
+    displayNames: { [viewerUserId]: 'You' },
+  }), [viewerUserId]);
+  const density = useAtomValue(settingAtom('team.messages.density'));
 
   React.useEffect(() => {
     void startFeedbackRequestSync(target);
@@ -240,7 +295,31 @@ function InboxFeedbackRequest({
 
   return (
     <div className="inbox-feedback-request min-h-0 flex-1 overflow-y-auto p-3">
-      <FeedbackRequestRespond target={target} host={host} />
+      <FeedbackRequestRespond
+        state={state}
+        host={host}
+        discussion={(
+          <div className="feedback-request-discussion-thread h-[320px] min-h-[240px]">
+            <CommentThread
+              adapter={adapter}
+              capabilities={capabilities}
+              context={{
+                conversationId: requestId,
+                conversationTitle: row.sourceTitle,
+                agentPostingEnabled: false,
+                attachedAgentSessionIds: [],
+                surfaceLabel: row.sourceTitle ?? 'Feedback request',
+              }}
+              directory={directory}
+              orgId={orgId}
+              viewerUserId={viewerUserId}
+              viewerActor={viewerActor}
+              emptyLabel="No discussion yet."
+              density={density}
+            />
+          </div>
+        )}
+      />
     </div>
   );
 }

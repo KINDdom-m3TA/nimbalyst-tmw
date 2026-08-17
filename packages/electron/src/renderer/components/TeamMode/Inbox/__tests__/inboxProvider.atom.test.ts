@@ -3,6 +3,7 @@ import type { TeamInboxSnapshot } from '@nimbalyst/runtime/sync';
 import { createStore } from 'jotai';
 import { describe, expect, it, vi } from 'vitest';
 
+import { parseFeedbackRequestDeepLink } from '../../../../../shared/feedbackRequestLinks';
 import { teamInboxSnapshotAtom } from '../../../../store/atoms/teamInbox';
 import { createAtomInboxProvider } from '../inboxProvider';
 import { toRowView } from '../inboxViewModel';
@@ -131,7 +132,7 @@ describe('createAtomInboxProvider', () => {
       deliveries: [activity('tracker'), activity('document'), activity('feedbackRequest')],
       organizations: [{ orgId: 'org-a', orgName: 'Acme', status: 'ready' }],
     } as TeamInboxSnapshot);
-    const invoke = vi.fn(async () => true);
+    const invoke = vi.fn(async (_channel: string, _payload: string) => true);
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: { invoke },
@@ -142,13 +143,19 @@ describe('createAtomInboxProvider', () => {
       provider.getSnapshot().deliveries.map((delivery) => delivery.source.sourceKind),
     ).toEqual(['trackerComment', 'documentInlineComment', 'feedbackRequest']);
 
-    // A feedback request is not a conversation. Before it had its own source
-    // kind the conversation fallback minted a deep link for it, which opened
-    // an unrelated room; refusing to navigate is the honest outcome until the
-    // respond surface owns a route.
+    // A feedback request is not a conversation: the conversation fallback used
+    // to mint a link for it that opened an unrelated room. It now carries its
+    // own scheme, and the destination is the request's Inbox row rather than
+    // the `virtual://feedback-request/` tab, which is the author's results view.
     const feedbackRow = toRowView(provider.getSnapshot().deliveries[2], { now: 200 });
-    await expect(provider.navigate(feedbackRow)).resolves.toBe(false);
-    expect(invoke).not.toHaveBeenCalled();
+    await expect(provider.navigate(feedbackRow)).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledWith(
+      'deep-link:open-inbox-source',
+      'nimbalyst://feedback-request/feedbackRequest-1?orgId=org-a',
+    );
+    expect(
+      parseFeedbackRequestDeepLink(invoke.mock.calls[0][1]),
+    ).toEqual({ orgId: 'org-a', requestId: 'feedbackRequest-1' });
   });
 
   it('subscribes through the Jotai store', () => {

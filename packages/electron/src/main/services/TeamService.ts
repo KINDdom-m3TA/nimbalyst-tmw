@@ -230,6 +230,8 @@ export interface TeamMember {
   createdAt: string;
 }
 
+type InviteMemberRole = 'owner' | 'admin' | 'member' | 'viewer' | 'guest';
+
 // ============================================================================
 // Per-Org JWT Cache
 // ============================================================================
@@ -1941,8 +1943,8 @@ export async function listMembersWithTeamJwt(
 /**
  * Invite a member to a team by email. Requires explicit orgId.
  */
-async function inviteMember(orgId: string, email: string): Promise<void> {
-  await fetchTeamApi(`/api/teams/${orgId}/invite`, 'POST', { email }, orgId);
+async function inviteMember(orgId: string, email: string, role?: InviteMemberRole): Promise<void> {
+  await fetchTeamApi(`/api/teams/${orgId}/invite`, 'POST', { email, ...(role ? { role } : {}) }, orgId);
 }
 
 /**
@@ -2492,9 +2494,9 @@ export function registerTeamHandlers(): void {
     }
   });
 
-  safeHandle('team:invite', async (_event, orgId: string, email: string) => {
+  safeHandle('team:invite', async (_event, orgId: string, email: string, role?: InviteMemberRole) => {
     try {
-      await inviteMember(orgId, email);
+      await inviteMember(orgId, email, role);
       return { success: true };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };

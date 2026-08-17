@@ -22,6 +22,7 @@ import { createContext, useContext } from 'react';
 
 import { teamInboxSnapshotAtom } from '../../../store/atoms/teamInbox';
 import { buildConversationDeepLink } from '../../../../shared/conversationDeepLinks';
+import { buildFeedbackRequestDeepLink } from '../../../../shared/feedbackRequestLinks';
 import type {
   HydratedInboxDelivery,
   InboxRowView,
@@ -219,10 +220,11 @@ function deepLinkForRow(row: InboxRowView): string | null {
   }
   if (row.sourceKind === 'feedbackRequest') {
     // A feedback request is not a conversation, so the conversation fallback
-    // below would mint a link that opens something else entirely. Until the
-    // respond surface owns a deep-link route, the row has no destination and
-    // says so rather than navigating somewhere wrong.
-    return null;
+    // below would mint a link that opens something else entirely. Its own link
+    // lands on this row in the organization window's Inbox, where the respond
+    // card renders — deliberately not the `virtual://feedback-request/` tab,
+    // which is the author's results view.
+    return buildFeedbackRequestDeepLink(row.orgId, row.sourceId);
   }
   if (!row.commentId) return null;
   return buildConversationDeepLink(row.orgId, row.sourceId, row.commentId);

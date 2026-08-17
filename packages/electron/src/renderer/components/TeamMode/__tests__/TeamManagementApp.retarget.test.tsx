@@ -18,6 +18,8 @@ vi.mock('../../../contexts/DialogContext', () => ({
 
 import { TeamManagementApp } from '../TeamManagementApp';
 import { selectedOrgIdAtom } from '../../../store/atoms/orgScope';
+import { consumeInboxRowSelectionRequest } from '../orgWindowCommandBus';
+import { orgWindowRouteAtom } from '../orgWindowState';
 import { LAST_SELECTED_ORG_SETTING_KEY } from '../defaultOrg';
 import {
   ORG_WINDOW_PENDING_ROUTE_SETTING_KEY,
@@ -56,7 +58,11 @@ function installApi() {
   });
 }
 
-function retarget(payload: { orgId?: string | null; workspacePath?: string | null }) {
+function retarget(payload: {
+  orgId?: string | null;
+  workspacePath?: string | null;
+  feedbackRequestId?: string | null;
+}) {
   act(() => { setTargetHandler?.(payload); });
 }
 
@@ -69,6 +75,40 @@ describe('TeamManagementApp retargeting', () => {
   afterEach(() => {
     cleanup();
     window.history.replaceState({}, '', '/');
+    // The selection latch is a module singleton; a request left pending would
+    // be picked up by the next test's Inbox.
+    consumeInboxRowSelectionRequest();
+  });
+
+  /**
+   * A `nimbalyst://feedback-request/...` link has to land the recipient on the
+   * respond card, which lives inline in the Inbox's context pane. The existing
+   * `virtual://feedback-request/` tab is the *author's* results view, so opening
+   * one would be actively wrong here — the destination is a selected Inbox row.
+   */
+  it('points a feedback-request link at the Inbox row rather than a tab', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/?mode=team-management&orgId=org-a&feedbackRequestId=request-1',
+    );
+    const store = createStore();
+    render(<Provider store={store}><TeamManagementApp /></Provider>);
+
+    await waitFor(() => expect(store.get(orgWindowRouteAtom).view).toBe('inbox'));
+    expect(consumeInboxRowSelectionRequest()).toEqual({
+      orgId: 'org-a',
+      sourceKind: 'feedbackRequest',
+      sourceId: 'request-1',
+    });
+
+    // The window is a single reusable one, so a second link arrives as a
+    // retarget rather than a fresh mount and must latch again.
+    act(() => { store.set(orgWindowRouteAtom, { view: 'directory' }); });
+    retarget({ orgId: 'org-a', feedbackRequestId: 'request-2' });
+
+    await waitFor(() => expect(store.get(orgWindowRouteAtom).view).toBe('inbox'));
+    expect(consumeInboxRowSelectionRequest()).toMatchObject({ sourceId: 'request-2' });
   });
 
   it('re-seeds the atom when retargeted at the org it was opened with', async () => {

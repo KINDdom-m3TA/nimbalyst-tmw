@@ -46,8 +46,10 @@ import {
   WidgetNoteRow,
   WidgetStatusPill,
 } from '@nimbalyst/runtime/ui/AgentTranscript/components/CustomToolWidgets/shared/InteractiveWidgetChrome';
+import { FeedbackCopyLinkButton } from '@nimbalyst/runtime/ui/AgentTranscript/components/CustomToolWidgets/feedback/FeedbackCopyLinkButton';
 
 import type { FeedbackRequestServiceTarget } from '../../../shared/feedbackRequest';
+import { feedbackRequestConsoleUrl } from '../../../shared/feedbackRequestLinks';
 import {
   feedbackRequestProgressAtomFamily,
   feedbackRequestStateForTargetAtomFamily,
@@ -413,6 +415,14 @@ export const FeedbackRequestResults: React.FC<FeedbackRequestResultsProps> = ({
   const progress = useAtomValue(feedbackRequestProgressAtomFamily(atomKey));
   const request = state.request;
 
+  // The pasteable link for this request. Available before the snapshot loads
+  // and after the request closes: it is addressed from the target alone, and
+  // chasing somebody is exactly when an author comes back to this tab.
+  const shareUrl = useMemo(
+    () => feedbackRequestConsoleUrl(target.orgId, target.requestId),
+    [target.orgId, target.requestId],
+  );
+
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [nudgedAt, setNudgedAt] = useState<number | null>(null);
@@ -466,7 +476,19 @@ export const FeedbackRequestResults: React.FC<FeedbackRequestResultsProps> = ({
         state={state.status === 'error' ? 'error' : 'loading'}
         tone="resolved"
       >
-        <InteractiveWidgetHeader icon={<FeedbackIcon />} title="Feedback request" />
+        <InteractiveWidgetHeader
+          icon={<FeedbackIcon />}
+          title="Feedback request"
+          // The tab opens the moment the request is sent, which is precisely
+          // when the author wants the link — before the snapshot arrives.
+          trailing={(
+            <FeedbackCopyLinkButton
+              url={shareUrl}
+              testId="feedback-results-copy-link"
+              rootClassName="feedback-results-copy-link"
+            />
+          )}
+        />
         <InteractiveWidgetBody>
           <div className="select-text text-xs text-nim-muted">
             {state.error?.message ?? 'Loading this request…'}
@@ -515,6 +537,14 @@ export const FeedbackRequestResults: React.FC<FeedbackRequestResultsProps> = ({
               {`${results.answeredRecipientCount} of ${results.totalRecipientCount} responded`}
             </WidgetStatusPill>
             <WidgetStatusPill tone={lifecyclePill.tone}>{lifecyclePill.label}</WidgetStatusPill>
+            {/* Not behind the lifecycle menu, and not gated on authorship: a
+                recipient without the desktop app is reached by this link or by
+                nothing at all. */}
+            <FeedbackCopyLinkButton
+              url={shareUrl}
+              testId="feedback-results-copy-link"
+              rootClassName="feedback-results-copy-link"
+            />
             {isAuthor && isOpen && (
               <>
                 <WidgetActionButton

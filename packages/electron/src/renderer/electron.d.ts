@@ -194,7 +194,11 @@ interface ElectronAPI {
     findPendingInvitation: (email: string) => Promise<any>;
     acceptInvitation: (orgId: string) => Promise<any>;
     listMembers: (orgId: string) => Promise<any>;
-    inviteMember: (orgId: string, email: string) => Promise<any>;
+    inviteMember: (
+      orgId: string,
+      email: string,
+      role?: 'owner' | 'admin' | 'member' | 'viewer' | 'guest',
+    ) => Promise<any>;
     removeMember: (orgId: string, memberId: string) => Promise<any>;
     updateMemberRole: (orgId: string, memberId: string, role: string) => Promise<any>;
     listProjects: (orgId: string) => Promise<any>;
@@ -229,6 +233,9 @@ interface ElectronAPI {
     respond: (
       request: import('../shared/feedbackRequest').FeedbackRequestRespondIpcRequest,
     ) => Promise<import('../shared/feedbackRequest').FeedbackRequestServiceState>;
+    comment: (
+      request: import('../shared/feedbackRequest').FeedbackRequestCommentIpcRequest,
+    ) => Promise<import('../shared/feedbackRequest').FeedbackRequestCommentIpcResult>;
     close: (
       request: import('../shared/feedbackRequest').FeedbackRequestCloseIpcRequest,
     ) => Promise<import('../shared/feedbackRequest').FeedbackRequestServiceState>;

@@ -1,36 +1,21 @@
 import type {
   Actor,
   FeedbackAnswer,
+  FeedbackDiscussionComment,
   FeedbackRequestCreateInput,
   FeedbackRequestLifecycleStatus,
+  RichCommentBody,
 } from '@nimbalyst/collab-protocol';
 import type {
-  FeedbackRequestNudgeReceipt,
-  FeedbackRequestSyncState,
-  FeedbackRequestTarget,
-} from '@nimbalyst/runtime/sync';
+  FeedbackRequestServiceState,
+  FeedbackRequestServiceTarget,
+} from '@nimbalyst/collab-client/feedback';
 
-export interface FeedbackRequestServiceTarget extends FeedbackRequestTarget {
-  workspacePath: string;
-}
-
-export type FeedbackRequestConnectionStatus =
-  | 'idle'
-  | 'cached'
-  | 'connecting'
-  | 'connected'
-  | 'disconnected'
-  | 'error';
-
-export interface FeedbackRequestServiceState extends FeedbackRequestServiceTarget {
-  /** Org-scoped member id derived from the team JWT in main. */
-  viewerUserId: string;
-  status: FeedbackRequestConnectionStatus;
-  request?: FeedbackRequestSyncState['request'];
-  progress?: FeedbackRequestSyncState['progress'];
-  lastNudge?: FeedbackRequestNudgeReceipt;
-  error?: { code: string; message: string };
-}
+export type {
+  FeedbackRequestConnectionStatus,
+  FeedbackRequestServiceState,
+  FeedbackRequestServiceTarget,
+} from '@nimbalyst/collab-client/feedback';
 
 /**
  * The author as the renderer can honestly describe it: the session that drafted
@@ -55,6 +40,15 @@ export interface FeedbackRequestRespondIpcRequest {
   askId: string;
   answer: FeedbackAnswer;
 }
+
+export interface FeedbackRequestCommentIpcRequest {
+  target: FeedbackRequestServiceTarget;
+  clientMutationId: string;
+  body: RichCommentBody;
+  replyToCommentId?: string;
+}
+
+export type FeedbackRequestCommentIpcResult = FeedbackDiscussionComment;
 
 export interface FeedbackRequestCloseIpcRequest {
   target: FeedbackRequestServiceTarget;

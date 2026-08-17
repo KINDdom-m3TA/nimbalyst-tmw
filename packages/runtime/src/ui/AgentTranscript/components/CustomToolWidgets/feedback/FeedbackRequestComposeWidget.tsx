@@ -63,6 +63,7 @@ import {
   parseFeedbackComposeArgs,
   parseRequestFeedbackToolResult,
 } from './parseFeedbackComposeArgs';
+import { FeedbackCopyLinkButton } from './FeedbackCopyLinkButton';
 import { FeedbackComposeSubjects } from './FeedbackComposeSubjects';
 import {
   FeedbackComposeAddRecipient,
@@ -137,6 +138,7 @@ export const FeedbackRequestComposeWidget: React.FC<CustomToolWidgetProps> = ({
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [hasSent, setHasSent] = useState(false);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [publishPromptForced, setPublishPromptForced] = useState(false);
   const [now] = useState(() => Date.now());
 
@@ -159,6 +161,7 @@ export const FeedbackRequestComposeWidget: React.FC<CustomToolWidgetProps> = ({
         );
         if (result.success) {
           setHasSent(true);
+          setShareUrl(result.shareUrl ?? null);
           clearFeedbackRequestComposeDraft(draftId);
         } else {
           setSendError(result.error ?? 'The request could not be sent.');
@@ -175,6 +178,7 @@ export const FeedbackRequestComposeWidget: React.FC<CustomToolWidgetProps> = ({
 
   const handleCancel = useCallback(async () => {
     setHasSent(false);
+    setShareUrl(null);
     try {
       await host?.feedbackRequestCancel?.(draftId);
     } catch (error) {
@@ -238,6 +242,26 @@ export const FeedbackRequestComposeWidget: React.FC<CustomToolWidgetProps> = ({
           <div className="text-xs text-nim-muted leading-relaxed select-text">
             {draft.asks.map((ask) => ask.description || ask.label).join(' · ')}
           </div>
+          {/* The link is the delivery. Someone without the desktop app is
+              notified by nothing else, so the copy action sits on the
+              confirmation itself rather than behind a menu. */}
+          {shareUrl && (
+            <div
+              className="feedback-compose-share flex flex-wrap items-center gap-2"
+              data-testid="feedback-compose-share"
+            >
+              <FeedbackCopyLinkButton url={shareUrl} testId="feedback-compose-copy-link" />
+              <span className="min-w-0 flex-1 truncate text-[0.6875rem] text-nim-faint select-text">
+                {shareUrl}
+              </span>
+            </div>
+          )}
+          {shareUrl && (
+            <div className="text-[0.6875rem] text-nim-faint">
+              Paste that anywhere you already talk to them — it opens in a browser,
+              so they do not need Nimbalyst installed.
+            </div>
+          )}
           <div className="text-[0.6875rem] text-nim-faint">
             This session is idle. It resumes by itself when replies arrive.
           </div>

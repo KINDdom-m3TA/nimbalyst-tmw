@@ -88,9 +88,10 @@ import { useRoutedConversation } from './useRoutedConversation';
 import { unreadDeliveryIdsForConversation } from '../../store/conversationDirectoryViewModel';
 import { normalizeTeamAnalyticsCallerRole } from '../../../shared/analytics/teamAnalytics';
 import { trackTeamAnalyticsEvent } from '../../utils/teamAnalytics';
+import { CONSOLE_ORIGIN } from '../../../shared/consoleOrigin';
 
 // Workstream F will replace this interim destination with the shipped console route.
-export const TEAM_CONSOLE_URL = 'https://console.nimbalyst.com';
+export { CONSOLE_ORIGIN as TEAM_CONSOLE_URL };
 
 export type { AdminTab, OrgWindowRoute } from './orgWindowState';
 
@@ -375,7 +376,7 @@ function OrgWindowBody({
   const projectLocalState = useOrgProjectLocalStates(orgId);
   const showOrgRail = shouldRenderOrgRail(organizations);
   const openWebConsole = useCallback(() => {
-    window.electronAPI.openExternal(TEAM_CONSOLE_URL);
+    window.electronAPI.openExternal(CONSOLE_ORIGIN);
   }, []);
   const openProjectWorkspace = useCallback((workspacePath: string) => {
     void window.electronAPI.team.openProjectWorkspace(workspacePath).catch((reason) => {

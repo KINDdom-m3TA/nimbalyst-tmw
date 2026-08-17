@@ -7,6 +7,7 @@
  */
 
 import type { Actor, ResourceRef, RichCommentBody } from "./comments.js";
+import { MAX_RICH_COMMENT_BODY_ENVELOPE_BYTES } from "./comments.js";
 import type {
   StructuredInputAnswerByType,
   StructuredInputFieldByType,
@@ -16,6 +17,18 @@ import type {
 export type FeedbackRequestUrn = `nimbalyst://feedback-request/${string}`;
 
 const FEEDBACK_REQUEST_URN_PREFIX = "nimbalyst://feedback-request/";
+
+/** Maximum trimmed string length accepted for an incoming edit-text answer. */
+export const MAX_FEEDBACK_TEXT_ANSWER_LENGTH = 32 * 1024;
+
+export function getFeedbackTextAnswerMaxLength(
+  configuredMaxLength?: number
+): number {
+  return Math.min(
+    configuredMaxLength ?? MAX_FEEDBACK_TEXT_ANSWER_LENGTH,
+    MAX_FEEDBACK_TEXT_ANSWER_LENGTH
+  );
+}
 
 export function feedbackRequestUrn(requestId: string): FeedbackRequestUrn {
   return `${FEEDBACK_REQUEST_URN_PREFIX}${encodeURIComponent(requestId)}`;
@@ -118,6 +131,45 @@ export interface FeedbackDiscussionComment {
   editedAt?: number;
   deletedAt?: number;
   replyToCommentId?: string;
+}
+
+/**
+ * Server-stamped fields on a stored comment -- id, actor, timestamps, reply
+ * target -- rounded up. Charged alongside the client's body so a flood of empty
+ * comments is measured at what it actually costs the row, and so the budget can
+ * be checked before the comment is built.
+ */
+const FEEDBACK_DISCUSSION_COMMENT_OVERHEAD_BYTES = 320;
+
+const feedbackUtf8Encoder = new TextEncoder();
+
+function jsonByteLength(value: unknown): number | null {
+  try {
+    const encoded = JSON.stringify(value);
+    return encoded === undefined
+      ? null
+      : feedbackUtf8Encoder.encode(encoded).byteLength;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Plaintext bytes the discussion would occupy once `incomingBody` is stored.
+ *
+ * `incomingBody` is untrusted and measured before validation, so an
+ * unserializable body is charged the largest body a valid one could be rather
+ * than passing free; validation rejects it a moment later either way.
+ */
+export function measureFeedbackDiscussionBytes(
+  discussion: readonly FeedbackDiscussionComment[],
+  incomingBody: unknown,
+): number {
+  return (
+    (jsonByteLength(discussion) ?? 0)
+    + (jsonByteLength(incomingBody) ?? MAX_RICH_COMMENT_BODY_ENVELOPE_BYTES)
+    + FEEDBACK_DISCUSSION_COMMENT_OVERHEAD_BYTES
+  );
 }
 
 type FeedbackResponseForType<Type extends FeedbackAskType> = {
@@ -480,7 +532,7 @@ function feedbackAnswerIsValid(
       }
       const length = answer.text.trim().length;
       return length >= (ask.minLength ?? 0)
-        && length <= (ask.maxLength ?? Number.MAX_SAFE_INTEGER);
+        && length <= getFeedbackTextAnswerMaxLength(ask.maxLength);
     }
     case "confirm":
       return typeof answer.value === "boolean";

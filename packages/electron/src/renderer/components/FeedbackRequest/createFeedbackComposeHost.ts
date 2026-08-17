@@ -40,6 +40,7 @@ import type {
   FeedbackRequestCreateIpcRequest,
   FeedbackRequestServiceTarget,
 } from '../../../shared/feedbackRequest';
+import { feedbackRequestConsoleUrl } from '../../../shared/feedbackRequestLinks';
 import { selectedWorkstreamAtom } from '../../store/atoms/sessions';
 import { openFeedbackRequestResults, type FeedbackRequestTabRef } from './feedbackRequestTab';
 import {
@@ -211,7 +212,14 @@ export function createFeedbackComposeHost(
       }
 
       openResults({ orgId: payload.orgId, requestId });
-      return { success: true, requestId };
+      // The confirmation's copy action. A recipient without the desktop app is
+      // reached by this link or by nothing, so it is minted on the send path
+      // rather than left to a surface to assemble.
+      return {
+        success: true,
+        requestId,
+        shareUrl: feedbackRequestConsoleUrl(payload.orgId, requestId),
+      };
     },
 
     /**

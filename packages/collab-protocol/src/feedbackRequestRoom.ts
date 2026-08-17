@@ -2,14 +2,15 @@
  * FeedbackRequestRoom wire protocol.
  *
  * One team-JWT-authorized Durable Object owns each first-class feedback
- * request. The server stamps recipient identity on response writes.
+ * request. The server stamps actor identity on response and discussion writes.
  */
 
-import type { Actor, ResourceRef } from "./comments.js";
+import type { Actor, ResourceRef, RichCommentBody } from "./comments.js";
 import type {
   FeedbackAnswer,
   FeedbackAsk,
   FeedbackAskAssignment,
+  FeedbackDiscussionComment,
   FeedbackRequest,
   FeedbackRequestLifecycle,
   FeedbackRequestLifecycleStatus,
@@ -44,6 +45,7 @@ export type FeedbackRequestClientMessage =
   | FeedbackRequestSyncMessage
   | FeedbackRequestCreateMessage
   | FeedbackResponseMessage
+  | FeedbackRequestCommentMessage
   | FeedbackRequestCloseMessage
   | FeedbackRequestNudgeMessage;
 
@@ -67,6 +69,15 @@ export interface FeedbackResponseMessage {
   answer: FeedbackAnswer;
 }
 
+/** Comment identity and timestamps are server-stamped from the team JWT. */
+export interface FeedbackRequestCommentMessage {
+  type: "feedbackRequestComment";
+  clientMutationId: string;
+  requestId: string;
+  body: RichCommentBody;
+  replyToCommentId?: string;
+}
+
 export interface FeedbackRequestCloseMessage {
   type: "feedbackRequestClose";
   clientMutationId: string;
@@ -86,6 +97,11 @@ export type FeedbackRequestEvent =
   | { type: "feedbackRequestCreated"; request: FeedbackRequest }
   | { type: "feedbackResponse"; response: FeedbackResponse }
   | {
+      type: "feedbackRequestCommented";
+      requestId: string;
+      comment: FeedbackDiscussionComment;
+    }
+  | {
       type: "feedbackRequestClosed";
       requestId: string;
       lifecycle: FeedbackRequestLifecycle;
@@ -101,6 +117,7 @@ export type FeedbackRequestServerMessage =
   | FeedbackRequestSnapshotMessage
   | FeedbackRequestCreateAckMessage
   | FeedbackResponseAckMessage
+  | FeedbackRequestCommentAckMessage
   | FeedbackRequestCloseAckMessage
   | FeedbackRequestNudgeAckMessage
   | FeedbackRequestEventMessage
@@ -125,6 +142,14 @@ export interface FeedbackResponseAckMessage {
   clientMutationId: string;
   response: FeedbackResponse;
   progress: FeedbackRequestProgress;
+  replayed: boolean;
+}
+
+export interface FeedbackRequestCommentAckMessage {
+  type: "feedbackRequestCommentAck";
+  clientMutationId: string;
+  requestId: string;
+  comment: FeedbackDiscussionComment;
   replayed: boolean;
 }
 

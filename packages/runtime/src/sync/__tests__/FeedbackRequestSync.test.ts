@@ -280,6 +280,49 @@ describe('FeedbackRequestSync', () => {
     await responding;
     expect(responseSettled).toBe(true);
     expect(sync.getState()?.request.responses).toEqual([anonymousResponse]);
+
+    const commenting = sync.comment(
+      'mutation-comment',
+      {
+        version: 1,
+        format: 'plainText',
+        text: 'The choices need clarification.',
+      },
+      'comment-parent',
+    );
+    expect(JSON.parse(socket.sent[4])).toEqual({
+      type: 'feedbackRequestComment',
+      clientMutationId: 'mutation-comment',
+      requestId: 'request-a',
+      body: {
+        version: 1,
+        format: 'plainText',
+        text: 'The choices need clarification.',
+      },
+      replyToCommentId: 'comment-parent',
+    });
+    socket.receive({
+      type: 'feedbackRequestCommentAck',
+      clientMutationId: 'mutation-comment',
+      requestId: 'request-a',
+      comment: {
+        id: 'comment-a',
+        actor: {
+          kind: 'user',
+          userId: 'recipient-a',
+          onBehalfOfUserId: 'recipient-a',
+        },
+        body: {
+          version: 1,
+          format: 'plainText',
+          text: 'The choices need clarification.',
+        },
+        replyToCommentId: 'comment-parent',
+        createdAt: 6,
+      },
+      replayed: false,
+    });
+    await expect(commenting).resolves.toMatchObject({ id: 'comment-a' });
     sync.destroy();
   });
 });

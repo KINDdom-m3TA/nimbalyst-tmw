@@ -2,6 +2,7 @@ import { BrowserWindow } from 'electron';
 
 import type {
   FeedbackRequestCloseIpcRequest,
+  FeedbackRequestCommentIpcRequest,
   FeedbackRequestCreateIpcRequest,
   FeedbackRequestNudgeIpcRequest,
   FeedbackRequestRespondIpcRequest,
@@ -49,6 +50,15 @@ export function registerFeedbackRequestHandlers(): void {
       input.clientMutationId,
       input.askId,
       input.answer,
+    ),
+  );
+  safeHandle(
+    'feedback-request:comment',
+    async (_event, input: FeedbackRequestCommentIpcRequest) => service.comment(
+      input.target,
+      input.clientMutationId,
+      input.body,
+      input.replyToCommentId,
     ),
   );
   safeHandle(
