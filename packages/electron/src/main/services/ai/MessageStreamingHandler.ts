@@ -2693,6 +2693,7 @@ export class MessageStreamingHandler {
               await notificationService.showNotification({
                 title: composeNotificationTitle(sessionLabel, 'Response Ready'),
                 body: notificationBody,
+                kind: 'agent-complete',
                 sessionId: session.id,
                 workspacePath: workspacePath,
                 sourceLabel: sessionLabel,

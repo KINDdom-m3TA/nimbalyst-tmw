@@ -1056,6 +1056,7 @@ export class MetaAgentService {
     const result = await this.showNotificationWithResult({
       title: composeNotificationTitle(sourceLabel, title),
       body: boundedBody,
+      kind: 'agent-complete',
       sessionId: targetSessionId,
       workspacePath: session.workspacePath,
       sourceLabel,

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Entities and relationships a teammate has selected in a shared data model now show their name and color.
 - Ask a teammate for structured feedback: your agent drafts the question, you approve it, and it arrives in their inbox to answer, with results and outstanding replies in their own tab. Copy a link to send anyone who does not have Nimbalyst installed, and they can answer and discuss the request in a browser.
 - Tracker items that have not been shared yet now show a number of their own, like NIM.12, so you can refer to one before it is published.
+- Desktop notifications now carry their own icon, so you can tell a finished agent, a question, an approval request, and a teammate's message apart at a glance.
 
 ### Changed
 <!-- Changes to existing functionality go here -->

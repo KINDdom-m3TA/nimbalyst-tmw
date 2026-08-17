@@ -92,6 +92,7 @@ async function notifyClaudeCliTurnComplete(
     await notificationService.showNotification({
       title: composeNotificationTitle(title, 'Response Ready'),
       body,
+      kind: 'agent-complete',
       sessionId,
       workspacePath,
       sourceLabel: title,
@@ -279,8 +280,11 @@ export async function startClaudeCliProxyObservation(opts: {
         const session = await AISessionsRepository.get(sessionId).catch(() => null);
         const sourceLabel = session?.title || session?.provider || `Session ${sessionId.slice(0, 8)}`;
         await notificationService.showNotification({
+          // A rate-limit pause is the agent stopping until something changes,
+          // not a finished turn.
           title: composeNotificationTitle(sourceLabel, 'Claude CLI paused'),
           body,
+          kind: 'needs-input',
           sessionId,
           workspacePath,
           sourceLabel,
