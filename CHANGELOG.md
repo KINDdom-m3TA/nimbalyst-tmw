@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Codex no longer offers slash commands it cannot actually run.
 - The Compact action is now hidden for agents that cannot compact, instead of offering a button that quietly does nothing.
 - The inbox's message pane can now be dragged to the width you want, and it stays on screen at far more window sizes instead of disappearing.
+- The tracker's All view now shows Owner and Due Date across every type, so you can sort and filter one list by who is responsible and what is overdue.
 
 ### Fixed
 <!-- Bug fixes go here -->

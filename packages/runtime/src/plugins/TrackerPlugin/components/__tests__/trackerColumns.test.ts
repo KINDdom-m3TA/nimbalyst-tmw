@@ -1,8 +1,16 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
-import { getCellValue, getEffectiveUpdatedDate, resolveColumnsForType } from '../trackerColumns';
+import {
+  getCellValue,
+  getDefaultColumnConfig,
+  getEffectiveUpdatedDate,
+  resolveColumnFieldName,
+  resolveColumnsForType,
+} from '../trackerColumns';
 import { resolveTrackerOrderingValue } from '../../models/trackerOrdering';
+import { globalRegistry } from '../../models';
+import type { TrackerDataModel } from '../../models/TrackerDataModel';
 import type { TrackerRecord } from '../../../../core/TrackerRecord';
 
 describe('trackerColumns', () => {
@@ -146,5 +154,77 @@ describe('trackerColumns', () => {
       expect(resolveTrackerOrderingValue(keyRecord({ localKey: 'NIC.42' }), 'key')).toBe('NIC.42');
       expect(resolveTrackerOrderingValue(keyRecord({ issueKey: 'LC-1', localKey: 'NIC.42' }), 'key')).toBe('NIC.42');
     });
+  });
+});
+
+/**
+ * The cross-tracker "All" view resolves its columns with the empty type, because no
+ * single schema describes a mixed list. Its columns therefore have to be role-backed:
+ * two types can both have a due date and store it under different field names, and
+ * nothing on screen reveals which field a column actually read (nimbalyst#1129).
+ */
+describe('cross-tracker column resolution', () => {
+  const conventional: TrackerDataModel = {
+    type: 'crossDeliverable',
+    displayName: 'Deliverable',
+    displayNamePlural: 'Deliverables',
+    icon: 'assignment',
+    color: 'var(--nim-primary)',
+    modes: { inline: true, fullDocument: true },
+    idPrefix: 'CDL',
+    idFormat: 'ulid',
+    sharing: 'personal',
+    draftByDefault: false,
+    fields: [
+      { name: 'title', type: 'string', required: true },
+      { name: 'owner', type: 'user' },
+      { name: 'dueDate', type: 'date' },
+    ],
+    roles: { title: 'title', assignee: 'owner', dueDate: 'dueDate' },
+  };
+
+  const remapped: TrackerDataModel = {
+    ...conventional,
+    type: 'crossInvoice',
+    displayName: 'Invoice',
+    displayNamePlural: 'Invoices',
+    idPrefix: 'CIN',
+    fields: [
+      { name: 'title', type: 'string', required: true },
+      { name: 'accountManager', type: 'user' },
+      { name: 'targetDate', type: 'date' },
+    ],
+    roles: { title: 'title', assignee: 'accountManager', dueDate: 'targetDate' },
+  };
+
+  beforeEach(() => {
+    globalRegistry.register(conventional);
+    globalRegistry.register(remapped);
+  });
+
+  it('reads each type own field through one shared Owner and Due Date column', () => {
+    const columns = resolveColumnsForType('');
+    const owner = columns.find(column => column.id === 'owner');
+    const dueDate = columns.find(column => column.id === 'dueDate');
+
+    expect(owner).toMatchObject({ label: 'Owner', role: 'assignee', render: 'avatar' });
+    expect(dueDate).toMatchObject({ label: 'Due Date', role: 'dueDate', render: 'date' });
+
+    expect(resolveColumnFieldName('crossDeliverable', owner!)).toBe('owner');
+    expect(resolveColumnFieldName('crossInvoice', owner!)).toBe('accountManager');
+    expect(resolveColumnFieldName('crossDeliverable', dueDate!)).toBe('dueDate');
+    expect(resolveColumnFieldName('crossInvoice', dueDate!)).toBe('targetDate');
+  });
+
+  it('shows Owner and Due Date by default so overdue and unassigned work is visible', () => {
+    expect(getDefaultColumnConfig('').visibleColumns)
+      .toEqual(['type', 'key', 'title', 'status', 'priority', 'owner', 'dueDate', 'updated']);
+  });
+
+  it('leaves a single-tracker view resolving to its own field names', () => {
+    const dueDate = resolveColumnsForType('crossInvoice').find(column => column.id === 'targetDate');
+
+    expect(dueDate?.role).toBe('dueDate');
+    expect(resolveColumnFieldName('crossInvoice', dueDate!)).toBe('targetDate');
   });
 });

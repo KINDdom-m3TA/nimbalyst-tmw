@@ -36,6 +36,7 @@ import {
   formatTrackerDateCell,
   getCellValue,
   getEffectiveUpdatedDate,
+  resolveColumnFieldName,
   type TrackerColumnDef,
   type TypeColumnConfig,
 } from './trackerColumns';
@@ -45,7 +46,7 @@ import { TrackerUnreadDot } from '../../../readReceipts/TrackerUnreadDot';
 import { DisplayOptionsPanel } from './DisplayOptionsPanel';
 import { useTrackerRows } from './useTrackerRows';
 import { TrackerFavoriteStar } from './TrackerFavoriteStar';
-import { groupTrackerRecords, searchMatchesRecord } from './trackerRowData';
+import { compareRecords, groupTrackerRecords, searchMatchesRecord } from './trackerRowData';
 
 export type SortColumn = 'title' | 'type' | 'status' | 'priority' | 'progress' | 'module' | 'lastIndexed' | (string & {});
 export type SortDirection = 'asc' | 'desc';
@@ -853,48 +854,25 @@ export function TrackerTable({
 
   const sortItems = useCallback((itemsToSort: TrackerRecord[], sortColumn: SortColumn, sortDir: SortDirection) => {
     const sorted = [...itemsToSort].sort((a, b) => {
-      let compareValue = 0;
-
-      switch (sortColumn) {
-        case 'manual': {
+      // `manual` is list-only (kanban drag order); everything else goes through the
+      // shared comparator so this surface and the grid order identical rows
+      // identically -- including role columns, which resolve per record and would
+      // otherwise read the wrong field in the cross-tracker "All" view.
+      const compareValue = sortColumn === 'manual'
+        // Raw string comparison, not localeCompare -- fractional indexing
+        // keys sort by character code order (0-9, A-Z, a-z).
+        ? (() => {
           const aKey = (a.fields.kanbanSortOrder as string) ?? '';
           const bKey = (b.fields.kanbanSortOrder as string) ?? '';
-          // Raw string comparison, not localeCompare -- fractional indexing
-          // keys sort by character code order (0-9, A-Z, a-z).
-          compareValue = aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
-          break;
-        }
-        case 'type':
-          compareValue = a.primaryType.localeCompare(b.primaryType);
-          break;
-        case 'module':
-          compareValue = (a.system.documentPath ?? '').localeCompare(b.system.documentPath ?? '');
-          break;
-        case 'lastIndexed': {
-          const aTime = a.system.lastIndexed ? new Date(a.system.lastIndexed).getTime() : 0;
-          const bTime = b.system.lastIndexed ? new Date(b.system.lastIndexed).getTime() : 0;
-          compareValue = aTime - bTime;
-          break;
-        }
-        default: {
-          // Generic field sort via getCellValue (handles all schema fields + builtins)
-          const aVal = getCellValue(a, sortColumn);
-          const bVal = getCellValue(b, sortColumn);
-          if (aVal == null && bVal == null) { compareValue = 0; break; }
-          if (aVal == null) { compareValue = 1; break; }
-          if (bVal == null) { compareValue = -1; break; }
-          if (aVal instanceof Date && bVal instanceof Date) { compareValue = aVal.getTime() - bVal.getTime(); break; }
-          if (typeof aVal === 'number' && typeof bVal === 'number') { compareValue = aVal - bVal; break; }
-          compareValue = String(aVal).localeCompare(String(bVal));
-          break;
-        }
-      }
+          return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
+        })()
+        : compareRecords(a, b, sortColumn, allColumns);
 
       return sortDir === 'asc' ? compareValue : -compareValue;
     });
 
     return sorted;
-  }, []);
+  }, [allColumns]);
 
   const filteredItems = items
     .filter(item => {
@@ -1411,7 +1389,7 @@ export function TrackerTable({
                 {/* Right-side metadata: render visible columns (except type/title which are already shown) */}
                 <div className="tracker-table-row-meta flex items-center gap-2 shrink-0">
                   {visibleColumnDefs.filter(col => col.id !== 'type' && col.id !== 'title').map(col => {
-                    const value = getCellValue(item, col.id);
+                    const value = getCellValue(item, resolveColumnFieldName(item.primaryType, col));
                     return (
                       <div
                         key={col.id}
