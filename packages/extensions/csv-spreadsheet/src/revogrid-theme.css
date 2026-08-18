@@ -317,12 +317,91 @@
 }
 
 /* Cell alignment classes */
+.spreadsheet-editor revo-grid .cell-align-left {
+  text-align: left;
+}
+
 .spreadsheet-editor revo-grid .cell-align-right {
   text-align: right;
 }
 
 .spreadsheet-editor revo-grid .cell-align-center {
   text-align: center;
+}
+
+/*
+ * Negative values under a "red" negative style. A class rather than a decorated
+ * string, so the cell still copies as a plain number.
+ */
+.spreadsheet-editor revo-grid .csv-cell-negative {
+  color: var(--nim-error);
+}
+
+/* Link cells (`url` column type, and =HYPERLINK results) */
+.spreadsheet-editor revo-grid .csv-url-cell {
+  color: var(--nim-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.spreadsheet-editor revo-grid .csv-url-cell:hover {
+  text-decoration-thickness: 2px;
+}
+
+/* Tracker chips (`tracker` column type) */
+.spreadsheet-editor revo-grid .csv-tracker-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  cursor: pointer;
+}
+
+.spreadsheet-editor revo-grid .csv-tracker-cell-unresolved {
+  color: var(--nim-text-muted);
+  cursor: default;
+}
+
+.spreadsheet-editor revo-grid .csv-tracker-status {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--nim-text-muted);
+}
+
+.spreadsheet-editor revo-grid .csv-tracker-status-to-do {
+  background-color: var(--nim-text-muted);
+}
+
+.spreadsheet-editor revo-grid .csv-tracker-status-in-progress {
+  background-color: var(--nim-primary);
+}
+
+.spreadsheet-editor revo-grid .csv-tracker-status-in-review {
+  background-color: var(--nim-warning, #d98324);
+}
+
+.spreadsheet-editor revo-grid .csv-tracker-status-completed {
+  background-color: var(--nim-success, #2ea043);
+}
+
+.spreadsheet-editor revo-grid .csv-tracker-status-blocked {
+  background-color: var(--nim-error);
+}
+
+.spreadsheet-editor revo-grid .csv-tracker-key {
+  flex: none;
+  font-weight: 600;
+  color: var(--nim-primary);
+}
+
+.spreadsheet-editor revo-grid .csv-tracker-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nim-text-muted);
 }
 
 /* Error cells */

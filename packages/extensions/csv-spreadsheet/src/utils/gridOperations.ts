@@ -23,6 +23,7 @@ import {
   serializeMetadata,
 } from './csvParser';
 import { isFormula, recalculateFormulas as recalculateFormulaData } from './formulaEngine';
+import { getSortKey, normalizePastedValue } from './formatters';
 import type { UndoRedoPlugin } from '../plugins/UndoRedoPlugin';
 import { getAppliedTrimmedRows } from '../filter/filterEngine';
 import { createRowIndexMapping, logicalRowsForPaste, logicalRowsForSelection } from '../filter/rowIndexMapping';
@@ -865,7 +866,9 @@ export function createGridOperations(
         const { gridRow, rowType } = translateRowIndex(destRow);
         const { gridCol, colType } = translateColumnIndex(destCol);
         const prop = columnIndexToLetter(destCol);
-        const value = values[r][c];
+        // Pasting into a typed column stores the column's canonical form, so a
+        // `1/2/2026` pasted into a datetime column is a date rather than text.
+        const value = normalizePastedValue(values[r][c], getColumnFormats()[destCol]);
 
         // Get old value
         const dataSource = rowType === 'rowPinStart' ? pinnedTop : newSource;
@@ -1051,6 +1054,13 @@ export function createGridOperations(
     };
   };
 
+  /** Narrow a grid model value to what the formatter helpers accept. */
+  const toCellValue = (value: unknown): CellValue => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'string' || typeof value === 'number') return value;
+    return String(value);
+  };
+
   /**
    * Sort by column
    */
@@ -1068,6 +1078,9 @@ export function createGridOperations(
     if (!source) return;
 
     const prop = columnIndexToLetter(columnIndex);
+    // The column's declared type decides how its values compare. Without it a
+    // `MM/DD/YYYY` column sorts by month and a `$1,200` column sorts as text.
+    const format = getColumnFormats()[columnIndex];
 
     // Buffer rows stay trailing and are not part of spreadsheet sorting.
     const { contentRows, bufferRows } = splitTrailingBufferRows(source);
@@ -1075,21 +1088,20 @@ export function createGridOperations(
       const aVal = formulaViewState?.getDisplayValue(a, prop) ?? a[prop];
       const bVal = formulaViewState?.getDisplayValue(b, prop) ?? b[prop];
 
-      // Handle empty values
-      const aEmpty = aVal === null || aVal === undefined || aVal === '';
-      const bEmpty = bVal === null || bVal === undefined || bVal === '';
+      const aKey = getSortKey(toCellValue(aVal), format);
+      const bKey = getSortKey(toCellValue(bVal), format);
 
-      if (aEmpty && bEmpty) return 0;
-      if (aEmpty) return direction === 'asc' ? 1 : -1;
-      if (bEmpty) return direction === 'asc' ? -1 : 1;
+      // Blanks always sink to the bottom, in both directions.
+      if (aKey === null && bKey === null) return 0;
+      if (aKey === null) return 1;
+      if (bKey === null) return -1;
 
-      // Numeric comparison
-      if (typeof aVal === 'number' && typeof bVal === 'number') {
-        return direction === 'asc' ? aVal - bVal : bVal - aVal;
+      let result: number;
+      if (typeof aKey === 'number' && typeof bKey === 'number') {
+        result = aKey - bKey;
+      } else {
+        result = String(aKey).localeCompare(String(bKey));
       }
-
-      // String comparison
-      const result = String(aVal).localeCompare(String(bVal));
       return direction === 'asc' ? result : -result;
     });
 

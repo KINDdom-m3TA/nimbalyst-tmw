@@ -4,6 +4,7 @@
 
 import * as formulajs from '@formulajs/formulajs';
 import type { SpreadsheetData, FormulaEvalData, CellValue } from '../types';
+import { encodeHyperlink } from './formatters';
 import {
   collectReferenceAreas,
   FORMULA_LIMITS,
@@ -595,6 +596,16 @@ function buildFormulaFunctionMap(): Map<string, FormulaFunction> {
   };
   for (const name of WRAPPED_CRITERIA_FUNCTIONS) functions.set(name, wrappedFunctions[name]);
 
+  // Implemented locally rather than taken from formula.js: a computed cell value
+  // is `string | number | null`, so the label has to travel with the URL inside
+  // one string. `encodeHyperlink` packs both; the URL cell renderer unpacks them.
+  functions.set('HYPERLINK', (url: unknown, label?: unknown) => {
+    const href = typeof url === 'string' ? url.trim() : '';
+    if (href === '') throw new FormulaEvaluationError('#VALUE!');
+    const text = label === undefined || label === null ? href : String(label);
+    return encodeHyperlink(href, text);
+  });
+
   for (const [alias, target] of FUNCTION_ALIASES) {
     const targetFunction = functions.get(target);
     if (targetFunction) functions.set(alias, targetFunction);
@@ -884,6 +895,39 @@ function setFormulaResult(
   };
 }
 
+function pad2(n: number): string {
+  return n.toString().padStart(2, '0');
+}
+
+/**
+ * Serialize a formula's `Date` result.
+ *
+ * formula.js is not internally consistent about which midnight it means:
+ * `DATE`, `TODAY`, and `EOMONTH` return *local* midnight, while `DATEVALUE`
+ * returns *UTC* midnight. Reading either one with the wrong set of getters
+ * shifts the day by one in most of the world. So: a Date sitting exactly on UTC
+ * midnight is read as a UTC-anchored calendar date, and anything else is read
+ * in local time. The only value that lands on the wrong branch is an instant
+ * that genuinely is UTC midnight, which then renders as a bare date — harmless.
+ *
+ * Results keep their time when they have one, so `=NOW()` can actually feed a
+ * `datetime` column. The previous `toISOString().slice(0, 10)` truncated every
+ * result to a date and made time-of-day unreachable.
+ */
+function formatDateResult(value: Date): string {
+  const isUtcMidnight = value.getUTCHours() === 0
+    && value.getUTCMinutes() === 0
+    && value.getUTCSeconds() === 0
+    && value.getUTCMilliseconds() === 0;
+
+  if (isUtcMidnight) return value.toISOString().slice(0, 10);
+
+  const datePart = `${value.getFullYear()}-${pad2(value.getMonth() + 1)}-${pad2(value.getDate())}`;
+  const hasTime = value.getHours() !== 0 || value.getMinutes() !== 0 || value.getSeconds() !== 0;
+  if (!hasTime) return datePart;
+  return `${datePart} ${pad2(value.getHours())}:${pad2(value.getMinutes())}:${pad2(value.getSeconds())}`;
+}
+
 function normalizeCellResult(value: EvaluationValue): CellValue {
   if (value === null || typeof value === 'string') return value;
   if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
@@ -892,7 +936,7 @@ function normalizeCellResult(value: EvaluationValue): CellValue {
     return value;
   }
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return value.toISOString().slice(0, 10);
+    return formatDateResult(value);
   }
   throw new FormulaEvaluationError('#VALUE!');
 }
