@@ -12,10 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- New features go here -->
 - Shared spreadsheets, mockups, and Excalidraw diagrams now open and edit in the web console, with live presence for spreadsheets and diagrams between the desktop app and the browser.
 - Entities and relationships a teammate has selected in a shared data model now show their name and color.
-- Ask a teammate for structured feedback: your agent drafts the question, you approve it, and it arrives in their inbox to answer, with results and outstanding replies in their own tab. Copy a link to send anyone who does not have Nimbalyst installed, and they can answer and discuss the request in a browser.
+- Ask a teammate for structured feedback: your agent drafts the question, you approve it, and it arrives in their inbox to answer, with results and outstanding replies in their own tab. A request can carry the mockups or documents it is about, so "which of these do you prefer" shows the real thing to look at and open instead of a list of names. Copy a link to send anyone who does not have Nimbalyst installed, and they can answer and discuss the request in a browser.
 - Tracker items that have not been shared yet now show a number of their own, like NIM.12, so you can refer to one before it is published.
 - Desktop notifications now carry their own icon, so you can tell a finished agent, a question, an approval request, and a teammate's message apart at a glance.
-- Spreadsheet columns can now hold dates with times, times, checkboxes, links, and tracker items, alongside accounting and scientific number styles, custom date patterns, red or parenthesized negatives, and your own alignment. A tracker cell shows the item's live title and status and opens it when clicked, columns can detect their own type, and sorting and filtering now follow the column's type instead of its text.
+- Spreadsheet columns can now hold dates with times, times, checkboxes, links, and tracker items, alongside accounting and scientific number styles, custom date patterns, red or parenthesized negatives, and your own alignment. A tracker cell shows the item's live title and status and opens it when clicked, columns can detect their own type, and sorting and filtering now follow the column's type instead of its text. You can also style any range of cells — bold, italic, underline, strikethrough, text and fill color, alignment — and date formulas now do arithmetic, so `=A1+7` and `=B1-A1` work.
 
 ### Changed
 <!-- Changes to existing functionality go here -->

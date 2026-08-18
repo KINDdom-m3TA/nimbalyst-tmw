@@ -125,7 +125,8 @@ export type CollabOpenSource =
   | 'history'
   | 'agent_tool'
   | 'share_to_team'
-  | 'embedded_document';
+  | 'embedded_document'
+  | 'feedback_request';
 
 /** Browser-safe projection of a host's document/editor catalog. */
 export interface CollabDocumentTypeDescriptor {

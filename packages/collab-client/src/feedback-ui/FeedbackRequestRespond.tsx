@@ -43,6 +43,10 @@ import type { FeedbackRequestServiceState } from '@nimbalyst/collab-client/feedb
 import { FeedbackRespondAskField } from './FeedbackRespondAskField';
 import type { FeedbackOptionPreviewRenderer } from './FeedbackRespondOptionCards';
 import {
+  FeedbackRespondSubjects,
+  type FeedbackSubjectOpener,
+} from './FeedbackRespondSubjects';
+import {
   FEEDBACK_RESPOND_BLOCKED_MESSAGES,
   feedbackRespondAsks,
   feedbackRespondSignature,
@@ -83,6 +87,13 @@ export interface FeedbackRequestRespondProps {
   discussion?: React.ReactNode;
   /** Per-option artifact previews, when the embedding surface has them. */
   renderOptionPreview?: FeedbackOptionPreviewRenderer;
+  /**
+   * Opens a subject or a bound artifact. Host-supplied because the mechanics
+   * differ per host -- a tab in the desktop app, a route in the browser -- and
+   * neither belongs in this tree. Absent means the subjects still render, as
+   * text.
+   */
+  onOpenSubject?: FeedbackSubjectOpener;
   /** Overridden in tests; deadline copy is the only thing that reads it. */
   now?: number;
 }
@@ -123,6 +134,7 @@ export const FeedbackRequestRespond: React.FC<FeedbackRequestRespondProps> = ({
   host,
   discussion,
   renderOptionPreview,
+  onOpenSubject,
   now,
 }) => {
   const request = state.request;
@@ -257,6 +269,11 @@ export const FeedbackRequestRespond: React.FC<FeedbackRequestRespondProps> = ({
       />
 
       <InteractiveWidgetBody>
+        {/* Above the asks, because what the request is about is context for
+            every question below it -- and because an observer with nothing
+            assigned still needs it to follow the discussion. */}
+        <FeedbackRespondSubjects subjects={request.subjects} onOpen={onOpenSubject} />
+
         {asks.map((ask, index) => (
           <WidgetBlock
             key={ask.id}
@@ -272,6 +289,9 @@ export const FeedbackRequestRespond: React.FC<FeedbackRequestRespondProps> = ({
               answer={draft?.answers[ask.id]}
               disabled={isSubmitting || request.lifecycle.status !== 'open'}
               renderOptionPreview={renderOptionPreview}
+              // A bound artifact opens exactly the way a subject does; there is
+              // no second mechanism, and no host has to supply two callbacks.
+              onExpandArtifact={onOpenSubject}
               onChange={(answer) => handleAnswer(ask.id, answer)}
             />
           </WidgetBlock>

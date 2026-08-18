@@ -7,6 +7,7 @@ import {
   feedbackRequestStateForTargetAtomFamily,
   feedbackRequestTargetKey,
 } from '../../../store/atoms/feedbackRequests';
+import type { FeedbackArtifact } from '@nimbalyst/collab-protocol';
 import type { FeedbackRequestCommentIpcRequest } from '../../../../shared/feedbackRequest';
 import { CommentThread } from '../../Comments/CommentThread';
 import { createConversationCommentAdapter } from '../../Comments/ConversationCommentAdapter';
@@ -15,6 +16,8 @@ import { FeedbackRequestRespond } from '../../FeedbackRequest/FeedbackRequestRes
 import { createFeedbackRespondHost } from '../../FeedbackRequest/createFeedbackRespondHost';
 import { createFeedbackDiscussionAdapter } from '../../FeedbackRequest/feedbackDiscussionAdapter';
 import { startFeedbackRequestSync } from '../../FeedbackRequest/createFeedbackResultsHost';
+import { openSharedDocumentInTab } from '../../../utils/openSharedDocumentInTab';
+import { renderFeedbackOptionPreview } from '../../FeedbackRequest/FeedbackOptionArtifactPreview';
 import { openActionLabel } from './inboxViewModel';
 import type { InboxRowView, InboxSubscriptionState } from './inboxTypes';
 
@@ -296,11 +299,21 @@ function InboxFeedbackRequest({
     void startFeedbackRequestSync(target);
   }, [target]);
 
+  // Only a published `document` is addressable from here. A subject of another
+  // kind is left inert rather than wired to a path this recipient may not have
+  // -- the row still says what it is, which is the point.
+  const handleOpenSubject = React.useCallback((subject: FeedbackArtifact) => {
+    if (subject.ref.kind !== 'document') return;
+    openSharedDocumentInTab(subject.ref.sourceId, 'feedback_request');
+  }, []);
+
   return (
     <div className="inbox-feedback-request min-h-0 flex-1 overflow-y-auto p-3">
       <FeedbackRequestRespond
         state={state}
         host={host}
+        onOpenSubject={handleOpenSubject}
+        renderOptionPreview={renderFeedbackOptionPreview}
         discussion={(
           <div className="feedback-request-discussion-thread h-[320px] min-h-[240px]">
             <CommentThread

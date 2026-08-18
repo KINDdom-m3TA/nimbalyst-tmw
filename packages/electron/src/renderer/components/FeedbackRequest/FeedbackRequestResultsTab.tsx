@@ -10,6 +10,7 @@ import React, { useEffect, useMemo } from 'react';
 
 import type { FeedbackRequestServiceTarget } from '../../../shared/feedbackRequest';
 import { FeedbackRequestResults } from './FeedbackRequestResults';
+import { openSharedDocumentInTab } from '../../utils/openSharedDocumentInTab';
 import {
   createFeedbackResultsHost,
   startFeedbackRequestSync,
@@ -58,7 +59,17 @@ export const FeedbackRequestResultsTab: React.FC<FeedbackRequestResultsTabProps>
 
   return (
     <div className="feedback-request-results-tab h-full overflow-auto p-4">
-      <FeedbackRequestResults target={target} host={host} />
+      <FeedbackRequestResults
+        target={target}
+        host={host}
+        onOpenArtifact={(artifact) => {
+          // Same rule as the respond surface: only a published document is
+          // addressable, and anything else stays inert rather than routing to
+          // a path this window may not have.
+          if (artifact.ref.kind !== 'document') return;
+          openSharedDocumentInTab(artifact.ref.sourceId, 'feedback_request');
+        }}
+      />
     </div>
   );
 };
