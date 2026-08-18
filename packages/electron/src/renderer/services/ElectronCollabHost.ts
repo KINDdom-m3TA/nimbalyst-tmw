@@ -19,7 +19,6 @@ import type {
   SharedDocument,
   SharedFolder,
 } from '@nimbalyst/collab-client/docs';
-import { asTeamJwt } from '@nimbalyst/runtime/auth/jwtScopes';
 import { store } from '@nimbalyst/runtime/store';
 import { errorNotificationService } from './ErrorNotificationService';
 import {
@@ -336,7 +335,7 @@ export class ElectronCollabHost implements CollabHost<ElectronDocsCapability> {
     if (!result.success || !result.jwt) {
       throw new Error(result.error || 'Failed to get team JWT');
     }
-    return asTeamJwt(result.jwt);
+    return result.jwt;
   }
 
   async getMembers(orgId: string): Promise<TeamMemberSummary[]> {
@@ -449,11 +448,11 @@ export class ElectronCollabHost implements CollabHost<ElectronDocsCapability> {
         retryable: !message.includes('Not authenticated') && !message.includes('No team found'),
       });
     }
-    const { orgId, teamProjectId, serverUrl, userId, userName, userEmail, urlExtraQuery } = result.config;
+    const { orgId, teamProjectId, serverUrl, teamMemberId, userName, userEmail, urlExtraQuery } = result.config;
     return {
       scopeKey: requestedScopeKey,
       orgId,
-      indexConfig: { teamProjectId, serverUrl, userId, userName, userEmail, urlExtraQuery },
+      indexConfig: { teamProjectId, serverUrl, teamMemberId, userName, userEmail, urlExtraQuery },
     };
   }
 
@@ -475,7 +474,7 @@ export class ElectronCollabHost implements CollabHost<ElectronDocsCapability> {
       onFeedbackIndexLoaded: (entries) => {
         void window.electronAPI.invoke('feedback-request-index:replace-snapshot', {
           target: { workspacePath: scope.scopeKey, orgId: scope.orgId },
-          viewerUserId: scope.indexConfig.userId,
+          teamMemberId: scope.indexConfig.teamMemberId,
           entries,
         }).catch((error) => {
           console.error('[ElectronCollabHost] Failed to persist feedback index snapshot:', error);
@@ -484,7 +483,7 @@ export class ElectronCollabHost implements CollabHost<ElectronDocsCapability> {
       onFeedbackIndexChanged: (entry) => {
         void window.electronAPI.invoke('feedback-request-index:upsert', {
           target: { workspacePath: scope.scopeKey, orgId: scope.orgId },
-          viewerUserId: scope.indexConfig.userId,
+          teamMemberId: scope.indexConfig.teamMemberId,
           entry,
         }).catch((error) => {
           console.error('[ElectronCollabHost] Failed to persist feedback index update:', error);

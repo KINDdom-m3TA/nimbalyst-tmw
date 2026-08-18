@@ -274,7 +274,7 @@ export function toRowView(delivery: HydratedInboxDelivery, options: { now: numbe
 
   return {
     id: delivery.id,
-    viewerUserId: delivery.recipientUserId,
+    teamMemberId: delivery.teamMemberId,
     reason: delivery.reason,
     reasonLabel: reasonLabel(delivery.reason),
     availability: delivery.availability,

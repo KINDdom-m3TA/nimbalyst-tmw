@@ -21,6 +21,7 @@
 import * as Y from 'yjs';
 import type {
   DocumentSyncConfig,
+  DocumentSyncMemberId,
   DocumentSyncStatus,
   AwarenessState,
   DocClientMessage,
@@ -30,6 +31,7 @@ import type {
   DocAwarenessBroadcastMessage,
   DocUpdateAckMessage,
 } from './documentSyncTypes';
+import { documentSyncMemberId } from './documentSyncTypes';
 import { appendSyncClientParams } from './syncClientInfo';
 import { encodeDocumentRoomId, isValidCollabDocumentId } from './collabDocumentId';
 import { isConfirmedOutboxRevocationCode } from './OutboxDrainer';
@@ -99,7 +101,7 @@ const AWARENESS_STALE_TIMEOUT_MS = 30_000;
  *   2. >= COMPACTION_TIME_MIN_UPDATES updates AND
  *      >= COMPACTION_TIME_THRESHOLD_MS since last attempt
  *
- * Election: lowest userId (string compare) among the local user and all remote
+ * Election: lowest scoped member id (string compare) among the local member and all remote
  * users we currently see in awareness. If a remote client hasn't broadcast
  * awareness yet, we may briefly think we are elector when we aren't -- the
  * server accepts the second snapshot harmlessly (older snapshot row is
@@ -115,6 +117,7 @@ export class DocumentSyncProvider {
   private readonly ownsYDoc: boolean;
   private ws: WebSocket | null = null;
   private config: DocumentSyncConfig;
+  private readonly memberId: DocumentSyncMemberId;
   private status: DocumentSyncStatus = 'disconnected';
   private lastSeq = 0;
   private lastSyncRequestSeq = 0;
@@ -217,6 +220,7 @@ export class DocumentSyncProvider {
 
   constructor(config: DocumentSyncConfig) {
     this.config = config;
+    this.memberId = documentSyncMemberId(config);
     if (COLLAB_CONNECTION_DIAGNOSTICS_COMPILED) {
       setCollabConnectionDiagnosticContext(this, {
         documentId: config.documentId,
@@ -491,7 +495,7 @@ export class DocumentSyncProvider {
   }
 
   /**
-   * The room-authed userId of whoever last applied a content update, or null if
+   * The room-authenticated member id of whoever last applied a content update, or null if
    * the doc has no updates yet / the server hasn't reported it. Populated from
    * the server's docSyncResponse. Reflects the last *content* edit.
    */
@@ -1159,7 +1163,7 @@ export class DocumentSyncProvider {
   private async handleAwarenessBroadcast(
     msg: DocAwarenessBroadcastMessage
   ): Promise<void> {
-    if (msg.fromUserId === this.config.userId) return;
+    if (msg.fromUserId === this.memberId) return;
 
     try {
       const stateBytes = await this.decryptFromWire(
@@ -1819,17 +1823,17 @@ export class DocumentSyncProvider {
   }
 
   /**
-   * Lowest userId wins. Awareness misses (a connected user who hasn't sent
+   * Lowest scoped member id wins. Awareness misses (a connected member who hasn't sent
    * awareness yet) can briefly cause both candidates to elect themselves;
    * the server tolerates duplicate snapshots (older row is dropped by
    * `DELETE FROM snapshots WHERE replaces_up_to < ?`).
    */
   private amCompactionElector(): boolean {
-    let lowest = this.config.userId;
+    let lowest: string = this.memberId;
     for (const remoteUserId of this.awarenessStates.keys()) {
       if (remoteUserId < lowest) lowest = remoteUserId;
     }
-    return lowest === this.config.userId;
+    return lowest === this.memberId;
   }
 
   private async maybeCompact(): Promise<void> {
@@ -1963,7 +1967,7 @@ export class DocumentSyncProvider {
     }
 
     const { encrypted, iv } = await this.encryptForWire(stateBytes);
-    const clientCompactId = `${options.operation}-${this.lastSeq}-${this.config.userId}-${this.forceReplaceCounter++}`;
+    const clientCompactId = `${options.operation}-${this.lastSeq}-${this.memberId}-${this.forceReplaceCounter++}`;
 
     const acked = new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => {

@@ -8,6 +8,7 @@
  */
 
 import type { FeedbackRequestIndexEntry } from '@nimbalyst/collab-protocol';
+import type { TeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 
 export type FeedbackBacklinkTone = 'open' | 'answered' | 'closed';
 
@@ -53,9 +54,9 @@ export function feedbackBacklinkProgressLabel(
  */
 export function feedbackBacklinkAuthorLabel(
   entry: Pick<FeedbackRequestIndexEntry, 'author'>,
-  viewerUserId: string,
+  teamMemberId: TeamMemberId | '',
 ): string | null {
-  if (viewerUserId && entry.author.onBehalfOfUserId === viewerUserId) {
+  if (teamMemberId && entry.author.onBehalfOfUserId === teamMemberId) {
     return 'Asked by you';
   }
   if (entry.author.kind === 'agent' && entry.author.sessionName) {

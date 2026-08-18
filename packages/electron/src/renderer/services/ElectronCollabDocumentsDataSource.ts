@@ -109,7 +109,7 @@ export class ElectronCollabDocumentsDataSource implements CollabDocsDataSource {
       serverUrl: scope.indexConfig.serverUrl,
       orgId: scope.orgId,
       teamProjectId: scope.indexConfig.teamProjectId,
-      userId: scope.indexConfig.userId,
+      teamMemberId: scope.indexConfig.teamMemberId,
       getJwt: options.getJwt,
       onTeamStateLoaded: emitSnapshot,
       onDocumentsLoaded: emitSnapshot,

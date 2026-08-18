@@ -166,6 +166,7 @@ export function createExtensionAwarenessBridge(args: {
   // Never reuse our own awareness.clientID for a remote user.
   const userIdToClientId = new Map<string, number>();
   let nextRemoteClientId = awareness.clientID + 1;
+  // identity-scope-allow: awareness wire ids can come from either document-sync identity lane
   const allocateClientId = (userId: string): number => {
     const existing = userIdToClientId.get(userId);
     if (existing !== undefined) return existing;

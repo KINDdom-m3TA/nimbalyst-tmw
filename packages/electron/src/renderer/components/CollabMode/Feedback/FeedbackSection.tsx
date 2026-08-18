@@ -294,7 +294,7 @@ export function FeedbackSection({
                     workspacePath={workspacePath}
                     orgId={orgId}
                     requestId={selectedEntry.requestId}
-                    viewerUserId={viewerUserId}
+                    teamMemberId={viewerUserId || undefined}
                     title={selectedEntry.title}
                   />
                 </div>

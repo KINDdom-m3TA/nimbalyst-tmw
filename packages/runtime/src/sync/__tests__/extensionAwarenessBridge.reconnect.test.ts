@@ -10,6 +10,7 @@
  * a cadence -- so both directions are asserted here.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { asTeamJwt, asTeamMemberId } from '../../auth/jwtScopes';
 
 import { DocumentSyncProvider } from '../DocumentSync';
 import { createExtensionAwarenessBridge } from '../extensionAwarenessBridge';
@@ -92,9 +93,9 @@ describe('extension awareness bridge across a reconnect (NIM-3006)', () => {
     sockets = [];
     provider = new DocumentSyncProvider({
       serverUrl: 'ws://example.test',
-      getJwt: async () => 'token',
+      getJwt: async () => asTeamJwt('token'),
       orgId: 'org-1',
-      userId: 'member-rowan',
+      teamMemberId: asTeamMemberId('member-rowan'),
       documentId: 'doc-1',
       createWebSocket: () => {
         const socket = new RecordingWebSocket();

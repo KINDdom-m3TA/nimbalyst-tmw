@@ -12,7 +12,7 @@ export type CollabCapabilityAvailability<TCapability> =
 export interface CollabIndexConfig {
   serverUrl: string;
   teamProjectId?: string | null;
-  userId: string;
+  teamMemberId: TeamMemberId;
   userName?: string;
   userEmail?: string;
   /**

@@ -136,7 +136,7 @@ export function feedbackRequestIndexEntryFromRow(
 }
 
 function targetParams(target: FeedbackRequestIndexViewerTarget): unknown[] {
-  return [target.workspacePath, target.orgId, target.viewerUserId];
+  return [target.workspacePath, target.orgId, target.teamMemberId];
 }
 
 /** Persist only the metadata projection, even if an IPC/wire object has extras. */
@@ -200,7 +200,7 @@ function buildUpsertStatement(
     params.push(
       target.workspacePath,
       target.orgId,
-      target.viewerUserId,
+      target.teamMemberId,
       entry.requestId,
       JSON.stringify(projected),
       new Date(projected.createdAt),

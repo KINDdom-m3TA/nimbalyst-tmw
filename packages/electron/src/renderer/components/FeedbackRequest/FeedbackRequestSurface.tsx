@@ -13,6 +13,7 @@
 
 import React, { useEffect, useMemo } from 'react';
 import { useAtomValue, useStore } from 'jotai';
+import type { TeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 
 import { settingAtom } from '../../store/atoms/settingAtomFamily';
 import {
@@ -21,6 +22,7 @@ import {
 } from '../../store/atoms/feedbackRequests';
 import type {
   FeedbackRequestCommentIpcRequest,
+  FeedbackRequestServiceState,
   FeedbackRequestServiceTarget,
 } from '../../../shared/feedbackRequest';
 import { CommentThread } from '../Comments/CommentThread';
@@ -47,7 +49,7 @@ export interface FeedbackRequestSurfaceProps {
    * viewer. A surface that already knows who is looking (an inbox delivery, the
    * index's active viewer) hands it over so the first paint is not anonymous.
    */
-  viewerUserId?: string;
+  teamMemberId?: TeamMemberId;
   /** Names the discussion in its own chrome; the request card carries the title. */
   title?: string;
   /** False where the viewer may read but not post. */
@@ -70,7 +72,7 @@ export function FeedbackRequestSurface({
   workspacePath,
   orgId,
   requestId,
-  viewerUserId: viewerUserIdProp,
+  teamMemberId: teamMemberIdProp,
   title,
   canComment = true,
   view = 'auto',
@@ -85,7 +87,7 @@ export function FeedbackRequestSurface({
   const state = useAtomValue(
     feedbackRequestStateForTargetAtomFamily(feedbackRequestTargetKey(target)),
   );
-  const viewerUserId = state.viewerUserId || viewerUserIdProp || '';
+  const teamMemberId = state.teamMemberId || teamMemberIdProp || '';
   const respondHost = useMemo(
     () => createFeedbackRespondHost({ target }),
     [target],
@@ -96,9 +98,9 @@ export function FeedbackRequestSurface({
   );
   const viewerActor = useMemo(() => ({
     kind: 'user' as const,
-    userId: viewerUserId,
-    onBehalfOfUserId: viewerUserId,
-  }), [viewerUserId]);
+    userId: teamMemberId,
+    onBehalfOfUserId: teamMemberId,
+  }), [teamMemberId]);
   const capabilities = useMemo<CommentCapabilities>(() => ({
     read: true,
     comment: canComment && state.request?.lifecycle.status === 'open',
@@ -128,14 +130,14 @@ export function FeedbackRequestSurface({
   );
   const directory = useMemo(() => ({
     people: [{
-      userId: viewerUserId,
+      userId: teamMemberId,
       displayName: 'You',
       handle: 'you',
       avatarInitials: 'YO',
     }],
     agents: [],
-    displayNames: { [viewerUserId]: 'You' },
-  }), [viewerUserId]);
+    displayNames: { [teamMemberId]: 'You' },
+  }), [teamMemberId]);
   const density = useAtomValue(settingAtom('team.messages.density'));
 
   useEffect(() => {
@@ -146,7 +148,10 @@ export function FeedbackRequestSurface({
 
   const mode = view === 'respond'
     ? 'respond'
-    : feedbackRequestViewMode(state.request, viewerUserId);
+    : feedbackRequestViewMode(state.request, teamMemberId);
+  const resolvedState: FeedbackRequestServiceState | null = state.teamMemberId
+    ? { ...state, teamMemberId: state.teamMemberId }
+    : null;
 
   const discussion = (
     <div className={`feedback-request-discussion-thread ${discussionClassName}`}>
@@ -162,7 +167,7 @@ export function FeedbackRequestSurface({
         }}
         directory={directory}
         orgId={orgId}
-        viewerUserId={viewerUserId}
+        viewerUserId={teamMemberId}
         viewerActor={viewerActor}
         emptyLabel="No discussion yet."
         density={density}
@@ -177,10 +182,10 @@ export function FeedbackRequestSurface({
       data-component="FeedbackRequestSurface"
       data-view={mode}
     >
-      {mode === 'respond'
+      {mode === 'respond' && resolvedState
         ? (
           <FeedbackRequestRespond
-            state={state}
+            state={resolvedState}
             host={respondHost}
             resolveArtifactAction={resolveArtifactAction}
             renderOptionPreview={renderLazyFeedbackOptionPreview}

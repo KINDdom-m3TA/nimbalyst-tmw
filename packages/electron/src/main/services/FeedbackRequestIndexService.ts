@@ -5,7 +5,7 @@ import {
 import type {
   FeedbackRequestIndexEntry,
 } from '@nimbalyst/collab-protocol';
-import type { TeamJwt } from '@nimbalyst/runtime/auth/jwtScopes';
+import type { TeamJwt, TeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 
 import type {
   FeedbackRequestIndexChangedPayload,
@@ -36,7 +36,7 @@ type PingFeedbackRequestRoom = (
 
 export interface FeedbackRequestIndexServiceDependencies {
   getTeamJwt: (orgId: string) => Promise<TeamJwt>;
-  getTeamMemberId: (jwt: TeamJwt) => string | null;
+  getTeamMemberId: (jwt: TeamJwt) => TeamMemberId | null;
   persistence: FeedbackRequestIndexPersistence;
   pingRequestRoom: PingFeedbackRequestRoom;
   scheduleMaintenance: (label: string, task: () => Promise<void>) => void;
@@ -52,7 +52,7 @@ function scopeKey(target: FeedbackRequestIndexViewerTarget): string {
   return JSON.stringify([
     target.workspacePath,
     target.orgId,
-    target.viewerUserId,
+    target.teamMemberId,
   ]);
 }
 
@@ -143,7 +143,7 @@ export async function runFeedbackRequestIndexBackfill(
           { orgId: target.orgId, requestId },
           async () => {
             const jwt = await dependencies.getTeamJwt(target.orgId);
-            if (dependencies.getTeamMemberId(jwt) !== target.viewerUserId) {
+            if (dependencies.getTeamMemberId(jwt) !== target.teamMemberId) {
               throw new Error('Feedback request index backfill team identity changed');
             }
             return jwt;
@@ -201,7 +201,7 @@ export class FeedbackRequestIndexService {
   async replaceSnapshot(
     input: FeedbackRequestIndexSnapshotIpcRequest,
   ): Promise<FeedbackRequestIndexChangedPayload> {
-    const target = await this.scopeTarget(input.target, input.viewerUserId);
+    const target = await this.scopeTarget(input.target, input.teamMemberId);
     for (const entry of input.entries) assertIndexEntry(target, entry);
     await this.dependencies.persistence.replaceSnapshot(target, input.entries);
     const payload = await this.emitCurrent(target);
@@ -210,7 +210,7 @@ export class FeedbackRequestIndexService {
   }
 
   async enqueueUpsert(input: FeedbackRequestIndexUpsertIpcRequest): Promise<void> {
-    const target = await this.scopeTarget(input.target, input.viewerUserId);
+    const target = await this.scopeTarget(input.target, input.teamMemberId);
     assertIndexEntry(target, input.entry);
     const key = scopeKey(target);
     const pending = this.pendingUpserts.get(key) ?? new Map();
@@ -291,11 +291,11 @@ export class FeedbackRequestIndexService {
     // A coalesced write may flush after the local account changed. Revalidate
     // before broadcasting so a new renderer identity never sees the prior
     // team-room viewer's participant-filtered rows.
-    await this.scopeTarget(target, target.viewerUserId);
+    await this.scopeTarget(target, target.teamMemberId);
     const entries = await this.dependencies.persistence.list(target);
     // Account/session state can change while the database worker is serving the
     // read. Recheck at the last synchronous point before notifying renderers.
-    await this.scopeTarget(target, target.viewerUserId);
+    await this.scopeTarget(target, target.teamMemberId);
     const payload = {
       ...target,
       entries,
@@ -323,18 +323,18 @@ export class FeedbackRequestIndexService {
 
   private async scopeTarget(
     target: FeedbackRequestIndexTarget,
-    expectedViewerUserId?: string,
+    expectedTeamMemberId?: TeamMemberId,
   ): Promise<FeedbackRequestIndexViewerTarget> {
     assertTarget(target);
     const jwt = await this.dependencies.getTeamJwt(target.orgId);
-    const viewerUserId = this.dependencies.getTeamMemberId(jwt);
-    if (!viewerUserId) {
+    const teamMemberId = this.dependencies.getTeamMemberId(jwt);
+    if (!teamMemberId) {
       throw new Error('Feedback request index team member identity is unavailable');
     }
-    if (expectedViewerUserId && expectedViewerUserId !== viewerUserId) {
+    if (expectedTeamMemberId && expectedTeamMemberId !== teamMemberId) {
       throw new Error('Feedback request index team identity changed');
     }
-    return { ...target, viewerUserId };
+    return { ...target, teamMemberId };
   }
 
   private setTimer(

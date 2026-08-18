@@ -36,6 +36,7 @@ import type {
   ServerTeamState,
   SharedDocumentTypeMetadataV2,
 } from './teamSyncTypes';
+import { asTeamMemberId } from '../auth/jwtScopes';
 import type { BoundedPreview } from '@nimbalyst/collab-protocol';
 import { appendSyncClientParams } from './syncClientInfo';
 
@@ -581,7 +582,7 @@ export class TeamSyncProvider {
     if (this.teamState) {
       this.teamState.members = this.teamState.members.filter(m => m.userId !== msg.userId);
     }
-    this.config.onMemberRemoved?.(msg.userId);
+    this.config.onMemberRemoved?.(asTeamMemberId(msg.userId));
   }
 
   private handleMemberRoleChanged(msg: TeamMemberRoleChangedMessage): void {
@@ -589,7 +590,7 @@ export class TeamSyncProvider {
       const member = this.teamState.members.find(m => m.userId === msg.userId);
       if (member) member.role = msg.role;
     }
-    this.config.onMemberRoleChanged?.(msg.userId, msg.role);
+    this.config.onMemberRoleChanged?.(asTeamMemberId(msg.userId), msg.role);
   }
 
   private async handleDocIndexSyncResponse(msg: TeamDocIndexSyncResponseMessage): Promise<void> {
@@ -646,7 +647,11 @@ export class TeamSyncProvider {
   }
 
   private handleProjectAccessChanged(msg: TeamProjectAccessChangedMessage): void {
-    this.config.onProjectAccessChanged?.(msg.projectId, msg.userId, msg.projectRole);
+    this.config.onProjectAccessChanged?.(
+      msg.projectId,
+      asTeamMemberId(msg.userId),
+      msg.projectRole,
+    );
   }
 
   private handleDocIndexRemoveBroadcast(msg: TeamDocIndexRemoveBroadcastMessage): void {

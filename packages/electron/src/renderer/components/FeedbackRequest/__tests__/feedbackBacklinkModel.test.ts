@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it } from 'vitest';
+import { asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 import type { FeedbackRequestIndexEntry } from '@nimbalyst/collab-protocol';
 
 import {
@@ -48,7 +49,7 @@ describe('feedback backlink presentation model', () => {
   it('omits an author the index cannot identify', () => {
     // Another member's id is not a name -- the index carries resolved names for
     // recipients only, so there is nothing truthful to show.
-    expect(feedbackBacklinkAuthorLabel(entry({}), 'member-b')).toBeNull();
+    expect(feedbackBacklinkAuthorLabel(entry({}), asTeamMemberId('member-b'))).toBeNull();
   });
 
   it('orders backlinks by most recent activity', () => {

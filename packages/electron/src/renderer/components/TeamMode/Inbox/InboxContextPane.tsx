@@ -239,7 +239,7 @@ function InboxFeedbackRequest({
         workspacePath={workspacePath}
         orgId={row.orgId}
         requestId={requestId}
-        viewerUserId={row.viewerUserId}
+        teamMemberId={row.teamMemberId}
         title={row.sourceTitle}
         canComment={row.canReply}
         view="respond"
@@ -267,9 +267,9 @@ function InboxConversationThread({
   }), [row.canReply]);
   const viewerActor = useMemo(() => ({
     kind: 'user' as const,
-    userId: row.viewerUserId,
-    onBehalfOfUserId: row.viewerUserId,
-  }), [row.viewerUserId]);
+    userId: row.teamMemberId,
+    onBehalfOfUserId: row.teamMemberId,
+  }), [row.teamMemberId]);
   // Same org-window preference the room view reads: the inbox shows the same
   // messages and must not disagree with the room about how they look.
   const density = useAtomValue(settingAtom('team.messages.density'));
@@ -298,14 +298,14 @@ function InboxConversationThread({
   );
   const directory = useMemo(() => ({
     people: [{
-      userId: row.viewerUserId,
+      userId: row.teamMemberId,
       displayName: 'You',
       handle: 'you',
       avatarInitials: 'YO',
     }],
     agents: [],
-    displayNames: { [row.viewerUserId]: 'You' },
-  }), [row.viewerUserId]);
+    displayNames: { [row.teamMemberId]: 'You' },
+  }), [row.teamMemberId]);
 
   return (
     <div
@@ -328,7 +328,7 @@ function InboxConversationThread({
         }}
         directory={directory}
         orgId={row.orgId}
-        viewerUserId={row.viewerUserId}
+        viewerUserId={row.teamMemberId}
         viewerActor={viewerActor}
         density={density}
       />

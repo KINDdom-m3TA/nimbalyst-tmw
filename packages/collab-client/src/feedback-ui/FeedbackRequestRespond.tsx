@@ -142,7 +142,7 @@ export const FeedbackRequestRespond: React.FC<FeedbackRequestRespondProps> = ({
   now,
 }) => {
   const request = state.request;
-  const viewerUserId = state.viewerUserId;
+  const teamMemberId = state.teamMemberId;
 
   const [draft, setDraft] = useState<FeedbackRespondDraft | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -154,16 +154,16 @@ export const FeedbackRequestRespond: React.FC<FeedbackRequestRespondProps> = ({
   // Seed once per request, then leave it alone: a snapshot arriving while
   // someone is mid-answer must not overwrite what they have picked.
   useEffect(() => {
-    if (!request || !viewerUserId) return;
+    if (!request || !teamMemberId) return;
     setDraft((current) =>
       current && current.requestId === request.id
         ? current
-        : initialFeedbackRespondDraft(request, viewerUserId));
-  }, [request, viewerUserId]);
+        : initialFeedbackRespondDraft(request, teamMemberId));
+  }, [request, teamMemberId]);
 
   const asks = useMemo(
-    () => (request ? feedbackRespondAsks(request, viewerUserId) : []),
-    [request, viewerUserId],
+    () => (request ? feedbackRespondAsks(request, teamMemberId) : []),
+    [request, teamMemberId],
   );
 
   const handleAnswer = useCallback((askId: string, answer: FeedbackAnswer) => {
@@ -174,7 +174,7 @@ export const FeedbackRequestRespond: React.FC<FeedbackRequestRespondProps> = ({
 
   const handleSubmit = useCallback(async () => {
     if (!request || !draft || !host) return;
-    const plan = feedbackRespondSubmitPlan(request, viewerUserId, draft, clock);
+    const plan = feedbackRespondSubmitPlan(request, teamMemberId, draft, clock);
     if (plan.kind !== 'ready') return;
     setIsSubmitting(true);
     setSubmitError(null);
@@ -198,7 +198,7 @@ export const FeedbackRequestRespond: React.FC<FeedbackRequestRespondProps> = ({
     } finally {
       setIsSubmitting(false);
     }
-  }, [request, draft, host, viewerUserId, clock, asks]);
+  }, [request, draft, host, teamMemberId, clock, asks]);
 
   if (!request) {
     return (
@@ -219,7 +219,7 @@ export const FeedbackRequestRespond: React.FC<FeedbackRequestRespondProps> = ({
   }
 
   const plan = draft
-    ? feedbackRespondSubmitPlan(request, viewerUserId, draft, clock)
+    ? feedbackRespondSubmitPlan(request, teamMemberId, draft, clock)
     : ({ kind: 'blocked', reason: 'incomplete' } as const);
   const hasSubmitted = submittedSignature !== null;
   const isUnchangedSinceSubmit = Boolean(

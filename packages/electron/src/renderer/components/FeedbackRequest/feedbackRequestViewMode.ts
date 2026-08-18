@@ -8,6 +8,7 @@
  */
 
 import type { FeedbackRequestServiceState } from '../../../shared/feedbackRequest';
+import type { TeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 import {
   attributedAnswersForViewer,
   feedbackRespondAsks,
@@ -27,13 +28,13 @@ export type FeedbackRequestViewMode = 'respond' | 'results';
  */
 export function feedbackRequestViewMode(
   request: FeedbackRequestServiceState['request'],
-  viewerUserId: string,
+  teamMemberId: TeamMemberId | '',
 ): FeedbackRequestViewMode {
-  if (!request || !viewerUserId) return 'results';
+  if (!request || !teamMemberId) return 'results';
   if (request.lifecycle.status !== 'open') return 'results';
-  const asks = feedbackRespondAsks(request, viewerUserId);
+  const asks = feedbackRespondAsks(request, teamMemberId);
   if (asks.length === 0) return 'results';
-  const answered = attributedAnswersForViewer(request, viewerUserId);
+  const answered = attributedAnswersForViewer(request, teamMemberId);
   return asks.some((ask) => answered[ask.id] === undefined)
     ? 'respond'
     : 'results';

@@ -25,7 +25,7 @@ function isFeedbackRequestState(
     typeof candidate.workspacePath === 'string'
     && typeof candidate.orgId === 'string'
     && typeof candidate.requestId === 'string'
-    && typeof candidate.viewerUserId === 'string'
+    && typeof candidate.teamMemberId === 'string'
     && typeof candidate.status === 'string'
   );
 }
@@ -38,7 +38,7 @@ function isFeedbackRequestIndexChangedPayload(
   return (
     typeof candidate.workspacePath === 'string'
     && typeof candidate.orgId === 'string'
-    && typeof candidate.viewerUserId === 'string'
+    && typeof candidate.teamMemberId === 'string'
     && Array.isArray(candidate.entries)
   );
 }
@@ -62,7 +62,7 @@ export function initFeedbackRequestListeners(
       // previous viewer's response projection under the shared target key.
       targetStore.set(
         feedbackRequestActiveViewerAtomFamily(targetKey),
-        value.viewerUserId,
+        value.teamMemberId,
       );
       pending.set(key, value);
       const current = timers.get(key);
@@ -84,7 +84,7 @@ export function initFeedbackRequestListeners(
       // the prior account's participant-filtered list during debounce.
       targetStore.set(
         feedbackRequestIndexActiveViewerAtomFamily(targetKey),
-        value.viewerUserId,
+        value.teamMemberId,
       );
       pendingIndexes.set(viewerKey, value);
       const current = indexTimers.get(viewerKey);

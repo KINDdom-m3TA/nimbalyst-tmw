@@ -13,6 +13,7 @@ import { act, renderHook } from '@testing-library/react';
 import { Provider } from 'jotai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { store } from '@nimbalyst/runtime/store';
+import { asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 import { trackerItemsMapAtom } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerDataAtoms';
 import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
 
@@ -96,7 +97,7 @@ describe('feedback tracker artifact actions', () => {
     indexConfig: {
       serverUrl: 'wss://sync.example.test',
       teamProjectId: 'project-design',
-      userId: 'user-1',
+      teamMemberId: asTeamMemberId('user-1'),
     },
   };
 

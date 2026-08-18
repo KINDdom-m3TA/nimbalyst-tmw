@@ -74,6 +74,7 @@ import type {
   DocumentSyncConfig,
   DocumentSyncStatus,
 } from '@nimbalyst/runtime/sync';
+import type { TeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 
 // ============================================================================
 // Tunables
@@ -102,7 +103,9 @@ const DEFAULT_SERVER_ACK_TIMEOUT_MS = 5_000;
  * subscribers via the entry's event bus. Callers should pass `undefined`
  * (or stub no-ops) for these fields.
  */
-export interface BodyDocConfig extends DocumentSyncConfig {
+type TeamDocumentSyncConfig = Extract<DocumentSyncConfig, { teamMemberId: TeamMemberId }>;
+
+export type BodyDocConfig = TeamDocumentSyncConfig & {
   userName?: string;
   userEmail?: string;
   /**
@@ -113,7 +116,7 @@ export interface BodyDocConfig extends DocumentSyncConfig {
    * the owning surface must check this first.
    */
   workspacePath?: string;
-}
+};
 
 export type BodyDocConfigFactory = (itemId: string) => Promise<BodyDocConfig | null>;
 

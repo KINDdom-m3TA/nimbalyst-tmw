@@ -14,6 +14,7 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 import type { FeedbackArtifact, FeedbackRequestReadModel } from '@nimbalyst/collab-protocol';
 
 import { FeedbackRequestRespond, type FeedbackRespondHost } from '../FeedbackRequestRespond';
@@ -103,7 +104,7 @@ function renderRespond(options: {
     <FeedbackRequestRespond
       state={{
         ...TARGET,
-        viewerUserId,
+        teamMemberId: asTeamMemberId(viewerUserId),
         status: 'connected',
         request: options.request ?? makeRequest(),
       }}

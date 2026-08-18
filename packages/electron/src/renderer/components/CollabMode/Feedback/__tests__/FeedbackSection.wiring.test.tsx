@@ -18,6 +18,7 @@ import { Provider, createStore } from 'jotai';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { FeedbackRequestIndexEntry } from '@nimbalyst/collab-protocol';
+import { asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 
 import {
   feedbackRequestIndexActiveViewerAtomFamily,
@@ -58,11 +59,11 @@ describe('FeedbackSection', () => {
     const store = createStore();
     store.set(
       feedbackRequestIndexActiveViewerAtomFamily(feedbackRequestIndexTargetKey(TARGET)),
-      'me',
+      asTeamMemberId('me'),
     );
     store.set(
       feedbackRequestIndexViewerEntriesAtomFamily(
-        feedbackRequestIndexViewerKey({ ...TARGET, viewerUserId: 'me' }),
+        feedbackRequestIndexViewerKey({ ...TARGET, teamMemberId: asTeamMemberId('me') }),
       ),
       [ENTRY],
     );

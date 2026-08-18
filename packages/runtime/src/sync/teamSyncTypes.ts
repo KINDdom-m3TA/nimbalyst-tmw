@@ -16,6 +16,7 @@ import type {
   EncryptedDocIndexEntry as ProtocolEncryptedDocIndexEntry,
   EncryptedFolderNode as ProtocolEncryptedFolderNode,
 } from '@nimbalyst/collab-protocol';
+import type { TeamJwt, TeamMemberId } from '../auth/jwtScopes';
 
 export type {
   TeamClientMessage,
@@ -57,7 +58,7 @@ export interface TeamSyncConfig {
   createWebSocket?: (url: string) => WebSocket;
 
   /** Function to get fresh JWT for WebSocket auth */
-  getJwt: () => Promise<string>;
+  getJwt: () => Promise<TeamJwt>;
 
   /** B2B organization ID */
   orgId: string;
@@ -71,8 +72,8 @@ export interface TeamSyncConfig {
    */
   teamProjectId?: string | null;
 
-  /** Current user's ID */
-  userId: string;
+  /** Current user's member id in this team organization. */
+  teamMemberId: TeamMemberId;
 
 
   /** Called when full team state snapshot is received (initial sync) */
@@ -104,10 +105,10 @@ export interface TeamSyncConfig {
   onMemberAdded?: (member: MemberInfo) => void;
 
   /** Called when a member is removed */
-  onMemberRemoved?: (userId: string) => void;
+  onMemberRemoved?: (teamMemberId: TeamMemberId) => void;
 
   /** Called when a member's role changes */
-  onMemberRoleChanged?: (userId: string, role: string) => void;
+  onMemberRoleChanged?: (teamMemberId: TeamMemberId, role: string) => void;
 
   /** Called when the full document list is loaded (from teamSync or docIndexSync) */
   onDocumentsLoaded?: (documents: DocIndexEntry[]) => void;
@@ -135,7 +136,7 @@ export interface TeamSyncConfig {
    * is the new role, or `null` when access was revoked. The host writes this
    * through to the local org/project projection so `canAccess` stays live.
    */
-  onProjectAccessChanged?: (projectId: string, userId: string, projectRole: string | null) => void;
+  onProjectAccessChanged?: (projectId: string, teamMemberId: TeamMemberId, projectRole: string | null) => void;
 
   /** Called when connection status changes */
   onStatusChange?: (status: TeamSyncStatus) => void;

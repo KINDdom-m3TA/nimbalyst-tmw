@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { asTeamJwt } from '@nimbalyst/runtime/auth/jwtScopes';
+import { asTeamJwt, asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 import type { FeedbackRequestIndexEntry } from '@nimbalyst/collab-protocol';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -12,7 +12,7 @@ import type { FeedbackRequestIndexPersistence } from '../FeedbackRequestIndexPer
 const target = {
   workspacePath: '/workspace/a',
   orgId: 'org-a',
-  viewerUserId: 'member-a',
+  teamMemberId: asTeamMemberId('member-a'),
 };
 
 describe('feedback request index backfill', () => {
@@ -40,7 +40,7 @@ describe('feedback request index backfill', () => {
     let interruptOnce = true;
     const dependencies = {
       getTeamJwt: vi.fn(async () => asTeamJwt('team-jwt')),
-      getTeamMemberId: vi.fn(() => 'member-a'),
+      getTeamMemberId: vi.fn(() => asTeamMemberId('member-a')),
       persistence,
       pingRequestRoom: vi.fn(async (request, getTeamJwt) => {
         await getTeamJwt();
@@ -83,7 +83,7 @@ describe('feedback request index backfill', () => {
     } as unknown as FeedbackRequestIndexPersistence;
     const service = new FeedbackRequestIndexService({
       getTeamJwt: vi.fn(async () => asTeamJwt('team-jwt')),
-      getTeamMemberId: vi.fn(() => 'member-a'),
+      getTeamMemberId: vi.fn(() => asTeamMemberId('member-a')),
       persistence,
       pingRequestRoom: vi.fn(async () => undefined),
       scheduleMaintenance: vi.fn(),
@@ -111,7 +111,7 @@ describe('feedback request index backfill', () => {
     };
     const input = (updatedAt: number, title: string) => ({
       target: { workspacePath: '/workspace/a', orgId: 'org-a' },
-      viewerUserId: 'member-a',
+      teamMemberId: asTeamMemberId('member-a'),
       entry: {
         ...base,
         requestId: 'request-a',
@@ -132,7 +132,7 @@ describe('feedback request index backfill', () => {
   });
 
   it('does not emit an old viewer snapshot when identity changes during the read', async () => {
-    let viewerUserId = 'member-a';
+    let teamMemberId = asTeamMemberId('member-a');
     let resolveList: (() => void) | undefined;
     const persistence = {
       list: vi.fn(() => new Promise<FeedbackRequestIndexEntry[]>((resolve) => {
@@ -141,7 +141,7 @@ describe('feedback request index backfill', () => {
     } as unknown as FeedbackRequestIndexPersistence;
     const service = new FeedbackRequestIndexService({
       getTeamJwt: vi.fn(async () => asTeamJwt('team-jwt')),
-      getTeamMemberId: vi.fn(() => viewerUserId),
+      getTeamMemberId: vi.fn(() => teamMemberId),
       persistence,
       pingRequestRoom: vi.fn(async () => undefined),
       scheduleMaintenance: vi.fn(),
@@ -151,7 +151,7 @@ describe('feedback request index backfill', () => {
 
     const listing = service.list({ workspacePath: target.workspacePath, orgId: target.orgId });
     await vi.waitFor(() => expect(persistence.list).toHaveBeenCalledOnce());
-    viewerUserId = 'member-b';
+    teamMemberId = asTeamMemberId('member-b');
     resolveList?.();
 
     await expect(listing).rejects.toThrow('team identity changed');
@@ -170,7 +170,7 @@ describe('feedback request index backfill', () => {
     } as unknown as FeedbackRequestIndexPersistence;
     const service = new FeedbackRequestIndexService({
       getTeamJwt: vi.fn(async () => asTeamJwt('team-jwt')),
-      getTeamMemberId: vi.fn(() => 'member-a'),
+      getTeamMemberId: vi.fn(() => asTeamMemberId('member-a')),
       persistence,
       pingRequestRoom: vi.fn(async () => undefined),
       scheduleMaintenance: vi.fn(),
@@ -182,7 +182,7 @@ describe('feedback request index backfill', () => {
     });
     const makeInput = (requestId: string) => ({
       target: { workspacePath: target.workspacePath, orgId: target.orgId },
-      viewerUserId: target.viewerUserId,
+      teamMemberId: target.teamMemberId,
       entry: {
         requestId,
         urn: `nimbalyst://feedback-request/${requestId}` as const,

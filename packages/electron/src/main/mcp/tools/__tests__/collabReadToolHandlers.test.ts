@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
+import { asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 import {
   loadOrgDirectory,
   matchOrgMembers,
@@ -14,7 +15,7 @@ const TEAM = {
 } as TeamDetails;
 
 function member(memberId: string, name: string, email: string): TeamMember {
-  return { memberId, name, email, status: 'active', role: 'member', createdAt: '2026-01-01' };
+  return { memberId: asTeamMemberId(memberId), name, email, status: 'active', role: 'member', createdAt: '2026-01-01' };
 }
 
 describe('collaboration read tools', () => {

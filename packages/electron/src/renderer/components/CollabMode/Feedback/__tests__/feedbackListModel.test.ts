@@ -12,6 +12,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 import type {
   FeedbackRequestIndexEntry,
   FeedbackRequestReadModel,
@@ -26,8 +27,8 @@ import {
 } from '../feedbackListModel';
 import { feedbackRequestViewMode } from '../../../FeedbackRequest/feedbackRequestViewMode';
 
-const VIEWER = 'member-viewer';
-const PEER = 'member-peer';
+const VIEWER = asTeamMemberId('member-viewer');
+const PEER = asTeamMemberId('member-peer');
 
 function entry(
   overrides: Partial<FeedbackRequestIndexEntry> = {},
@@ -315,7 +316,7 @@ describe('feedbackRequestViewMode', () => {
 
   it('shows tallies to the author, to a bystander, and once the request closes', () => {
     expect(feedbackRequestViewMode(request(), PEER)).toBe('results');
-    expect(feedbackRequestViewMode(request(), 'member-stranger')).toBe('results');
+    expect(feedbackRequestViewMode(request(), asTeamMemberId('member-stranger'))).toBe('results');
     expect(feedbackRequestViewMode(
       request({ lifecycle: { status: 'closed', changedAt: 2_000 } }),
       VIEWER,

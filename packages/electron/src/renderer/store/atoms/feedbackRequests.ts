@@ -1,5 +1,6 @@
 import { atom } from 'jotai';
 import type { FeedbackRequestIndexEntry } from '@nimbalyst/collab-protocol';
+import { asTeamMemberId, type TeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 
 import type {
   FeedbackRequestServiceState,
@@ -14,12 +15,12 @@ import {
 import { atomFamily } from '../debug/atomFamilyRegistry';
 
 export function feedbackRequestAtomKey(
-  target: FeedbackRequestServiceTarget & { viewerUserId: string },
+  target: FeedbackRequestServiceTarget & { teamMemberId: TeamMemberId },
 ): string {
   return JSON.stringify([
     target.workspacePath,
     target.orgId,
-    target.viewerUserId,
+    target.teamMemberId,
     target.requestId,
   ]);
 }
@@ -36,9 +37,9 @@ export function feedbackRequestTargetKey(
 
 function targetFromViewerKey(
   key: string,
-): FeedbackRequestServiceTarget & { viewerUserId: string } {
-  const [workspacePath, orgId, viewerUserId, requestId] = JSON.parse(key) as string[];
-  return { workspacePath, orgId, viewerUserId, requestId };
+): FeedbackRequestServiceTarget & { teamMemberId: TeamMemberId } {
+  const [workspacePath, orgId, teamMemberId, requestId] = JSON.parse(key) as string[];
+  return { workspacePath, orgId, teamMemberId: asTeamMemberId(teamMemberId), requestId };
 }
 
 function targetFromTargetKey(key: string): FeedbackRequestServiceTarget {
@@ -55,7 +56,11 @@ export const feedbackRequestStateAtomFamily = atomFamily((key: string) =>
 
 /** Current org-scoped viewer for a target, switched before projected state is exposed. */
 export const feedbackRequestActiveViewerAtomFamily = atomFamily((targetKey: string) =>
-  atom(''));
+  atom<TeamMemberId | ''>(''));
+
+export type FeedbackRequestProjectedState = Omit<FeedbackRequestServiceState, 'teamMemberId'> & {
+  teamMemberId: TeamMemberId | '';
+};
 
 /**
  * The active viewer's projection for a request. The indirection lets surfaces
@@ -63,18 +68,18 @@ export const feedbackRequestActiveViewerAtomFamily = atomFamily((targetKey: stri
  * placing two viewers' projected responses in the same atom.
  */
 export const feedbackRequestStateForTargetAtomFamily = atomFamily((targetKey: string) =>
-  atom((get) => {
-    const viewerUserId = get(feedbackRequestActiveViewerAtomFamily(targetKey));
-    if (!viewerUserId) {
+  atom<FeedbackRequestProjectedState>((get) => {
+    const teamMemberId = get(feedbackRequestActiveViewerAtomFamily(targetKey));
+    if (!teamMemberId) {
       return {
         ...targetFromTargetKey(targetKey),
-        viewerUserId: '',
+        teamMemberId: '',
         status: 'idle' as const,
       };
     }
     return get(feedbackRequestStateAtomFamily(feedbackRequestAtomKey({
       ...targetFromTargetKey(targetKey),
-      viewerUserId,
+      teamMemberId,
     })));
   }));
 
@@ -106,7 +111,7 @@ export function feedbackRequestIndexViewerKey(
   return JSON.stringify([
     target.workspacePath,
     target.orgId,
-    target.viewerUserId,
+    target.teamMemberId,
   ]);
 }
 
@@ -146,17 +151,17 @@ export const feedbackRequestIndexViewerEntriesAtomFamily = atomFamily((key: stri
 
 /** Current authenticated team-room viewer for a workspace/org index. */
 export const feedbackRequestIndexActiveViewerAtomFamily = atomFamily((_key: string) =>
-  atom(''));
+  atom<TeamMemberId | ''>(''));
 
 /** Participant-filtered index list for the active local team identity. */
 export const feedbackRequestIndexListAtomFamily = atomFamily((targetKey: string) =>
   atom((get) => {
-    const viewerUserId = get(feedbackRequestIndexActiveViewerAtomFamily(targetKey));
-    if (!viewerUserId) return [];
+    const teamMemberId = get(feedbackRequestIndexActiveViewerAtomFamily(targetKey));
+    if (!teamMemberId) return [];
     return get(feedbackRequestIndexViewerEntriesAtomFamily(
       feedbackRequestIndexViewerKey({
         ...feedbackRequestIndexTargetFromKey(targetKey),
-        viewerUserId,
+        teamMemberId,
       }),
     ));
   }));

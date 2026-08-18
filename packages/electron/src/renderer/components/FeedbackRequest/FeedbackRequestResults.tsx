@@ -581,7 +581,7 @@ export const FeedbackRequestResults: React.FC<FeedbackRequestResultsProps> = ({
     );
   }
 
-  const isAuthor = request.author.onBehalfOfUserId === state.viewerUserId;
+  const isAuthor = request.author.onBehalfOfUserId === state.teamMemberId;
   const isOpen = request.lifecycle.status === 'open';
   const canAct = isAuthor && isOpen && Boolean(host) && pendingAction === null;
   const lifecyclePill = LIFECYCLE_PILL[request.lifecycle.status];

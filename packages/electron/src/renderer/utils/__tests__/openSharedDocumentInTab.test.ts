@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { store } from '@nimbalyst/runtime/store';
+import { asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 
 import {
   activeCollabScopeAtom,
@@ -16,7 +17,7 @@ const SCOPE = {
   indexConfig: {
     serverUrl: 'wss://sync.example.test',
     teamProjectId: 'project-design',
-    userId: 'user-1',
+    teamMemberId: asTeamMemberId('user-1'),
   },
 };
 

@@ -2,6 +2,7 @@
 
 import { createStore } from 'jotai';
 import { describe, expect, it } from 'vitest';
+import { asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 
 import {
   feedbackRequestActiveViewerAtomFamily,
@@ -28,23 +29,23 @@ describe('feedback request viewer projections', () => {
   it('switches viewers without exposing the previous viewer projection', () => {
     const store = createStore();
     const targetKey = feedbackRequestTargetKey(TARGET);
-    const firstKey = feedbackRequestAtomKey({ ...TARGET, viewerUserId: 'member-a' });
-    const secondKey = feedbackRequestAtomKey({ ...TARGET, viewerUserId: 'member-b' });
+    const firstKey = feedbackRequestAtomKey({ ...TARGET, teamMemberId: asTeamMemberId('member-a') });
+    const secondKey = feedbackRequestAtomKey({ ...TARGET, teamMemberId: asTeamMemberId('member-b') });
 
     store.set(feedbackRequestStateAtomFamily(firstKey), {
       ...TARGET,
-      viewerUserId: 'member-a',
+      teamMemberId: asTeamMemberId('member-a'),
       status: 'cached',
       request: { responses: [{ id: 'visible-only-to-a' }] } as never,
     });
-    store.set(feedbackRequestActiveViewerAtomFamily(targetKey), 'member-a');
+    store.set(feedbackRequestActiveViewerAtomFamily(targetKey), asTeamMemberId('member-a'));
     expect(
       store.get(feedbackRequestStateForTargetAtomFamily(targetKey)).request?.responses,
     ).toEqual([{ id: 'visible-only-to-a' }]);
 
-    store.set(feedbackRequestActiveViewerAtomFamily(targetKey), 'member-b');
+    store.set(feedbackRequestActiveViewerAtomFamily(targetKey), asTeamMemberId('member-b'));
     expect(store.get(feedbackRequestStateForTargetAtomFamily(targetKey))).toMatchObject({
-      viewerUserId: 'member-b',
+      teamMemberId: 'member-b',
       status: 'idle',
     });
     expect(store.get(feedbackRequestStateForTargetAtomFamily(targetKey)).request)
@@ -52,7 +53,7 @@ describe('feedback request viewer projections', () => {
 
     store.set(feedbackRequestStateAtomFamily(secondKey), {
       ...TARGET,
-      viewerUserId: 'member-b',
+      teamMemberId: asTeamMemberId('member-b'),
       status: 'cached',
       request: { responses: [] } as never,
     });
@@ -67,7 +68,7 @@ describe('feedback request viewer projections', () => {
     const targetKey = feedbackRequestIndexTargetKey(indexTarget);
     const viewerKey = feedbackRequestIndexViewerKey({
       ...indexTarget,
-      viewerUserId: 'member-a',
+      teamMemberId: asTeamMemberId('member-a'),
     });
     const base = {
       orgId: TARGET.orgId,
@@ -103,7 +104,7 @@ describe('feedback request viewer projections', () => {
         label: 'Tracker',
       }],
     }]);
-    store.set(feedbackRequestIndexActiveViewerAtomFamily(targetKey), 'member-a');
+    store.set(feedbackRequestIndexActiveViewerAtomFamily(targetKey), asTeamMemberId('member-a'));
 
     expect(store.get(feedbackRequestIndexListAtomFamily(targetKey))).toHaveLength(2);
     expect(store.get(feedbackRequestIndexBySubjectAtomFamily(
@@ -117,7 +118,7 @@ describe('feedback request viewer projections', () => {
       }),
     )).map((entry) => entry.requestId)).toEqual(['tracker-request']);
 
-    store.set(feedbackRequestIndexActiveViewerAtomFamily(targetKey), 'member-b');
+    store.set(feedbackRequestIndexActiveViewerAtomFamily(targetKey), asTeamMemberId('member-b'));
     expect(store.get(feedbackRequestIndexListAtomFamily(targetKey))).toEqual([]);
   });
 
@@ -127,7 +128,7 @@ describe('feedback request viewer projections', () => {
     const targetKey = feedbackRequestIndexTargetKey(indexTarget);
     const viewerKey = feedbackRequestIndexViewerKey({
       ...indexTarget,
-      viewerUserId: 'member-a',
+      teamMemberId: asTeamMemberId('member-a'),
     });
     // Same sourceId under two kinds: a tracker item and a document can collide,
     // and matching on the id alone would cross-link two unrelated artifacts.
@@ -155,7 +156,7 @@ describe('feedback request viewer projections', () => {
       createdAt: 1,
       updatedAt: 1,
     }]);
-    store.set(feedbackRequestIndexActiveViewerAtomFamily(targetKey), 'member-a');
+    store.set(feedbackRequestIndexActiveViewerAtomFamily(targetKey), asTeamMemberId('member-a'));
 
     const idsFor = (subject: { kind: 'document' | 'tracker'; sourceId: string }) =>
       store.get(feedbackRequestIndexBySubjectAtomFamily(

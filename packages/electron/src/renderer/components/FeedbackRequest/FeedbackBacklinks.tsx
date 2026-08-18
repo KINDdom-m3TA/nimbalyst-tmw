@@ -18,6 +18,7 @@ import { useAtomValue } from 'jotai';
 import type { FeedbackRequestIndexEntry } from '@nimbalyst/collab-protocol';
 import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import { store } from '@nimbalyst/runtime/store';
+import type { TeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 
 import type { FeedbackRequestSubjectRef } from '../../../shared/feedbackRequestIndex';
 import { activeCollabScopeAtom } from '../../store/atoms/collabDocuments';
@@ -48,7 +49,7 @@ const TONE_CLASS: Record<FeedbackBacklinkTone, string> = {
 export interface FeedbackBacklinks {
   /** Requests about this artifact, most recently active first. */
   entries: FeedbackRequestIndexEntry[];
-  viewerUserId: string;
+  teamMemberId: TeamMemberId | '';
   open: (entry: FeedbackRequestIndexEntry) => void;
 }
 
@@ -77,7 +78,7 @@ export function useFeedbackBacklinks(
   );
 
   const matches = useAtomValue(feedbackRequestIndexBySubjectAtomFamily(subjectKey));
-  const viewerUserId = useAtomValue(feedbackRequestIndexActiveViewerAtomFamily(targetKey));
+  const teamMemberId = useAtomValue(feedbackRequestIndexActiveViewerAtomFamily(targetKey));
 
   const entries = useMemo(
     () => (sourceId && workspacePath ? sortFeedbackBacklinks(matches) : []),
@@ -99,24 +100,24 @@ export function useFeedbackBacklinks(
     });
   }, [workspacePath]);
 
-  return { entries, viewerUserId, open };
+  return { entries, teamMemberId, open };
 }
 
 interface FeedbackBacklinkRowsProps {
   entries: FeedbackRequestIndexEntry[];
-  viewerUserId: string;
+  teamMemberId: TeamMemberId | '';
   onOpen: (entry: FeedbackRequestIndexEntry) => void;
 }
 
 const FeedbackBacklinkRows: React.FC<FeedbackBacklinkRowsProps> = ({
   entries,
-  viewerUserId,
+  teamMemberId,
   onOpen,
 }) => (
   <div className="feedback-backlink-rows space-y-0.5">
     {entries.map((entry) => {
       const status = feedbackBacklinkStatus(entry);
-      const author = feedbackBacklinkAuthorLabel(entry, viewerUserId);
+      const author = feedbackBacklinkAuthorLabel(entry, teamMemberId);
       return (
         <button
           key={entry.requestId}
@@ -164,7 +165,7 @@ export const FeedbackBacklinkSection: React.FC<FeedbackBacklinkSectionProps> = (
   subject,
   className,
 }) => {
-  const { entries, viewerUserId, open } = useFeedbackBacklinks(subject);
+  const { entries, teamMemberId, open } = useFeedbackBacklinks(subject);
   if (entries.length === 0) return null;
 
   return (
@@ -177,7 +178,7 @@ export const FeedbackBacklinkSection: React.FC<FeedbackBacklinkSectionProps> = (
           {entries.length}
         </span>
       </div>
-      <FeedbackBacklinkRows entries={entries} viewerUserId={viewerUserId} onOpen={open} />
+      <FeedbackBacklinkRows entries={entries} teamMemberId={teamMemberId} onOpen={open} />
     </div>
   );
 };
@@ -190,7 +191,7 @@ export const FeedbackBacklinkSection: React.FC<FeedbackBacklinkSectionProps> = (
 export const FeedbackBacklinkHeaderButton: React.FC<FeedbackBacklinkSectionProps> = ({
   subject,
 }) => {
-  const { entries, viewerUserId, open } = useFeedbackBacklinks(subject);
+  const { entries, teamMemberId, open } = useFeedbackBacklinks(subject);
   const menu = useFloatingMenu({ placement: 'bottom-end' });
 
   const handleOpen = useCallback((entry: FeedbackRequestIndexEntry) => {
@@ -232,7 +233,7 @@ export const FeedbackBacklinkHeaderButton: React.FC<FeedbackBacklinkSectionProps
             </div>
             <FeedbackBacklinkRows
               entries={entries}
-              viewerUserId={viewerUserId}
+              teamMemberId={teamMemberId}
               onOpen={handleOpen}
             />
           </div>

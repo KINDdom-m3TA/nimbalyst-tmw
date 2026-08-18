@@ -2,6 +2,7 @@ import type {
   FeedbackRequestIndexEntry,
   ResourceRef,
 } from '@nimbalyst/collab-protocol';
+import type { TeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 
 export interface FeedbackRequestIndexTarget {
   workspacePath: string;
@@ -10,20 +11,20 @@ export interface FeedbackRequestIndexTarget {
 
 export interface FeedbackRequestIndexViewerTarget
   extends FeedbackRequestIndexTarget {
-  viewerUserId: string;
+  teamMemberId: TeamMemberId;
 }
 
 export interface FeedbackRequestIndexSnapshotIpcRequest {
   target: FeedbackRequestIndexTarget;
   /** Team-room identity; main verifies this against a fresh team JWT. */
-  viewerUserId: string;
+  teamMemberId: TeamMemberId;
   entries: FeedbackRequestIndexEntry[];
 }
 
 export interface FeedbackRequestIndexUpsertIpcRequest {
   target: FeedbackRequestIndexTarget;
   /** Team-room identity; main verifies this against a fresh team JWT. */
-  viewerUserId: string;
+  teamMemberId: TeamMemberId;
   entry: FeedbackRequestIndexEntry;
 }
 

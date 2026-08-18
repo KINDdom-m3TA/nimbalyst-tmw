@@ -8,6 +8,7 @@
 import type { PushRejectionCause, SkipReason } from '@nimbalyst/collab-protocol';
 
 import type { AgentMessage } from '../ai/server/types';
+import type { PersonalJwt, PersonalMemberId } from '../auth/jwtScopes';
 import type { SyncedReadReceipt } from '../readReceipts/readReceipts';
 
 /** Caller-side knobs for {@link SyncProvider.requestMobilePush}. */
@@ -39,7 +40,7 @@ export interface SyncConfig {
    * Called before each WebSocket connection to ensure the JWT isn't expired.
    * JWTs typically expire in ~5 minutes, so this must return a fresh one.
    */
-  getJwt: () => Promise<string>;
+  getJwt: () => Promise<PersonalJwt>;
 
   /** B2B organization ID for org-scoped room IDs. */
   orgId: string;
@@ -51,7 +52,7 @@ export interface SyncConfig {
    * but sync room IDs must use the personal org member ID to stay consistent
    * across devices. If provided, this takes precedence over extracting from JWT.
    */
-  userId?: string;
+  personalMemberId: PersonalMemberId;
 
   /** Optional encryption key for E2E encryption */
   encryptionKey?: CryptoKey;
@@ -117,7 +118,7 @@ export interface SyncProvider {
   isConnected(sessionId: string): boolean;
 
   /**
-   * Returns true when the provider has latched a JWT/userId mismatch
+   * Returns true when the provider has latched a JWT/personal-member mismatch
    * (server-rejected, locally refused). Callers in hot paths (e.g.
    * MessageSyncHandler running on every agent message) should consult
    * this before attempting connect() to avoid log floods and CPU spin.
