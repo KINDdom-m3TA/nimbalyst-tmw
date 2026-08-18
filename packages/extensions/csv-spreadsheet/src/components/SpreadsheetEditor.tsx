@@ -17,6 +17,7 @@ import type { RevoGridElement } from '../revogrid-types';
 import type {
   EditorHostProps,
   NormalizedSelectionRange,
+  CellStyle,
   ColumnFormat,
   DiffState,
   CellDiff,
@@ -31,11 +32,12 @@ import {
   type DiffConfig,
 } from '@nimbalyst/extension-sdk';
 import { CsvBinding } from '../collab/csvBinding';
+import { CsvMetaBinding, isMetaEmpty, type CsvMetaSnapshot } from '../collab/metaBinding';
 import { isCsvYDocEmpty, seedCsvYDoc, getYCsv } from '../collab/seed';
 import type { RemotePresence } from '../collab/presence';
 import { LocalPresenceTracker } from '../collab/localPresence';
 import { CollabPresenceOverlay } from './CollabPresenceOverlay';
-import { useSpreadsheetMetadata } from '../hooks/useSpreadsheetMetadata';
+import { useSpreadsheetMetadata, type SpreadsheetMetadata } from '../hooks/useSpreadsheetMetadata';
 import {
   createGridOperations,
   FormulaViewState,
@@ -65,10 +67,12 @@ import {
   URL_CELL_ATTRIBUTE,
 } from '../cells/cellRendering';
 import { TrackerResolutionStore } from '../cells/trackerResolution';
+import { applyStyleToRange, CellStyleIndex, rangeKeyOf, styleClassNames } from '../cells/cellStyles';
 import { TrackerCellResolvers } from '../cells/TrackerCellResolvers';
 import { FormulaBar, type FormulaBarHandle } from './FormulaBar';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { ColumnFormatDialog } from './ColumnFormatDialog';
+import { CellFormatDialog } from './CellFormatDialog';
 import { FindBar } from './FindBar';
 import { ColumnFilterDropdown } from './ColumnFilterDropdown';
 import { useSpreadsheetFind, type FindContext } from '../hooks/useSpreadsheetFind';
@@ -152,6 +156,17 @@ function formatSelectionRef(selection: NormalizedSelectionRange | null): string 
   return `${startRef}:${endRef}`;
 }
 
+/** The subset of editor metadata that syncs between collaborators. */
+function metaSnapshotOf(metadata: SpreadsheetMetadata): CsvMetaSnapshot {
+  return {
+    headerRowCount: metadata.headerRowCount,
+    frozenColumnCount: metadata.frozenColumnCount,
+    columnFormats: metadata.columnFormats,
+    columnWidths: metadata.columnWidths,
+    cellStyles: metadata.cellStyles,
+  };
+}
+
 /**
  * Which columns a format-dialog save applies to: every column in the current
  * selection when the formatted column is part of it, otherwise just that column.
@@ -209,6 +224,8 @@ function generateColumns(
   filteredColumnsRef: RefObject<ReadonlySet<number>> = { current: new Set() },
   aiFlashRef: RefObject<WeakMap<object, ReadonlySet<string>>> = { current: new WeakMap() },
   trackerStore: TrackerResolutionStore | null = null,
+  cellStyleIndex: CellStyleIndex = new CellStyleIndex({}),
+  headerRowCount: number = 0,
 ): ColumnRegular[] {
   const columnHeaders = generateColumnHeaders(columnCount);
   const DEFAULT_COLUMN_WIDTH = 120;
@@ -286,6 +303,16 @@ function generateColumns(
             : null;
           if (isNegativeFormattedValue(numeric, format)) {
             classes['csv-cell-negative'] = true;
+          }
+        }
+
+        // Cell/range styling. Logical rows are what an A1 range key means, so a
+        // pinned header row is its own index rather than the body's row 0.
+        if (!cellStyleIndex.isEmpty) {
+          const logicalRow = isPinned ? cellData.rowIndex : cellData.rowIndex + headerRowCount;
+          const cellStyle = cellStyleIndex.styleAt(logicalRow, index);
+          if (cellStyle) {
+            for (const className of styleClassNames(cellStyle)) classes[className] = true;
           }
         }
 
@@ -498,6 +525,7 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
 
   // Column format dialog state
   const [formatDialogColumn, setFormatDialogColumn] = useState<number | null>(null);
+  const [cellFormatOpen, setCellFormatOpen] = useState(false);
 
   // Diff mode state for AI edit review
   const [diffState, setDiffState] = useState<DiffState | null>(null);
@@ -715,6 +743,9 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
   // Y.Text changes flow back through the existing applyContent path so
   // every existing format/header/metadata invariant is preserved.
   const collabBindingRef = useRef<CsvBinding | null>(null);
+  const metaBindingRef = useRef<CsvMetaBinding | null>(null);
+  /** Guards the publish effect against echoing a snapshot we just received. */
+  const lastPublishedMetaRef = useRef<CsvMetaSnapshot | null>(null);
   const collabActiveRef = useRef(false);
   // Remote collaborator presence (selected/editing cells) for the in-grid
   // overlay. `presenceRepaintTick` forces the overlay to re-measure cell rects
@@ -752,7 +783,26 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
         }
         spreadsheetMetaRef.current.loadFromCSV(content);
         spreadsheetMetaRef.current.markClean();
+        // `loadFromCSV` re-reads metadata from the comment line, which in a
+        // shared sheet is stale derived output. The map is the authority, so
+        // put it back on top of whatever the text happened to carry.
+        const metaBinding = metaBindingRef.current;
+        if (metaBinding && !isMetaEmpty(yDoc)) {
+          const snapshot = metaBinding.snapshot();
+          spreadsheetMetaRef.current.applyRemoteMetadata(snapshot);
+          lastPublishedMetaRef.current = snapshot;
+        }
       };
+
+      // Metadata syncs through its own map rather than the comment line inside
+      // the CSV text, so two people formatting two different columns merge.
+      const metaBinding = new CsvMetaBinding(yDoc, {
+        onRemoteMeta: (snapshot) => {
+          spreadsheetMetaRef.current.applyRemoteMetadata(snapshot);
+          lastPublishedMetaRef.current = snapshot;
+        },
+      });
+      metaBindingRef.current = metaBinding;
 
       // Initial baseline = whatever Y.Text already has (the seed we just
       // wrote OR the content sync'd from another client).
@@ -792,7 +842,21 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
       if (initial.length > 0) {
         applyCsvContent(initial);
         binding.noteAppliedRemote(initial);
-      } else if (loadedCsvContentRef.current.length > 0) {
+      }
+
+      // Migration: a sheet shared before metadata had its own key carries it
+      // only in the comment line. Whoever opens it first seeds the map from
+      // what was just parsed; after that the map is the authority. Two clients
+      // racing here write identical values, so the result converges either way.
+      if (isMetaEmpty(yDoc)) {
+        metaBinding.publish(metaSnapshotOf(spreadsheetMetaRef.current.metadata));
+      } else {
+        const snapshot = metaBinding.snapshot();
+        spreadsheetMetaRef.current.applyRemoteMetadata(snapshot);
+        lastPublishedMetaRef.current = snapshot;
+      }
+
+      if (initial.length === 0 && loadedCsvContentRef.current.length > 0) {
         // First-share opens can render from host.loadContent() before the Y.Text
         // has been populated. Push that already-loaded local CSV immediately so a
         // close/reopen does not depend on the poll interval or unmount flush.
@@ -816,6 +880,9 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
           // The drain that can still read the grid is the one the host runs
           // through `registerContentFlush` before it destroys the mount.
           binding.destroy();
+          metaBindingRef.current?.destroy();
+          metaBindingRef.current = null;
+          lastPublishedMetaRef.current = null;
           collabBindingRef.current = null;
           collabActiveRef.current = false;
           setRemotePresences([]);
@@ -935,6 +1002,13 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
   const trackerStore = trackerStoreRef.current;
   const [trackerKeys, setTrackerKeys] = useState<readonly string[]>([]);
 
+  // Rebuilt only when the styles themselves change; the index memoizes lookups
+  // internally so a repaint does not rescan every range for every cell.
+  const cellStyleIndex = useMemo(
+    () => new CellStyleIndex(spreadsheetMeta.metadata.cellStyles),
+    [spreadsheetMeta.metadata.cellStyles],
+  );
+
   // Memoized column definitions
   const columns = useMemo(
     () => generateColumns(
@@ -948,8 +1022,11 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
       filteredColumnsRef,
       aiFlashRef,
       trackerStore,
+      cellStyleIndex,
+      headerRowCount,
     ),
-    [displayColumnCount, frozenColumnCount, columnFormats, columnWidths, diffState, trackerStore]
+    [displayColumnCount, frozenColumnCount, columnFormats, columnWidths, diffState, trackerStore,
+     cellStyleIndex, headerRowCount]
   );
 
   // Note: We don't use RevoGrid's built-in themes (default/darkCompact) because
@@ -996,6 +1073,7 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
       getDelimiter: () => spreadsheetMetaRef.current.delimiter,
       getColumnFormats: () => spreadsheetMetaRef.current.metadata.columnFormats,
       getColumnWidths: () => spreadsheetMetaRef.current.metadata.columnWidths,
+      getCellStyles: () => spreadsheetMetaRef.current.metadata.cellStyles,
       getFrozenColumnCount: () => spreadsheetMetaRef.current.metadata.frozenColumnCount,
       onDirty: () => {
         hostRef.current.setDirty(true);
@@ -1442,6 +1520,15 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
   }, [trackerStore, repaintGrid]);
 
   useEffect(() => () => trackerStore.destroy(), [trackerStore]);
+
+  // Push local metadata edits into the shared map. Keyed on the metadata object
+  // rather than on each setter so every path that changes it — the format
+  // dialog, a column resize, the header toggle — publishes the same way.
+  useEffect(() => {
+    const metaBinding = metaBindingRef.current;
+    if (!metaBinding) return;
+    metaBinding.publish(metaSnapshotOf(spreadsheetMeta.metadata));
+  }, [spreadsheetMeta.metadata]);
 
   /**
    * One delegated listener for link and tracker cells. Attaching handlers in the
@@ -2123,6 +2210,18 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
     spreadsheetMeta.setColumnFormat(colIndex, detected === 'text' ? null : getDefaultFormatForType(detected));
   }, [spreadsheetMeta]);
 
+  /**
+   * Apply a styling change to the current selection. Styling is presentation
+   * only: it never touches cell values, so it is safe on a formula or a date.
+   */
+  const applyCellStyle = useCallback((change: CellStyle) => {
+    const selection = selectionRangeRef.current;
+    if (!selection) return;
+    spreadsheetMeta.setCellStyles(
+      applyStyleToRange(spreadsheetMeta.metadata.cellStyles, selection, change),
+    );
+  }, [spreadsheetMeta]);
+
   const getColumnHeaderContextMenuItems = useCallback((colIndex: number): ContextMenuItem[] => {
     const colLetter = columnIndexToLetter(colIndex);
     const currentFrozenCount = frozenColumnCount;
@@ -2265,6 +2364,25 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
         action: () => {
           if (range && gridOps) gridOps.clearCells(range);
         },
+        disabled: !hasSelection,
+      },
+      { label: '', action: () => {}, separator: true },
+      // Styling is presentation only, so it is safe on a formula or a date --
+      // neither of these touches the cell's value.
+      {
+        label: hasMultipleSelected ? `Format Cells (${cellCount})...` : 'Format Cells...',
+        action: () => {
+          setContextMenu(null);
+          setCellFormatOpen(true);
+        },
+        disabled: !hasSelection,
+      },
+      {
+        label: 'Clear formatting',
+        action: () => applyCellStyle({
+          bold: false, italic: false, underline: false, strikethrough: false,
+          textColor: 'default', fillColor: 'default',
+        }),
         disabled: !hasSelection,
       },
       { label: '', action: () => {}, separator: true },
@@ -2449,6 +2567,16 @@ export function SpreadsheetEditor({ host }: EditorHostProps) {
           />
         )}
       </div>
+
+      <CellFormatDialog
+        isOpen={cellFormatOpen}
+        rangeLabel={selectionRangeRef.current ? rangeKeyOf(selectionRangeRef.current) : ''}
+        currentStyle={selectionRangeRef.current
+          ? cellStyleIndex.styleAt(selectionRangeRef.current.startRow, selectionRangeRef.current.startCol)
+          : null}
+        onSave={(style) => applyCellStyle(style)}
+        onClose={() => setCellFormatOpen(false)}
+      />
 
       <ColumnFormatDialog
         isOpen={formatDialogColumn !== null}

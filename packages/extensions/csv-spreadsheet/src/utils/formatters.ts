@@ -180,12 +180,18 @@ function applyTimeParts(
 }
 
 /**
- * Parse a date, datetime, or time-of-day value.
+ * Parse a value that is *unambiguously* a date, datetime, or time.
+ *
+ * Unlike {@link parseDateTime} this never falls back to `new Date(str)`, which
+ * is far too permissive to use as a type test — it happily reads `"March"` and
+ * `"Sat"` as dates. Formula arithmetic needs the strict version: coercing a
+ * date cell to a number is right, but doing the same to the word "March" is
+ * how `="March"+1` would silently become a number.
  *
  * Time-only values are anchored to the Unix epoch day so that `time` columns
  * still produce a real Date the pattern formatter can render.
  */
-export function parseDateTime(value: string | number | null): Date | null {
+export function parseTemporalStrict(value: string | number | null): Date | null {
   if (value === null || value === '') return null;
   if (typeof value === 'number') {
     // Excel serial date number
@@ -258,7 +264,24 @@ export function parseDateTime(value: string | number | null): Date | null {
     return applyTimeParts(base, euMatch[4], euMatch[5], euMatch[6], euMatch[7]);
   }
 
-  // Try native Date parsing as fallback
+  return null;
+}
+
+/**
+ * Parse a date, datetime, or time-of-day value for *display*.
+ *
+ * Adds a permissive native-parse fallback on top of
+ * {@link parseTemporalStrict}, so a column the user has explicitly declared
+ * temporal still renders shapes we do not have a pattern for. Never use this as
+ * a test for "is this a date" — see the note on the strict version.
+ */
+export function parseDateTime(value: string | number | null): Date | null {
+  const strict = parseTemporalStrict(value);
+  if (strict !== null) return strict;
+  if (typeof value !== 'string') return null;
+
+  const str = value.trim();
+  if (str === '') return null;
   const parsed = new Date(str);
   return isNaN(parsed.getTime()) ? null : parsed;
 }

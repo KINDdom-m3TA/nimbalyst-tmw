@@ -9,6 +9,7 @@ import type { DimensionCols, DimensionRows } from '@revolist/revogrid';
 import type { RevoGridElement } from '../revogrid-types';
 import type {
   NormalizedSelectionRange,
+  CellStyleRanges,
   ColumnFormat,
   CSVMetadata,
   SpreadsheetData,
@@ -165,6 +166,7 @@ function spreadsheetDataFromGridSources(
     headerRowCount,
     frozenColumnCount: options.getFrozenColumnCount(),
     columnFormats: options.getColumnFormats(),
+    cellStyles: {},
   };
 }
 
@@ -175,6 +177,8 @@ export interface GridOperationsOptions {
   getDelimiter: () => ',' | '\t';
   getColumnFormats: () => Record<number, ColumnFormat>;
   getColumnWidths: () => Record<number, number>;
+  /** Styles are serialized from here, so a save cannot silently drop them. */
+  getCellStyles: () => CellStyleRanges;
   getFrozenColumnCount: () => number;
   onDirty: () => void;
   getUndoPlugin: () => UndoRedoPlugin | null;
@@ -230,6 +234,7 @@ export function createGridOperations(
     getDelimiter,
     getColumnFormats,
     getColumnWidths,
+    getCellStyles,
     getFrozenColumnCount,
     onDirty,
     getUndoPlugin,
@@ -1018,9 +1023,12 @@ export function createGridOperations(
 
     // Build metadata - only include if using non-default features
     const columnWidths = getColumnWidths();
+    const cellStyles = getCellStyles();
     const hasColumnFormats = Object.keys(columnFormats).length > 0;
     const hasColumnWidths = Object.keys(columnWidths).length > 0;
-    const hasNonDefaultMetadata = headerRowCount > 0 || frozenColumnCount > 0 || hasColumnFormats || hasColumnWidths;
+    const hasCellStyles = Object.keys(cellStyles).length > 0;
+    const hasNonDefaultMetadata = headerRowCount > 0 || frozenColumnCount > 0
+      || hasColumnFormats || hasColumnWidths || hasCellStyles;
 
     if (hasNonDefaultMetadata) {
       const metadata: CSVMetadata = {
@@ -1029,6 +1037,7 @@ export function createGridOperations(
         frozenColumnCount,
         ...(hasColumnFormats ? { columnFormats } : {}),
         ...(hasColumnWidths ? { columnWidths } : {}),
+        ...(hasCellStyles ? { cellStyles } : {}),
       };
       return `${serializeMetadata(metadata)}\n${csvRows.join('\n')}`;
     }

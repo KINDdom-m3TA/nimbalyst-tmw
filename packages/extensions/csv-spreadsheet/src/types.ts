@@ -97,6 +97,45 @@ export interface ColumnFormat {
 }
 
 /**
+ * Named colors for cell styling.
+ *
+ * A fixed palette rather than arbitrary hex: the swatches resolve to `--nim-*`
+ * derived CSS, so a sheet styled in the light theme stays readable in the dark
+ * one. Raw colors would look correct only in whichever theme they were picked in.
+ */
+export type CellColor =
+  | 'default'
+  | 'red'
+  | 'orange'
+  | 'yellow'
+  | 'green'
+  | 'blue'
+  | 'purple'
+  | 'gray';
+
+/**
+ * Presentation applied to a cell range, independent of the column's data type.
+ */
+export interface CellStyle {
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strikethrough?: boolean;
+  textColor?: CellColor;
+  fillColor?: CellColor;
+  align?: CellAlignment;
+}
+
+/**
+ * Cell styles keyed by A1 range (`B2` or `A1:C10`), 1-based and inclusive.
+ *
+ * Range-keyed rather than per-cell so the metadata line stays small: styling a
+ * whole column is one entry, not ten thousand. Later entries win where ranges
+ * overlap.
+ */
+export type CellStyleRanges = Record<string, CellStyle>;
+
+/**
  * Metadata stored in CSV comment header
  */
 export interface CSVMetadata {
@@ -107,6 +146,8 @@ export interface CSVMetadata {
   columnFormats?: Record<number, ColumnFormat>;
   /** Column widths, keyed by column index (only stored if user has resized) */
   columnWidths?: Record<number, number>;
+  /** Cell styling, keyed by A1 range */
+  cellStyles?: CellStyleRanges;
 }
 
 /**
@@ -150,6 +191,8 @@ export interface SpreadsheetData {
   frozenColumnCount: number;
   /** Column format configurations, keyed by column index */
   columnFormats: Record<number, ColumnFormat>;
+  /** Cell styling, keyed by A1 range */
+  cellStyles: CellStyleRanges;
 }
 
 /**

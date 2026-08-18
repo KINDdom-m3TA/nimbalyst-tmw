@@ -3,7 +3,7 @@
  */
 
 import Papa from 'papaparse';
-import type { SpreadsheetData, Cell, CSVMetadata, ColumnFormat } from '../types';
+import type { SpreadsheetData, Cell, CSVMetadata, CellStyleRanges, ColumnFormat } from '../types';
 
 /** Comment prefix for nimbalyst metadata */
 const METADATA_PREFIX = '# nimbalyst:';
@@ -114,6 +114,7 @@ export function parseCSV(content: string): { data: SpreadsheetData; delimiter: '
 
   // Use metadata columnFormats if present, otherwise default to empty
   const columnFormats: Record<number, ColumnFormat> = metadata?.columnFormats ?? {};
+  const cellStyles: CellStyleRanges = metadata?.cellStyles ?? {};
 
   return {
     data: {
@@ -124,6 +125,7 @@ export function parseCSV(content: string): { data: SpreadsheetData; delimiter: '
       headerRowCount,
       frozenColumnCount,
       columnFormats,
+      cellStyles,
     },
     delimiter,
     metadata,
@@ -205,9 +207,11 @@ export function serializeToCSV(data: SpreadsheetData, delimiter: ',' | '\t' = ',
   // Prepend metadata comment if requested AND if using non-default features
   if (includeMetadata) {
     const hasColumnFormats = Object.keys(data.columnFormats || {}).length > 0;
+    const hasCellStyles = Object.keys(data.cellStyles || {}).length > 0;
     const headerRowCount = data.headerRowCount || (data.hasHeaders ? 1 : 0);
     const frozenColumnCount = data.frozenColumnCount || 0;
-    const hasNonDefaultMetadata = headerRowCount > 0 || frozenColumnCount > 0 || hasColumnFormats;
+    const hasNonDefaultMetadata = headerRowCount > 0 || frozenColumnCount > 0
+      || hasColumnFormats || hasCellStyles;
 
     if (hasNonDefaultMetadata) {
       const metadata: CSVMetadata = {
@@ -215,6 +219,7 @@ export function serializeToCSV(data: SpreadsheetData, delimiter: ',' | '\t' = ',
         headerRowCount,
         frozenColumnCount,
         ...(hasColumnFormats ? { columnFormats: data.columnFormats } : {}),
+        ...(hasCellStyles ? { cellStyles: data.cellStyles } : {}),
       };
       return `${serializeMetadata(metadata)}\n${csvContent}`;
     }

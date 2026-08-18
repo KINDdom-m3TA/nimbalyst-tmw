@@ -85,10 +85,57 @@ describe('formula engine', () => {
       expect(evaluateFormula('=DATEVALUE("2026-08-18")', data, 0, 3)).toEqual({ value: '2026-08-18' });
     });
 
-    it('does not support arithmetic on a date', () => {
-      // Pre-existing: `toNumber` rejects a Date, so `=A1+1` for "tomorrow" is
-      // unavailable. Pinned so the gap is visible rather than surprising.
-      expect(evaluateFormula('=DATE(2026,8,18)+1', data, 0, 3).error).toBe('#VALUE!');
+  });
+
+  /**
+   * Every spreadsheet models a date as a number of days, which is what makes
+   * `=A1+7` and `=B1-A1` work at all. A date column here stores *text*, so
+   * reaching that number means parsing the cell — strictly, or `="March"+1`
+   * would quietly become arithmetic.
+   */
+  describe('date arithmetic', () => {
+    const dates: FormulaEvalData = {
+      rows: [[
+        cell('2026-08-18', '2026-08-18'),
+        cell('2026-08-25', '2026-08-25'),
+        cell('March', 'March'),
+        cell('', ''),
+      ]],
+      columnCount: 4,
+    };
+
+    it('counts the days between two dates', () => {
+      expect(evaluateFormula('=B1-A1', dates, 0, 3)).toEqual({ value: 7 });
+    });
+
+    it('offsets a date by a number of days', () => {
+      // The result is a serial; a date-formatted column renders it as a date.
+      const serial = evaluateFormula('=A1+7', dates, 0, 3).value as number;
+      expect(evaluateFormula('=B1', dates, 0, 3).value).toBe('2026-08-25');
+      expect(serial).toBe(evaluateFormula('=B1+0', dates, 0, 3).value);
+    });
+
+    it('compares dates chronologically rather than as text', () => {
+      expect(evaluateFormula('=A1<B1', dates, 0, 3)).toEqual({ value: 'TRUE' });
+      expect(evaluateFormula('=B1<A1', dates, 0, 3)).toEqual({ value: 'FALSE' });
+    });
+
+    it('refuses to do arithmetic on a word that merely parses as a date', () => {
+      // `new Date("March")` is a valid date, which is why the strict parser
+      // exists — this has to stay an error.
+      expect(evaluateFormula('=C1+1', dates, 0, 3).error).toBe('#VALUE!');
+    });
+
+    it('concatenates a date result as its rendered form', () => {
+      expect(evaluateFormula('="Due "&A1', dates, 0, 3)).toEqual({ value: 'Due 2026-08-18' });
+    });
+
+    it('does not reach into date text from range aggregates', () => {
+      // Pre-existing and unchanged: range values go to formula.js as-is, and it
+      // ignores strings. Coercing them in `resolveRange` would also rewrite the
+      // keys VLOOKUP and MATCH compare against, so the gap stays pinned here
+      // rather than papered over.
+      expect(evaluateFormula('=MAX(A1:B1)', dates, 0, 3)).toEqual({ value: 0 });
     });
   });
 
@@ -212,5 +259,6 @@ function makeSpreadsheet(rows: Cell[][]): SpreadsheetData {
     headerRowCount: 0,
     frozenColumnCount: 0,
     columnFormats: {},
+    cellStyles: {},
   };
 }
