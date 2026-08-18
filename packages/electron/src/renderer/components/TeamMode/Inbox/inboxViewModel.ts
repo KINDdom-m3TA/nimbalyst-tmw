@@ -473,6 +473,23 @@ export function isScopeActive(scope: InboxScope): boolean {
 }
 
 /**
+ * Whether the org/project scope control has anything to say.
+ *
+ * One organization is not a choice, and `projectId` is not on the wire at all
+ * yet (`TeamInboxMaterializedDelivery` carries no project, so `deriveScopeOptions`
+ * only ever finds projects in fixtures) — which together left the menu opening
+ * onto an empty box for every real single-org user. A control that cannot
+ * change anything should not be on screen; it comes back on its own the day a
+ * second org, or a project-stamped delivery, shows up.
+ *
+ * An already-narrowed scope keeps the trigger regardless, or a restored
+ * preference could hide rows with no visible way to undo it.
+ */
+export function hasScopeChoices(options: InboxScopeOptions, scope: InboxScope): boolean {
+  return options.orgs.length > 1 || options.projects.length > 0 || !!(scope.orgIds || scope.projectIds);
+}
+
+/**
  * Toggle one value on a scope axis, where `null` means "unrestricted".
  *
  * The subtlety: an unrestricted axis renders every box checked, so the first

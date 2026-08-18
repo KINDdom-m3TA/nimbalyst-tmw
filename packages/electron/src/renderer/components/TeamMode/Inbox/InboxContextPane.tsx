@@ -49,7 +49,7 @@ export function InboxContextPane({
   if (!row) {
     return (
       <aside
-        className="inbox-context-pane inbox-context-pane-empty flex min-w-0 flex-col items-center justify-center gap-2 border-l border-[var(--nim-border)] p-8 text-center"
+        className="inbox-context-pane inbox-context-pane-empty flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-2 border-l border-[var(--nim-border)] p-8 text-center"
         data-testid="inbox-context-pane"
         data-component="InboxContextPane"
       >
@@ -78,7 +78,10 @@ export function InboxContextPane({
 
   return (
     <aside
-      className="inbox-context-pane flex min-w-0 flex-col border-l border-[var(--nim-border)]"
+      // `min-h-0 flex-1` is what makes the scroll regions below actually
+      // scroll: they are `min-h-0 flex-1 overflow-y-auto`, so the pane itself
+      // has to end at the bottom of its slot instead of growing with content.
+      className="inbox-context-pane flex min-h-0 min-w-0 flex-1 flex-col border-l border-[var(--nim-border)]"
       data-testid="inbox-context-pane"
       data-component="InboxContextPane"
     >

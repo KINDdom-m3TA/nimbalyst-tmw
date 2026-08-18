@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ask a teammate for structured feedback: your agent drafts the question, you approve it, and it arrives in their inbox to answer, with results and outstanding replies in their own tab. Copy a link to send anyone who does not have Nimbalyst installed, and they can answer and discuss the request in a browser.
 - Tracker items that have not been shared yet now show a number of their own, like NIM.12, so you can refer to one before it is published.
 - Desktop notifications now carry their own icon, so you can tell a finished agent, a question, an approval request, and a teammate's message apart at a glance.
+- Spreadsheet columns can now hold dates with times, times, checkboxes, links, and tracker items, alongside accounting and scientific number styles, custom date patterns, red or parenthesized negatives, and your own alignment. A tracker cell shows the item's live title and status and opens it when clicked, columns can detect their own type, and sorting and filtering now follow the column's type instead of its text.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
@@ -22,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opening an editor no longer fetches a font from a third-party server.
 - Codex no longer offers slash commands it cannot actually run.
 - The Compact action is now hidden for agents that cannot compact, instead of offering a button that quietly does nothing.
+- The inbox's message pane can now be dragged to the width you want, and it stays on screen at far more window sizes instead of disappearing.
 
 ### Fixed
 <!-- Bug fixes go here -->
@@ -40,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A Codex session that cannot resume now says so, instead of starting over with an empty history while still showing the old conversation.
 - A Codex tool server that fails to start now shows as failed, instead of the agent quietly losing its tools.
 - Team messages, mentions, and notifications now arrive when the app finishes starting before you are signed in, instead of going quiet for the rest of the session.
+- The inbox's organization filter no longer opens onto an empty menu when there is nothing to narrow by.
 
 ### Removed
 <!-- Removed features go here -->
