@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The results column in a shared calc sheet no longer goes blank until you type again.
 - Picking a grouping or ordering in the tracker's Display Settings now works instead of closing the panel without changing anything.
 - Grouping by milestone or goal names each lane, row, and card chip after the milestone itself, instead of showing a raw id or an out-of-date name.
+- Tracker date, link, and people chips now carry their field name, so an item with two dates or several links no longer needs a hover to tell them apart.
 - Collaborator avatars and the sync indicator no longer flicker on every character you type in a shared document.
 - Collaborators in a shared spreadsheet, diagram, or mockup come back after a network blip, instead of the list emptying and staying empty.
 - Codex file edits show a red/green diff in the transcript again, instead of a raw tool call.
