@@ -23,6 +23,7 @@ import {
 } from '../documentHeader/frontmatterUtils';
 import { getRecordTitle, getRecordStatus, getRecordPriority, getFieldByRole, resolveRoleFieldName, getItemPublicationState } from '../trackerRecordAccessors';
 import { globalRegistry, parseDate, normalizeRelationshipValue, type TrackerGroupBy } from '../models';
+import { resolveDisplayIssueKey } from '../models/localIssueKey';
 import {usePostHog} from "posthog-js/react";
 import {
   resolveColumnsForType,
@@ -525,13 +526,15 @@ export function renderCell(
         <div className="title-text text-[13px] font-medium text-[var(--nim-text)] truncate min-w-0">{title}</div>
       );
 
-    case 'key':
-      if (!item.issueKey) return null;
+    case 'key': {
+      const displayKey = resolveDisplayIssueKey(item);
+      if (!displayKey) return null;
       return (
         <span className="text-[11px] font-mono font-medium uppercase tracking-[0.04em] text-[var(--nim-text-faint)] truncate">
-          {item.issueKey}
+          {displayKey}
         </span>
       );
+    }
 
     case 'status': {
       if (isItemEditable(item) && editingCell?.itemId === item.id && editingCell?.field === 'status') {
@@ -1397,8 +1400,8 @@ export function TrackerTable({
                     />
                   ) : (
                     <div className="flex items-baseline gap-2 min-w-0">
-                      {item.issueKey && (
-                        <span className="shrink-0 text-[10px] font-mono font-medium uppercase tracking-[0.08em] text-[var(--nim-text-faint)]">{item.issueKey}</span>
+                      {resolveDisplayIssueKey(item) && (
+                        <span className="shrink-0 text-[10px] font-mono font-medium uppercase tracking-[0.08em] text-[var(--nim-text-faint)]">{resolveDisplayIssueKey(item)}</span>
                       )}
                       <span className="text-[13px] font-medium text-[var(--nim-text)] truncate">{title}</span>
                     </div>

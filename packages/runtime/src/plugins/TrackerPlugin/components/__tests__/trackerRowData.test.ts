@@ -74,6 +74,15 @@ describe('searchMatchesRecord', () => {
     expect(searchMatchesRecord(item, 'sync')).toBe(true);
   });
 
+  // The local number is now visible in the Key column, so it has to be
+  // something you can paste back into the search box.
+  it('matches on the local number of an item with no team key', () => {
+    const unshared = record({ id: 'b', localKey: 'NIC.42', fields: { title: 'Unshared' } });
+
+    expect(searchMatchesRecord(unshared, 'nic.42')).toBe(true);
+    expect(searchMatchesRecord(unshared, 'nic.7')).toBe(false);
+  });
+
   it('treats an empty query as matching everything', () => {
     expect(searchMatchesRecord(item, '   ')).toBe(true);
   });

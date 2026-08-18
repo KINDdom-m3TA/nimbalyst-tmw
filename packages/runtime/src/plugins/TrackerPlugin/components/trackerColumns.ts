@@ -12,6 +12,7 @@ import type { TrackerSchemaRole, FieldDefinition } from '../models/TrackerDataMo
 import { globalRegistry } from '../models';
 import { defaultTrackerTypeColor, defaultTrackerTypeIcon } from '../models/trackerTypeIdentity';
 import { isDateOnlyValue, parseDate } from '../models/dateUtils';
+import { resolveDisplayIssueKey } from '../models/localIssueKey';
 import { resolveRoleFieldName, getFieldByRole, getItemPublicationState } from '../trackerRecordAccessors';
 import { resolveCellEditor, READONLY_STRUCTURAL_COLUMNS, type CellEditorKind } from './trackerCellEditors';
 
@@ -385,7 +386,7 @@ export function getEffectiveUpdatedDate(record: TrackerRecord): Date | undefined
 export function getCellValue(record: TrackerRecord, columnId: string): any {
   switch (columnId) {
     case 'type': return record.primaryType;
-    case 'key': return record.issueKey ?? '';
+    case 'key': return resolveDisplayIssueKey(record) ?? '';
     case 'updated': return getEffectiveUpdatedDate(record);
     case 'viewed': return record.fields.viewed;
     case 'created': return record.system.createdAt;

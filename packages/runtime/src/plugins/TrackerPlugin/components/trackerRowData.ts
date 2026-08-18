@@ -45,6 +45,7 @@ export function searchMatchesRecord(item: TrackerRecord, query: string): boolean
   const tags = getFieldByRole(item, 'tags');
   return Boolean(
     item.issueKey?.toLowerCase().includes(q)
+    || item.localKey?.toLowerCase().includes(q)
     || String(item.issueNumber ?? '').includes(q)
     || getRecordTitle(item).toLowerCase().includes(q)
     || (item.system.documentPath ?? '').toLowerCase().includes(q)
