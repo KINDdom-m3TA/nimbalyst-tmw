@@ -1,7 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
 import { TeamSyncProvider } from '../TeamSync';
-import type { OrgSettings } from '@nimbalyst/collab-protocol';
+import type {
+  FeedbackRequestIndexEntry,
+  OrgSettings,
+} from '@nimbalyst/collab-protocol';
 import type { TeamSyncConfig } from '../teamSyncTypes';
 
 function createProvider(
@@ -82,6 +85,56 @@ describe('TeamSyncProvider organization settings', () => {
     });
 
     expect(onOrgSettingsUpdated).not.toHaveBeenCalled();
+    provider.destroy();
+  });
+
+  it('requests and forwards the participant-filtered feedback index stream', async () => {
+    const onFeedbackIndexLoaded = vi.fn();
+    const onFeedbackIndexChanged = vi.fn();
+    const provider = new TeamSyncProvider({
+      serverUrl: 'ws://example.test',
+      getJwt: async () => 'token',
+      orgId: 'org-1',
+      userId: 'user-1',
+      onFeedbackIndexLoaded,
+      onFeedbackIndexChanged,
+    });
+    const sent: Array<{ type: string }> = [];
+    (provider as any).send = (message: { type: string }) => sent.push(message);
+    const indexEntry: FeedbackRequestIndexEntry = {
+      requestId: 'request-1',
+      urn: 'nimbalyst://feedback-request/request-1',
+      orgId: 'org-1',
+      title: 'Review the plan',
+      author: { kind: 'user', onBehalfOfUserId: 'user-1' },
+      recipients: [],
+      lifecycle: { status: 'open', changedAt: 1 },
+      progress: {
+        answeredAskCount: 0,
+        totalAssignedAskCount: 0,
+        answeredRecipientCount: 0,
+        totalRecipientCount: 0,
+        quorumReached: false,
+      },
+      subjects: [],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    await (provider as any).handleTeamSyncResponse({
+      type: 'teamSyncResponse',
+      team: { metadata: null, members: [], documents: [], folders: [] },
+    });
+    await (provider as any).handleMessage({
+      data: JSON.stringify({ type: 'feedbackIndexSyncResponse', entries: [indexEntry] }),
+    });
+    await (provider as any).handleMessage({
+      data: JSON.stringify({ type: 'feedbackIndexBroadcast', entry: indexEntry }),
+    });
+
+    expect(sent.map((message) => message.type)).toContain('feedbackIndexSync');
+    expect(onFeedbackIndexLoaded).toHaveBeenCalledWith([indexEntry]);
+    expect(onFeedbackIndexChanged).toHaveBeenCalledWith(indexEntry);
     provider.destroy();
   });
 });

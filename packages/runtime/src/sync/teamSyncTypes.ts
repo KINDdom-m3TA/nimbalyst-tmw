@@ -9,6 +9,7 @@
 
 import type {
   ConversationDescriptor,
+  FeedbackRequestIndexEntry,
   MemberInfo as ProtocolMemberInfo,
   OrgSettings,
   TeamState as ProtocolTeamState,
@@ -33,6 +34,8 @@ export type {
   TeamDocumentCommentNotifyMessage,
   TeamDocumentCommentNotifyAckMessage,
   TeamErrorMessage,
+  FeedbackIndexSyncResponseMessage,
+  FeedbackIndexBroadcastMessage,
 } from '@nimbalyst/collab-protocol';
 
 /** Re-export wire types under client-side names. */
@@ -90,6 +93,12 @@ export interface TeamSyncConfig {
   onConversationDescriptorUpdated?: (
     descriptor: ConversationDescriptor,
   ) => void;
+
+  /** Called with the full participant-filtered feedback index snapshot. */
+  onFeedbackIndexLoaded?: (entries: FeedbackRequestIndexEntry[]) => void;
+
+  /** Called when one participant-filtered feedback index entry changes. */
+  onFeedbackIndexChanged?: (entry: FeedbackRequestIndexEntry) => void;
 
   /** Called when a member is added */
   onMemberAdded?: (member: MemberInfo) => void;

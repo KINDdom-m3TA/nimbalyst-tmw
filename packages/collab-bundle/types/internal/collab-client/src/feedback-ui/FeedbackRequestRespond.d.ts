@@ -28,7 +28,7 @@ import React from 'react';
 import type { FeedbackAnswer } from '@nimbalyst/collab-protocol';
 import type { FeedbackRequestServiceState } from '../feedback/index';
 import type { FeedbackOptionPreviewRenderer } from './FeedbackRespondOptionCards';
-import { type FeedbackSubjectOpener } from './FeedbackRespondSubjects';
+import { type FeedbackArtifactActionResolver, type FeedbackSubjectOpener } from './FeedbackArtifactSubjects';
 export interface FeedbackRespondSubmitResult {
     success: boolean;
     error?: string;
@@ -57,6 +57,8 @@ export interface FeedbackRequestRespondProps {
      * text.
      */
     onOpenSubject?: FeedbackSubjectOpener;
+    /** Resolves each artifact before an open affordance is rendered. */
+    resolveArtifactAction?: FeedbackArtifactActionResolver;
     /** Overridden in tests; deadline copy is the only thing that reads it. */
     now?: number;
 }

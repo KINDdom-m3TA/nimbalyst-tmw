@@ -78,6 +78,7 @@ vi.mock('../../services/TeamService', () => ({
 vi.mock('../../services/jwtOrg', () => ({
   getOrgIdFromJwt: vi.fn(),
   getJwtExp: vi.fn(() => Date.now() + 60_000),
+  getSubFromJwt: vi.fn(() => 'team-member-1'),
 }));
 
 vi.mock('../../utils/store', () => ({
@@ -116,6 +117,7 @@ import { getOrgScopedJwt } from '../../services/TeamService';
 import { getPersonalSessionJwt, refreshPersonalSessionDetailed } from '../../services/StytchAuthService';
 import { getJwtExp } from '../../services/jwtOrg';
 
+// @vitest-environment node
 /**
  * This handler used to ignore the refresh result entirely and hand back
  * whatever JWT happened to be cached -- including an expired one, after either
@@ -238,7 +240,10 @@ describe('document-sync:open performs no client-side key work (NIM-2036)', () =>
       { workspacePath: '/workspace/one' },
     );
 
-    expect(result).toEqual(expect.objectContaining({ success: true }));
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      config: expect.objectContaining({ userId: 'team-member-1' }),
+    }));
   });
 });
 

@@ -26,6 +26,7 @@ import type {
   FeedbackAskArtifact,
   StructuredInputSingleSelectOption,
 } from '@nimbalyst/collab-protocol';
+import type { FeedbackArtifactActionResolver } from './FeedbackArtifactSubjects';
 
 /**
  * Returning nullish is a supported answer, not a failure: "I have a renderer,
@@ -53,6 +54,7 @@ export interface FeedbackRespondOptionCardsProps {
    * expand button over a placeholder is a promise the card cannot keep.
    */
   onExpand?: (artifact: FeedbackAskArtifact) => void;
+  resolveAction?: FeedbackArtifactActionResolver;
 }
 
 const OptionRadio: React.FC<{ selected: boolean }> = ({ selected }) => (
@@ -103,6 +105,7 @@ export const FeedbackRespondOptionCards: React.FC<FeedbackRespondOptionCardsProp
   disabled = false,
   renderPreview,
   onExpand,
+  resolveAction,
 }) => (
   <div
     data-testid="feedback-respond-option-cards"
@@ -112,6 +115,10 @@ export const FeedbackRespondOptionCards: React.FC<FeedbackRespondOptionCardsProp
       const selected = option.id === selectedId;
       const artifact = artifacts?.find((entry) => entry.entryId === option.id);
       const preview = renderPreview?.(option, index, artifact);
+      const open = artifact
+        ? resolveAction?.(artifact).open
+          ?? (onExpand ? () => onExpand(artifact) : undefined)
+        : undefined;
       return (
         <div
           key={option.id}
@@ -132,13 +139,13 @@ export const FeedbackRespondOptionCards: React.FC<FeedbackRespondOptionCardsProp
                 artifactLabel={artifact?.label}
               />
             )}
-            {onExpand && artifact && (
+            {open && artifact && (
               <button
                 type="button"
                 data-testid="feedback-respond-option-expand"
                 aria-label={`Open ${artifact.label}`}
-                onClick={() => onExpand(artifact)}
-                className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded border border-nim bg-nim-secondary text-nim-muted cursor-pointer hover:text-nim"
+                onClick={open}
+                className="feedback-respond-option-expand absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded border border-nim bg-nim-secondary text-nim-muted cursor-pointer hover:text-nim"
               >
                 <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
                   <path

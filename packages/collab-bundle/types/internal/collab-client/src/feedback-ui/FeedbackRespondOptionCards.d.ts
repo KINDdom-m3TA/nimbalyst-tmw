@@ -22,6 +22,7 @@
  */
 import React from 'react';
 import type { FeedbackAskArtifact, StructuredInputSingleSelectOption } from '@nimbalyst/collab-protocol';
+import type { FeedbackArtifactActionResolver } from './FeedbackArtifactSubjects';
 /**
  * Returning nullish is a supported answer, not a failure: "I have a renderer,
  * and this particular artifact has nothing worth showing." The card then falls
@@ -43,6 +44,7 @@ export interface FeedbackRespondOptionCardsProps {
      * expand button over a placeholder is a promise the card cannot keep.
      */
     onExpand?: (artifact: FeedbackAskArtifact) => void;
+    resolveAction?: FeedbackArtifactActionResolver;
 }
 /**
  * The fallback, and it covers more than "no artifact". An artifact whose kind

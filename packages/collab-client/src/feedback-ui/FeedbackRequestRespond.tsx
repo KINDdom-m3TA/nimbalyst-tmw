@@ -43,9 +43,10 @@ import type { FeedbackRequestServiceState } from '@nimbalyst/collab-client/feedb
 import { FeedbackRespondAskField } from './FeedbackRespondAskField';
 import type { FeedbackOptionPreviewRenderer } from './FeedbackRespondOptionCards';
 import {
-  FeedbackRespondSubjects,
+  FeedbackArtifactSubjects,
+  type FeedbackArtifactActionResolver,
   type FeedbackSubjectOpener,
-} from './FeedbackRespondSubjects';
+} from './FeedbackArtifactSubjects';
 import {
   FEEDBACK_RESPOND_BLOCKED_MESSAGES,
   feedbackRespondAsks,
@@ -94,6 +95,8 @@ export interface FeedbackRequestRespondProps {
    * text.
    */
   onOpenSubject?: FeedbackSubjectOpener;
+  /** Resolves each artifact before an open affordance is rendered. */
+  resolveArtifactAction?: FeedbackArtifactActionResolver;
   /** Overridden in tests; deadline copy is the only thing that reads it. */
   now?: number;
 }
@@ -135,6 +138,7 @@ export const FeedbackRequestRespond: React.FC<FeedbackRequestRespondProps> = ({
   discussion,
   renderOptionPreview,
   onOpenSubject,
+  resolveArtifactAction,
   now,
 }) => {
   const request = state.request;
@@ -272,7 +276,11 @@ export const FeedbackRequestRespond: React.FC<FeedbackRequestRespondProps> = ({
         {/* Above the asks, because what the request is about is context for
             every question below it -- and because an observer with nothing
             assigned still needs it to follow the discussion. */}
-        <FeedbackRespondSubjects subjects={request.subjects} onOpen={onOpenSubject} />
+        <FeedbackArtifactSubjects
+          subjects={request.subjects}
+          onOpen={onOpenSubject}
+          resolveAction={resolveArtifactAction}
+        />
 
         {asks.map((ask, index) => (
           <WidgetBlock
@@ -292,6 +300,7 @@ export const FeedbackRequestRespond: React.FC<FeedbackRequestRespondProps> = ({
               // A bound artifact opens exactly the way a subject does; there is
               // no second mechanism, and no host has to supply two callbacks.
               onExpandArtifact={onOpenSubject}
+              resolveArtifactAction={resolveArtifactAction}
               onChange={(answer) => handleAnswer(ask.id, answer)}
             />
           </WidgetBlock>

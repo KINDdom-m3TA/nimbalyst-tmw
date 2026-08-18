@@ -16,7 +16,7 @@ import { logger } from '../utils/logger';
 import { getCollabSyncWsUrl, getCollabSyncHttpUrl } from '../utils/collabSyncUrl';
 import { isAuthenticated, getStytchUserId, getUserEmail, getAuthState, getPersonalUserId, getPersonalSessionJwt, refreshPersonalSessionDetailed } from '../services/StytchAuthService';
 import { findTeamForWorkspace, getOrgScopedJwt } from '../services/TeamService';
-import { getOrgIdFromJwt, getJwtExp } from '../services/jwtOrg';
+import { getOrgIdFromJwt, getJwtExp, getSubFromJwt } from '../services/jwtOrg';
 import { getWorkspaceState, updateWorkspaceState } from '../utils/store';
 import { createSingleFlight } from '../utils/asyncCache';
 import { getDialogDefaultPath, rememberDialogSelection } from '../utils/dialogPaths';
@@ -997,16 +997,16 @@ export function registerDocumentSyncHandlers(): void {
       return { success: false, error: 'Not authenticated. Sign in first.' };
     }
 
-    const userId = getStytchUserId();
-    if (!userId) {
-      return { success: false, error: 'No user ID available.' };
-    }
-
     const team = await findTeamForWorkspace(payload.workspacePath);
     if (!team) {
       return { success: false, error: 'No team found for this workspace.' };
     }
     const orgId = team.orgId;
+    const teamJwt = await getOrgScopedJwt(orgId);
+    const userId = getSubFromJwt(teamJwt);
+    if (!userId) {
+      return { success: false, error: 'No team member ID available.' };
+    }
 
     const serverUrl = getCollabSyncWsUrl();
 

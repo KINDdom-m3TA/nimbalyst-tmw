@@ -183,7 +183,7 @@ describe('FeedbackRequestRespond', () => {
       onOpenSubject,
     });
 
-    const row = screen.getByTestId('feedback-respond-subject');
+    const row = screen.getByTestId('feedback-artifact-subject');
     expect(row.textContent).toContain('Option A · Split panel');
     expect(row.textContent).not.toContain('doc-8f3a-not-a-title');
 
@@ -203,7 +203,7 @@ describe('FeedbackRequestRespond', () => {
 
     // Readable but inert, rather than hidden: knowing what you are being asked
     // about does not depend on being able to open it.
-    expect(screen.getByTestId('feedback-respond-subject').tagName).not.toBe('BUTTON');
+    expect(screen.getByTestId('feedback-artifact-subject').tagName).not.toBe('BUTTON');
   });
 
   it('falls back to the titled card when a renderer has nothing to show', () => {

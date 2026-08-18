@@ -3,21 +3,10 @@ import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import { useAtomValue, useStore } from 'jotai';
 
 import { settingAtom } from '../../../store/atoms/settingAtomFamily';
-import {
-  feedbackRequestStateForTargetAtomFamily,
-  feedbackRequestTargetKey,
-} from '../../../store/atoms/feedbackRequests';
-import type { FeedbackArtifact } from '@nimbalyst/collab-protocol';
-import type { FeedbackRequestCommentIpcRequest } from '../../../../shared/feedbackRequest';
 import { CommentThread } from '../../Comments/CommentThread';
 import { createConversationCommentAdapter } from '../../Comments/ConversationCommentAdapter';
 import type { CommentCapabilities } from '../../Comments/commentTypes';
-import { FeedbackRequestRespond } from '../../FeedbackRequest/FeedbackRequestRespond';
-import { createFeedbackRespondHost } from '../../FeedbackRequest/createFeedbackRespondHost';
-import { createFeedbackDiscussionAdapter } from '../../FeedbackRequest/feedbackDiscussionAdapter';
-import { startFeedbackRequestSync } from '../../FeedbackRequest/createFeedbackResultsHost';
-import { openSharedDocumentInTab } from '../../../utils/openSharedDocumentInTab';
-import { renderFeedbackOptionPreview } from '../../FeedbackRequest/FeedbackOptionArtifactPreview';
+import { FeedbackRequestSurface } from '../../FeedbackRequest/FeedbackRequestSurface';
 import { openActionLabel } from './inboxViewModel';
 import type { InboxRowView, InboxSubscriptionState } from './inboxTypes';
 
@@ -240,101 +229,20 @@ function InboxFeedbackRequest({
   row: InboxRowView;
   requestId: string;
 }) {
-  const { orgId } = row;
-  const target = useMemo(
-    () => ({ workspacePath, orgId, requestId }),
-    [workspacePath, orgId, requestId],
-  );
-  const targetStore = useStore();
-  const host = useMemo(() => createFeedbackRespondHost({ target }), [target]);
-  const state = useAtomValue(
-    feedbackRequestStateForTargetAtomFamily(feedbackRequestTargetKey(target)),
-  );
-  const viewerUserId = state.viewerUserId || row.viewerUserId;
-  const viewerActor = useMemo(() => ({
-    kind: 'user' as const,
-    userId: viewerUserId,
-    onBehalfOfUserId: viewerUserId,
-  }), [viewerUserId]);
-  const capabilities = useMemo<CommentCapabilities>(() => ({
-    read: true,
-    comment: row.canReply && state.request?.lifecycle.status === 'open',
-    react: false,
-    editOwn: false,
-    deleteOwn: false,
-    moderate: false,
-    manageRoom: false,
-  }), [row.canReply, state.request?.lifecycle.status]);
-  const adapter = useMemo(
-    () => createFeedbackDiscussionAdapter({
-      target,
-      viewerActor,
-      capabilities,
-      store: targetStore,
-      post: (input) => {
-        const request: FeedbackRequestCommentIpcRequest = {
-          target,
-          clientMutationId: input.clientMutationId,
-          body: input.body,
-          replyToCommentId: input.replyToCommentId,
-        };
-        return window.electronAPI.invoke('feedback-request:comment', request);
-      },
-    }),
-    [capabilities, target, targetStore, viewerActor],
-  );
-  const directory = useMemo(() => ({
-    people: [{
-      userId: viewerUserId,
-      displayName: 'You',
-      handle: 'you',
-      avatarInitials: 'YO',
-    }],
-    agents: [],
-    displayNames: { [viewerUserId]: 'You' },
-  }), [viewerUserId]);
-  const density = useAtomValue(settingAtom('team.messages.density'));
-
-  React.useEffect(() => {
-    void startFeedbackRequestSync(target);
-  }, [target]);
-
-  // Only a published `document` is addressable from here. A subject of another
-  // kind is left inert rather than wired to a path this recipient may not have
-  // -- the row still says what it is, which is the point.
-  const handleOpenSubject = React.useCallback((subject: FeedbackArtifact) => {
-    if (subject.ref.kind !== 'document') return;
-    openSharedDocumentInTab(subject.ref, 'feedback_request');
-  }, []);
-
   return (
     <div className="inbox-feedback-request min-h-0 flex-1 overflow-y-auto p-3">
-      <FeedbackRequestRespond
-        state={state}
-        host={host}
-        onOpenSubject={handleOpenSubject}
-        renderOptionPreview={renderFeedbackOptionPreview}
-        discussion={(
-          <div className="feedback-request-discussion-thread h-[320px] min-h-[240px]">
-            <CommentThread
-              adapter={adapter}
-              capabilities={capabilities}
-              context={{
-                conversationId: requestId,
-                conversationTitle: row.sourceTitle,
-                agentPostingEnabled: false,
-                attachedAgentSessionIds: [],
-                surfaceLabel: row.sourceTitle ?? 'Feedback request',
-              }}
-              directory={directory}
-              orgId={orgId}
-              viewerUserId={viewerUserId}
-              viewerActor={viewerActor}
-              emptyLabel="No discussion yet."
-              density={density}
-            />
-          </div>
-        )}
+      {/* Pinned to the recipient card: a delivery is an ask addressed to this
+          reader, and it stays that shape after they answer. The shared area's
+          feedback list is where a request is met as a resource and flips to
+          tallies once nothing is owed. */}
+      <FeedbackRequestSurface
+        workspacePath={workspacePath}
+        orgId={row.orgId}
+        requestId={requestId}
+        viewerUserId={row.viewerUserId}
+        title={row.sourceTitle}
+        canComment={row.canReply}
+        view="respond"
       />
     </div>
   );

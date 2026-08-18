@@ -434,6 +434,12 @@ export class TeamSyncProvider {
         case 'conversationDescriptorUpdated':
           this.config.onConversationDescriptorUpdated?.(message.descriptor);
           break;
+        case 'feedbackIndexSyncResponse':
+          this.config.onFeedbackIndexLoaded?.(message.entries);
+          break;
+        case 'feedbackIndexBroadcast':
+          this.config.onFeedbackIndexChanged?.(message.entry);
+          break;
         case 'memberAdded':
           this.handleMemberAdded(message);
           break;
@@ -549,6 +555,7 @@ export class TeamSyncProvider {
     // `folderIndexSync` path too.
     this.send({ type: 'docIndexSync' });
     this.send({ type: 'folderIndexSync' });
+    this.send({ type: 'feedbackIndexSync' });
 
   }
 

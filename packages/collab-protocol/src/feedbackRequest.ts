@@ -275,6 +275,29 @@ export interface FeedbackRequestProgress {
   quorumReached: boolean;
 }
 
+/**
+ * Small org-index projection used to enumerate feedback requests without
+ * opening every request room. Rich request content deliberately stays in the
+ * request Durable Object and is fetched only when a participant opens it.
+ */
+export interface FeedbackRequestIndexEntry {
+  requestId: string;
+  urn: FeedbackRequestUrn;
+  orgId: string;
+  /** Stable list title derived from the request's first ask or subject. */
+  title: string;
+  author: Actor;
+  recipients: FeedbackRequestRecipient[];
+  lifecycle: FeedbackRequestLifecycle;
+  progress: FeedbackRequestProgress;
+  /** Frozen resource labels are preserved so the index is useful offline. */
+  subjects: FeedbackArtifact[];
+  createdAt: number;
+  updatedAt: number;
+  /** Terminal lifecycle timestamp; omitted while the request is open. */
+  closedAt?: number;
+}
+
 export type FeedbackResponseValidationErrorCode =
   | "requestMismatch"
   | "requestNotOpen"

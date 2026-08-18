@@ -9,6 +9,7 @@
 import React from 'react';
 import { type FeedbackAnswer, type FeedbackAsk, type FeedbackAskArtifact } from '@nimbalyst/collab-protocol';
 import { type FeedbackOptionPreviewRenderer } from './FeedbackRespondOptionCards';
+import type { FeedbackArtifactActionResolver } from './FeedbackArtifactSubjects';
 export interface FeedbackRespondAskFieldProps {
     ask: FeedbackAsk;
     answer?: FeedbackAnswer;
@@ -17,5 +18,6 @@ export interface FeedbackRespondAskFieldProps {
     renderOptionPreview?: FeedbackOptionPreviewRenderer;
     /** Opens a bound artifact; absent means no expand affordance is offered. */
     onExpandArtifact?: (artifact: FeedbackAskArtifact) => void;
+    resolveArtifactAction?: FeedbackArtifactActionResolver;
 }
 export declare const FeedbackRespondAskField: React.FC<FeedbackRespondAskFieldProps>;

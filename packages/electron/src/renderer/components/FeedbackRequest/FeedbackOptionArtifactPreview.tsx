@@ -27,7 +27,6 @@ import {
   ScaledPreviewFrame,
   useLivePreviewSlot,
 } from '@nimbalyst/collab-client/feedback-ui';
-import type { StructuredInputSingleSelectOption } from '@nimbalyst/collab-protocol';
 
 import { sharedDocumentsAtom } from '../../store/atoms/collabDocuments';
 import { activeWorkspacePathAtom } from '../../store/atoms/openProjects';
@@ -48,7 +47,7 @@ const CollaborativeEmbedEditor = React.lazy(async () => ({
   default: (await import('../EmbedFrame/CollaborativeEmbedEditor')).CollaborativeEmbedEditor,
 }));
 
-const FeedbackOptionArtifactPreview: React.FC<{
+export const FeedbackOptionArtifactPreview: React.FC<{
   artifact: FeedbackAskArtifact;
   optionLabel: string;
 }> = ({
@@ -115,22 +114,11 @@ const FeedbackOptionArtifactPreview: React.FC<{
   );
 };
 
-/**
- * The `renderOptionPreview` the respond surface takes. Returning `undefined`
- * for an unbound option is what keeps the placeholder path alive for requests
- * that never bound anything.
+/*
+ * The `renderOptionPreview` a respond surface hands down lives in
+ * `lazyFeedbackOptionPreview.tsx`, one module boundary out: the resolution
+ * imports above are synchronous and reach the custom-editor registry, and a
+ * surface that shows a request should not carry that tree for options that
+ * usually bind no artifact at all. That module keeps the "no artifact means no
+ * preview" contract.
  */
-export function renderFeedbackOptionPreview(
-  option: StructuredInputSingleSelectOption,
-  _index: number,
-  artifact?: FeedbackAskArtifact,
-): React.ReactNode {
-  if (!artifact) return undefined;
-  return (
-    <FeedbackOptionArtifactPreview
-      key={artifact.ref.sourceId}
-      artifact={artifact}
-      optionLabel={option.label}
-    />
-  );
-}

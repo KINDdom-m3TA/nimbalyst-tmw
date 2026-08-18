@@ -24,6 +24,7 @@ import {
   FeedbackRespondOptionCards,
   type FeedbackOptionPreviewRenderer,
 } from './FeedbackRespondOptionCards';
+import type { FeedbackArtifactActionResolver } from './FeedbackArtifactSubjects';
 import { OTHER_OPTION_ID } from '@nimbalyst/collab-client/feedback';
 
 export interface FeedbackRespondAskFieldProps {
@@ -34,6 +35,7 @@ export interface FeedbackRespondAskFieldProps {
   renderOptionPreview?: FeedbackOptionPreviewRenderer;
   /** Opens a bound artifact; absent means no expand affordance is offered. */
   onExpandArtifact?: (artifact: FeedbackAskArtifact) => void;
+  resolveArtifactAction?: FeedbackArtifactActionResolver;
 }
 
 /** An opener for one reorder row, so ranked artifacts are reachable too. */
@@ -46,7 +48,7 @@ const ReorderArtifactButton: React.FC<{
     data-testid="feedback-respond-reorder-open"
     aria-label={`Open ${artifact.label}`}
     onClick={() => onExpand(artifact)}
-    className="shrink-0 rounded border border-nim bg-nim px-1.5 py-0.5 text-[0.6875rem] text-nim-muted cursor-pointer hover:text-nim"
+    className="feedback-respond-reorder-artifact-button shrink-0 rounded border border-nim bg-nim px-1.5 py-0.5 text-[0.6875rem] text-nim-muted cursor-pointer hover:text-nim"
   >
     Open
   </button>
@@ -59,6 +61,7 @@ export const FeedbackRespondAskField: React.FC<FeedbackRespondAskFieldProps> = (
   disabled = false,
   renderOptionPreview,
   onExpandArtifact,
+  resolveArtifactAction,
 }) => {
   const artifacts = 'artifacts' in ask ? ask.artifacts : undefined;
   switch (ask.type) {
@@ -75,6 +78,7 @@ export const FeedbackRespondAskField: React.FC<FeedbackRespondAskFieldProps> = (
             disabled={disabled}
             renderPreview={renderOptionPreview}
             onExpand={onExpandArtifact}
+            resolveAction={resolveArtifactAction}
             onSelect={(optionId) =>
               onChange({ type: 'singleSelect', selectedId: optionId })}
           />
@@ -144,11 +148,14 @@ export const FeedbackRespondAskField: React.FC<FeedbackRespondAskFieldProps> = (
             row: 'feedback-respond-reorder-row',
             remove: 'feedback-respond-reorder-remove',
           }}
-          renderTrailing={onExpandArtifact
+          renderTrailing={onExpandArtifact || resolveArtifactAction
             ? (itemId) => {
                 const artifact = artifacts?.find((entry) => entry.entryId === itemId);
-                return artifact
-                  ? <ReorderArtifactButton artifact={artifact} onExpand={onExpandArtifact} />
+                if (!artifact) return null;
+                const open = resolveArtifactAction?.(artifact).open
+                  ?? (onExpandArtifact ? () => onExpandArtifact(artifact) : undefined);
+                return open
+                  ? <ReorderArtifactButton artifact={artifact} onExpand={() => open()} />
                   : null;
               }
             : undefined}
