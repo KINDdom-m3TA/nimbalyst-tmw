@@ -223,6 +223,214 @@ async function appendMockupComment(page: Page, marker: string): Promise<void> {
     .toContain(marker);
 }
 
+interface ExcalidrawClipboardElement {
+  id?: string;
+  type?: string;
+  text?: string;
+  x?: number;
+  y?: number;
+}
+
+function excalidrawTextElement(
+  id: string,
+  text: string,
+  x: number,
+  y: number,
+  seed: number,
+): Record<string, unknown> {
+  return {
+    id,
+    type: 'text',
+    x,
+    y,
+    width: 260,
+    height: 25,
+    angle: 0,
+    strokeColor: '#1e1e1e',
+    backgroundColor: 'transparent',
+    fillStyle: 'solid',
+    strokeWidth: 1,
+    strokeStyle: 'solid',
+    roughness: 1,
+    opacity: 100,
+    groupIds: [],
+    frameId: null,
+    roundness: null,
+    seed,
+    version: 1,
+    versionNonce: seed + 1000,
+    isDeleted: false,
+    boundElements: null,
+    updated: 1,
+    link: null,
+    locked: false,
+    text,
+    fontSize: 20,
+    fontFamily: 1,
+    textAlign: 'left',
+    verticalAlign: 'top',
+    containerId: null,
+    originalText: text,
+    autoResize: true,
+    lineHeight: 1.25,
+  };
+}
+
+function visibleExcalidrawCanvas(page: Page) {
+  return page
+    .locator('.excalidraw-editor')
+    .filter({ visible: true })
+    .locator('canvas.excalidraw__canvas.interactive');
+}
+
+/**
+ * Read the selected scene through Excalidraw's own clipboard command.
+ *
+ * This is intentionally host-neutral UI, not
+ * `__testHelpers.getExtensionEditorAPI`: that helper exists only in Electron.
+ * The browser and desktop both serialize the selected scene as the public
+ * `excalidraw/clipboard` payload.
+ */
+async function readExcalidrawElements(page: Page): Promise<ExcalidrawClipboardElement[]> {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.evaluate(() => navigator.clipboard.writeText(''));
+  // Select the rendered scene with Excalidraw's context-menu command. The
+  // browser host accepts Cmd+A but leaves selectedElementIds unchanged, and a
+  // marquee can retain the locally selected element when a remote selection is
+  // also painted. The menu is deterministic across both hosts and still uses
+  // public UI rather than a test-only API.
+  const canvas = visibleExcalidrawCanvas(page);
+  const canvasBox = await canvas.boundingBox();
+  if (!canvasBox) throw new Error('Visible Excalidraw canvas has no bounds');
+  await page.mouse.click(
+    canvasBox.x + canvasBox.width * 0.5,
+    canvasBox.y + canvasBox.height * 0.3,
+    { button: 'right' },
+  );
+  await page.getByText('Select all', { exact: true }).last().click();
+  const editor = page.locator('.excalidraw-container').filter({ visible: true });
+  await editor.focus();
+  await expect.poll(
+    () => editor.evaluate((element) => element === document.activeElement),
+    { message: 'Excalidraw owns keyboard focus' },
+  ).toBe(true);
+  // Selection state is committed asynchronously in the browser bundle.
+  await page.waitForTimeout(100);
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+c' : 'Control+c');
+  await expect.poll(
+    () => page.evaluate(() => navigator.clipboard.readText()),
+    { timeout: 10_000, message: 'Excalidraw scene copied to the clipboard' },
+  ).not.toBe('');
+  const serialized = await page.evaluate(() => navigator.clipboard.readText());
+  // Excalidraw omits elements currently selected by another collaborator from
+  // Select all. Clear the temporary selection and allow awareness to publish
+  // that clear before another host performs its read, otherwise the assertion
+  // itself can hide the elements it is trying to observe.
+  await editor.focus();
+  await page.keyboard.press('v');
+  await page.mouse.click(
+    canvasBox.x + canvasBox.width * 0.5,
+    canvasBox.y + canvasBox.height * 0.3,
+  );
+  await page.waitForTimeout(600);
+  const payload = JSON.parse(serialized) as {
+    type?: string;
+    elements?: ExcalidrawClipboardElement[];
+  };
+  if (payload.type !== 'excalidraw/clipboard' || !Array.isArray(payload.elements)) {
+    throw new Error(`Unexpected Excalidraw clipboard payload: ${serialized.slice(0, 120)}`);
+  }
+  return payload.elements;
+}
+
+async function readExcalidrawLabels(page: Page): Promise<string[]> {
+  return (await readExcalidrawElements(page))
+    .filter((element) => element.type === 'text')
+    .map((element) => String(element.text ?? '').trim())
+    .filter(Boolean)
+    .sort();
+}
+
+async function editExcalidrawText(
+  page: Page,
+  role: 'desktop' | 'browser',
+  marker: string,
+): Promise<void> {
+  await expect(page.locator('.excalidraw-editor').filter({ visible: true }))
+    .toHaveAttribute('data-collab-binding-ready', 'true', { timeout: 30_000 });
+  const canvas = visibleExcalidrawCanvas(page);
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error('Visible Excalidraw canvas has no bounds');
+  await page.locator('.excalidraw-container').filter({ visible: true }).focus();
+  await page.keyboard.press('t');
+  await page.mouse.click(
+    box.x + (role === 'desktop' ? box.width * 0.35 : box.width * 0.65),
+    box.y + box.height * 0.7,
+  );
+  await page.keyboard.insertText(marker);
+  await expect(page.locator('textarea.excalidraw-wysiwyg')).toHaveValue(marker);
+  await page.keyboard.press('Escape');
+  await page.locator('.excalidraw-container').filter({ visible: true }).focus();
+  await page.keyboard.press('v');
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.3);
+  await page.waitForTimeout(600);
+}
+
+async function excalidrawFingerprint(page: Page): Promise<unknown> {
+  return (await readExcalidrawElements(page))
+    .map((element) => ({
+      id: element.id,
+      text: element.text,
+      type: element.type,
+      x: element.x,
+      y: element.y,
+    }))
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+}
+
+async function pollExcalidrawPresence(
+  page: Page,
+  timeoutMs = 30_000,
+): Promise<PresenceSnapshot> {
+  const deadline = Date.now() + timeoutMs;
+  let labels: string[] = [];
+  while (Date.now() < deadline) {
+    const initials = await page
+      .locator('.UserList__collaborator--avatar-only')
+      .filter({ visible: true })
+      .allTextContents();
+    labels = initials.map((initial) => {
+      if (initial.trim() === 'B') return BROWSER_DISPLAY_NAME;
+      if (initial.trim() === 'P') return DESKTOP_DISPLAY_NAME;
+      return initial.trim();
+    }).filter(Boolean);
+    // Excalidraw replaces direct avatars with a public "+N" overflow menu
+    // when the editor is narrow. Read the same collaborator names from that
+    // menu so the assertion works at both the desktop and browser widths.
+    if (labels.length === 0) {
+      const overflow = page.locator('.UserList__more').filter({ visible: true });
+      if (await overflow.isVisible()) {
+        await overflow.click();
+        labels = (await page
+          .locator('.UserList__collaborator-name')
+          .filter({ visible: true })
+          .allTextContents())
+          .map((name) => name.trim())
+          .filter(Boolean);
+        await page.keyboard.press('Escape');
+      }
+    }
+    if (labels.length > 0) break;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return {
+    overlays: labels.length,
+    cells: 0,
+    editing: labels.length,
+    labels,
+  };
+}
+
 async function waitForContent(
   type: CrossHostTypeDescriptor,
   page: Page,
@@ -300,7 +508,43 @@ const crossHostTypes: CrossHostTypeDescriptor[] = [
       + '`onRemoteAwareness` to its binding, so no remote collaborator is painted in '
       + 'either host. Nothing to assert until the extension renders presence.',
   },
-];
+  {
+    documentType: 'excalidraw',
+    displayName: 'Excalidraw',
+    suffix: '.excalidraw',
+    editorSelector: '.excalidraw-editor',
+    seedContent: JSON.stringify({
+      type: 'excalidraw',
+      version: 2,
+      source: 'https://excalidraw.com',
+      elements: [
+        excalidrawTextElement('seed-alpha', 'Seeded alpha shape', 120, 120, 1001),
+        excalidrawTextElement('seed-bravo', 'Seeded bravo shape', 420, 120, 1002),
+      ],
+      appState: { viewBackgroundColor: '#ffffff' },
+      files: {},
+    }, null, 2),
+    seedMarkers: ['Seeded alpha shape', 'Seeded bravo shape'],
+    readContent: readExcalidrawLabels,
+    applyEdit: editExcalidrawText,
+    fingerprint: excalidrawFingerprint,
+    presence: {
+      async beginEditing(page) {
+        const canvas = visibleExcalidrawCanvas(page);
+        const box = await canvas.boundingBox();
+        if (!box) throw new Error('Visible Excalidraw canvas has no bounds');
+        await page.keyboard.press('Escape');
+        await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.82);
+        await page.mouse.down();
+        return () => page.mouse.up();
+      },
+      snapshot: pollExcalidrawPresence,
+    },
+  },
+].filter((type) => (
+  !process.env.CROSS_HOST_DOCUMENT_TYPE
+  || type.documentType === process.env.CROSS_HOST_DOCUMENT_TYPE
+));
 
 let harness: TwoClientCollabHarness;
 let webConsole: WebConsoleClient;
@@ -403,10 +647,16 @@ test('extension editors converge across an Electron and a browser host', async (
       const browserMarker = `Browser ${runSuffix}`;
       await type.applyEdit(desktop, 'desktop', desktopMarker);
       await type.applyEdit(browser, 'browser', browserMarker);
-      const [desktopContent, browserContent] = await Promise.all([
-        waitForContent(type, desktop, [desktopMarker, browserMarker]),
-        waitForContent(type, browser, [desktopMarker, browserMarker]),
-      ]);
+      const desktopContent = await waitForContent(
+        type,
+        desktop,
+        [desktopMarker, browserMarker],
+      );
+      const browserContent = await waitForContent(
+        type,
+        browser,
+        [desktopMarker, browserMarker],
+      );
       // Structure first, so a failure names WHERE the two hosts differ rather
       // than only that a flat content list did.
       const [desktopShape, browserShape] = type.fingerprint
@@ -428,6 +678,32 @@ test('extension editors converge across an Electron and a browser host', async (
       if (type.presence) {
         const endBrowserEdit = await type.presence.beginEditing(browser, browserMarker);
         desktopSeen = await type.presence.snapshot(desktop);
+        if (type.documentType === 'excalidraw' && desktopSeen.labels.length === 0) {
+          console.log('[cross-host-debug] desktop Excalidraw presence state:', JSON.stringify(
+            await desktop.evaluate(() => {
+              const filePath = document.querySelector('.tab.active')?.getAttribute('title');
+              const api = filePath
+                ? (window as any).__testHelpers?.getExtensionEditorAPI?.(filePath)
+                : null;
+              const collaborators = api?.getAppState?.().collaborators;
+              return {
+                filePath,
+                collaboratorCount: collaborators?.size ?? null,
+                collaborators: collaborators
+                  ? [...collaborators].map(([id, value]: [string, any]) => ({
+                    id,
+                    username: value.username,
+                    pointer: value.pointer,
+                  }))
+                  : null,
+                visibleEditors: [...document.querySelectorAll('.excalidraw-editor')]
+                  .filter((element) => (element as HTMLElement).offsetParent !== null).length,
+                userLists: document.querySelectorAll('.UserList').length,
+                overflowMenus: document.querySelectorAll('.UserList__more').length,
+              };
+            }),
+          ));
+        }
         await endBrowserEdit();
 
         const endDesktopEdit = await type.presence.beginEditing(desktop, desktopMarker);

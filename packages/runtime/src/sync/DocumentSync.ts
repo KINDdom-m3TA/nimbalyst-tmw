@@ -129,6 +129,7 @@ export class DocumentSyncProvider {
   private awarenessStates: Map<string, AwarenessState> = new Map();
   private awarenessTimestamps: Map<string, number> = new Map();
   private awarenessListeners: Set<(states: Map<string, AwarenessState>) => void> = new Set();
+  private statusListeners: Set<(status: DocumentSyncStatus) => void> = new Set();
   private destroyed = false;
 
   // Throttled awareness state
@@ -477,6 +478,7 @@ export class DocumentSyncProvider {
     if (this.ownsYDoc) this.ydoc.destroy();
     this.awarenessListeners.clear();
     this.awarenessStates.clear();
+    this.statusListeners.clear();
   }
 
   // --------------------------------------------------------------------------
@@ -711,6 +713,19 @@ export class DocumentSyncProvider {
    */
   getAwarenessStates(): Map<string, AwarenessState> {
     return new Map(this.awarenessStates);
+  }
+
+  /**
+   * Subscribe to transport status changes. Returns an unsubscribe function.
+   *
+   * `DocumentSyncConfig.onStatusChange` is a single slot owned by whichever
+   * host constructed the provider. This is the multi-listener seam for things
+   * that attach to an already-built provider -- the extension awareness bridge
+   * needs it to re-announce presence when a reconnect completes.
+   */
+  onStatusChange(listener: (status: DocumentSyncStatus) => void): () => void {
+    this.statusListeners.add(listener);
+    return () => this.statusListeners.delete(listener);
   }
 
   /**
@@ -1256,6 +1271,7 @@ export class DocumentSyncProvider {
       });
     }
     this.config.onStatusChange?.(status);
+    for (const listener of this.statusListeners) listener(status);
   }
 
   /**
