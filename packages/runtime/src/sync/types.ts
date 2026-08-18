@@ -5,8 +5,30 @@
  * It's designed to be completely optional - the app works without it.
  */
 
+import type { PushRejectionCause, SkipReason } from '@nimbalyst/collab-protocol';
+
 import type { AgentMessage } from '../ai/server/types';
 import type { SyncedReadReceipt } from '../readReceipts/readReceipts';
+
+/** Caller-side knobs for {@link SyncProvider.requestMobilePush}. */
+export interface MobilePushOptions {
+  /**
+   * Explicit user-authorized attention request. Bypasses the server's presence
+   * suppression so the notification lands even when the user is at a desktop.
+   */
+  force?: boolean;
+  /** Short machine-readable cause, e.g. 'agent_error'. Recorded server-side. */
+  reason?: string;
+}
+
+/** The server's acknowledgement of a push request. */
+export interface MobilePushResult {
+  accepted: boolean;
+  attemptedCount: number;
+  deliveredCount: number;
+  skipped: Array<{ deviceId: string; reason: SkipReason }>;
+  rejection?: PushRejectionCause;
+}
 
 export interface SyncConfig {
   /** WebSocket server URL (e.g., ws://localhost:8787 or wss://sync.nimbalyst.com) */
@@ -283,10 +305,22 @@ export interface SyncProvider {
 
   /**
    * Request the sync server to send a push notification to mobile devices.
-   * Used when agent completes execution and user should be notified on mobile.
-   * The server will check device presence before sending (suppresses if mobile is active).
+   *
+   * The server decides who to notify: routine requests are suppressed when the
+   * user is demonstrably at a connected desktop, while `force` marks an explicit
+   * attention alert that bypasses that suppression (subject to a server-side
+   * rate limit). Do not gate a forced call site on local presence -- the whole
+   * point of `force` is that the server makes the call.
+   *
+   * Resolves with the server's acknowledgement, or with `rejection: 'no_ack'`
+   * if none arrives. Callers that don't care may ignore the result.
    */
-  requestMobilePush?(sessionId: string, title: string, body: string): Promise<void>;
+  requestMobilePush?(
+    sessionId: string,
+    title: string,
+    body: string,
+    options?: MobilePushOptions
+  ): Promise<MobilePushResult>;
 
   /** Get list of currently connected devices */
   getConnectedDevices?(): DeviceInfo[];

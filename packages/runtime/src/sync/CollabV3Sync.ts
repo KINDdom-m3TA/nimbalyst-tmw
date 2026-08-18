@@ -46,9 +46,18 @@ import type {
   SessionControlMessage,
   EncryptedAttachment,
   FileIndexData,
+  MobilePushOptions,
+  MobilePushResult,
 } from './types';
 import { filterSessionsForPersonalSync } from './types';
+import type { PushRejectionCause } from '@nimbalyst/collab-protocol';
 import type { SyncedReadReceipt } from '../readReceipts/readReceipts';
+
+/**
+ * How long to wait for the server's `mobilePushResult` before giving up. Older
+ * servers never send one, so this is also the ceiling on a no-op await.
+ */
+const MOBILE_PUSH_ACK_TIMEOUT_MS = 10_000;
 
 // ============================================================================
 // CollabV3 Protocol Types (matches server)
@@ -299,7 +308,16 @@ type ClientMessage =
   | { type: 'voiceToolRequest'; request: EncryptedVoiceToolRequest }
   | { type: 'voiceToolResponse'; response: EncryptedVoiceToolResponse }
   | { type: 'sessionControl'; message: { sessionId: string; messageType: string; payload?: Record<string, unknown>; timestamp: number; sentBy: 'desktop' | 'mobile' } }
-  | { type: 'requestMobilePush'; sessionId: string; title: string; body: string; requestingDeviceId?: string }
+  | {
+      type: 'requestMobilePush';
+      sessionId: string;
+      title: string;
+      body: string;
+      requestingDeviceId?: string;
+      requestId?: string;
+      force?: boolean;
+      reason?: string;
+    }
   | { type: 'settingsSync'; settings: EncryptedSettingsPayload }
   | { type: 'readReceipt'; receipt: EncryptedReadReceiptPayload }
   | { type: 'trackerPersonalState'; state: EncryptedTrackerPersonalStatePayload }
@@ -353,6 +371,7 @@ type ServerMessage =
   | { type: 'settingsSyncBroadcast'; settings: EncryptedSettingsPayload; fromConnectionId?: string }
   | { type: 'readReceiptBroadcast'; receipt: EncryptedReadReceiptPayload; fromConnectionId?: string }
   | { type: 'trackerPersonalStateBroadcast'; state: EncryptedTrackerPersonalStatePayload; fromConnectionId?: string }
+  | ({ type: 'mobilePushResult'; requestId: string; sessionId: string } & MobilePushResult)
   | { type: 'error'; code: string; message: string };
 
 // ============================================================================
@@ -1187,6 +1206,13 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
 
   // Settings sync listeners (for receiving synced settings from other devices)
   const settingsSyncListeners = new Set<(settings: SyncedSettings) => void>();
+
+  // In-flight mobile push requests, keyed by requestId so concurrent requests
+  // resolve to their own acknowledgements.
+  const pendingMobilePushes = new Map<string, {
+    resolve: (result: MobilePushResult) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
 
   // Read-receipt listeners (unread-indicator state arriving from other devices)
   const readReceiptListeners = new Set<(receipt: SyncedReadReceipt) => void>();
@@ -2322,6 +2348,21 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
             connectedDevices.delete(message.deviceId);
             notifyDeviceStatusChange();
             break;
+
+          case 'mobilePushResult': {
+            const pending = pendingMobilePushes.get(message.requestId);
+            if (!pending) break;
+            clearTimeout(pending.timer);
+            pendingMobilePushes.delete(message.requestId);
+            pending.resolve({
+              accepted: message.accepted,
+              attemptedCount: message.attemptedCount,
+              deliveredCount: message.deliveredCount,
+              skipped: message.skipped,
+              rejection: message.rejection,
+            });
+            break;
+          }
 
           case 'createSessionRequestBroadcast': {
             // Another device (mobile) requested session creation
@@ -4134,7 +4175,20 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
     },
 
     /** Request the sync server to send a push notification to mobile devices */
-    async requestMobilePush(sessionId: string, title: string, body: string): Promise<void> {
+    async requestMobilePush(
+      sessionId: string,
+      title: string,
+      body: string,
+      options?: MobilePushOptions
+    ): Promise<MobilePushResult> {
+      const failed = (rejection: PushRejectionCause): MobilePushResult => ({
+        accepted: false,
+        attemptedCount: 0,
+        deliveredCount: 0,
+        skipped: [],
+        rejection,
+      });
+
       // Ensure we're connected before sending the request
       if (!indexWs || !indexConnected) {
         console.log('[CollabV3] Not connected to index, attempting to reconnect before requesting mobile push...');
@@ -4142,37 +4196,62 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
           await connectToIndex();
         } catch (err) {
           console.error('[CollabV3] Failed to connect to index before requesting mobile push:', err);
-          return;
+          return failed('no_ack');
         }
       }
 
       // Double-check connection and WebSocket state after await
       if (!indexWs || !indexConnected) {
         console.error('[CollabV3] Cannot request mobile push - failed to establish connection');
-        return;
+        return failed('no_ack');
       }
 
       // Check actual WebSocket state
       if (indexWs.readyState !== WebSocket.OPEN) {
         console.error('[CollabV3] Cannot request mobile push - WebSocket not open, state:', indexWs.readyState);
-        return;
+        return failed('no_ack');
       }
 
       const deviceId = config.getDeviceInfo?.()?.deviceId ?? config.deviceInfo?.deviceId;
+      const requestId = `push-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       const msg: ClientMessage = {
         type: 'requestMobilePush',
         sessionId: sessionId,
         title,
         body,
         requestingDeviceId: deviceId,
+        requestId,
+        force: options?.force === true,
+        reason: options?.reason,
       };
       // console.log('[CollabV3] Requesting mobile push for session:', sessionId, 'deviceId:', deviceId, 'readyState:', indexWs.readyState);
+
+      const ack = new Promise<MobilePushResult>((resolve) => {
+        // A server that never answers must not leave the caller hanging -- and
+        // a silent timeout is itself the signal that something is wrong, which
+        // is exactly what this path used to lack.
+        const timer = setTimeout(() => {
+          pendingMobilePushes.delete(requestId);
+          console.warn('[CollabV3] No mobile push acknowledgement for request:', requestId);
+          resolve(failed('no_ack'));
+        }, MOBILE_PUSH_ACK_TIMEOUT_MS);
+        pendingMobilePushes.set(requestId, { resolve, timer });
+      });
+
       try {
         indexWs.send(JSON.stringify(msg));
         // console.log('[CollabV3] Mobile push message sent successfully');
       } catch (error) {
         console.error('[CollabV3] Failed to send mobile push message:', error);
+        const pending = pendingMobilePushes.get(requestId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          pendingMobilePushes.delete(requestId);
+        }
+        return failed('no_ack');
       }
+
+      return ack;
     },
 
     syncFileToIndex(file: FileIndexData): void {
