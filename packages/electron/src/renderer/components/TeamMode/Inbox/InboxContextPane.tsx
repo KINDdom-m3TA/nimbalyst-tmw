@@ -304,7 +304,7 @@ function InboxFeedbackRequest({
   // -- the row still says what it is, which is the point.
   const handleOpenSubject = React.useCallback((subject: FeedbackArtifact) => {
     if (subject.ref.kind !== 'document') return;
-    openSharedDocumentInTab(subject.ref.sourceId, 'feedback_request');
+    openSharedDocumentInTab(subject.ref, 'feedback_request');
   }, []);
 
   return (

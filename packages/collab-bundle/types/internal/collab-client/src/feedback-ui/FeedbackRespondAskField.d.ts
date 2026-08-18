@@ -7,7 +7,7 @@
  * exception -- see `FeedbackRespondOptionCards`.
  */
 import React from 'react';
-import { type FeedbackAnswer, type FeedbackAsk } from '@nimbalyst/collab-protocol';
+import { type FeedbackAnswer, type FeedbackAsk, type FeedbackAskArtifact } from '@nimbalyst/collab-protocol';
 import { type FeedbackOptionPreviewRenderer } from './FeedbackRespondOptionCards';
 export interface FeedbackRespondAskFieldProps {
     ask: FeedbackAsk;
@@ -15,5 +15,7 @@ export interface FeedbackRespondAskFieldProps {
     onChange: (answer: FeedbackAnswer) => void;
     disabled?: boolean;
     renderOptionPreview?: FeedbackOptionPreviewRenderer;
+    /** Opens a bound artifact; absent means no expand affordance is offered. */
+    onExpandArtifact?: (artifact: FeedbackAskArtifact) => void;
 }
 export declare const FeedbackRespondAskField: React.FC<FeedbackRespondAskFieldProps>;

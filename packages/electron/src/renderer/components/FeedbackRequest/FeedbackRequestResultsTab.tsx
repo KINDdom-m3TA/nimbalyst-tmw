@@ -67,7 +67,7 @@ export const FeedbackRequestResultsTab: React.FC<FeedbackRequestResultsTabProps>
           // addressable, and anything else stays inert rather than routing to
           // a path this window may not have.
           if (artifact.ref.kind !== 'document') return;
-          openSharedDocumentInTab(artifact.ref.sourceId, 'feedback_request');
+          openSharedDocumentInTab(artifact.ref, 'feedback_request');
         }}
       />
     </div>

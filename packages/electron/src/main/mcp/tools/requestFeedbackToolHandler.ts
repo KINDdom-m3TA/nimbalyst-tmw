@@ -559,12 +559,13 @@ function parseInput(args: unknown): RequestFeedbackInput {
   };
 }
 
-function subjectRef(subject: SubjectInput, orgId: string) {
+function subjectRef(subject: SubjectInput, orgId: string, projectId?: string) {
+  const resolvedProjectId = projectId ?? subject.projectId;
   return {
     orgId,
     kind: subject.kind,
     sourceId: subject.sourceId,
-    ...(subject.projectId ? { projectId: subject.projectId } : {}),
+    ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
   };
 }
 
@@ -649,8 +650,26 @@ export async function draftRequestFeedback(
         return { askId: assignment.askId, target: { kind: 'user' as const, userId } };
       });
 
+  // Attach bindings before validation. Validating the parsed asks first made
+  // unknown and duplicate entry ids invisible to validateFeedbackRequest; the
+  // same invalid draft then reached the compose surface and failed only after
+  // the author had approved publishing.
+  const asks = input.asks.map((ask) => {
+    const bound = input.askArtifacts.filter((artifact) => artifact.askId === ask.id);
+    if (bound.length === 0) return ask;
+    return {
+      ...ask,
+      artifacts: bound.map((artifact) => ({
+        entryId: artifact.entryId,
+        ref: subjectRef(artifact, org.orgId, org.teamProjectId),
+        label: artifact.label ?? artifact.sourceId,
+        ...(artifact.context ? { context: artifact.context } : {}),
+      })),
+    };
+  });
+
   const validation = validateFeedbackRequest({
-    asks: input.asks,
+    asks,
     recipients,
     assignments,
     quorum: input.quorum,
@@ -732,22 +751,10 @@ export async function draftRequestFeedback(
     draft: {
       orgId: org.orgId,
       recipients,
-      asks: input.asks.map((ask) => {
-        const bound = input.askArtifacts.filter((artifact) => artifact.askId === ask.id);
-        if (bound.length === 0) return ask;
-        return {
-          ...ask,
-          artifacts: bound.map((artifact) => ({
-            entryId: artifact.entryId,
-            ref: subjectRef(artifact, sharingFor(artifact).orgId ?? org.orgId),
-            label: artifact.label ?? artifact.sourceId,
-            ...(artifact.context ? { context: artifact.context } : {}),
-          })),
-        };
-      }),
+      asks,
       assignments,
       subjects: publishable.map((subject) => ({
-        ref: subjectRef(subject, sharingFor(subject).orgId ?? org.orgId),
+        ref: subjectRef(subject, sharingFor(subject).orgId ?? org.orgId, org.teamProjectId),
         label: subject.label ?? subject.sourceId,
         ...(subject.context ? { context: subject.context } : {}),
         shared: sharingFor(subject).teamVisible,

@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Feedback requests now validate attached artifacts before publishing, keep artifact links in their originating team project, and reliably hand live-preview capacity to the next waiting preview.
 - Push notifications now reach your phone when you walk away from your desk, and a session blocked on your answer or one that hit an error will reach you even while you are at your computer.
 - Shared spreadsheets, diagrams, mockups, and data models no longer drop edits when two people work in them at once.
 - Opening a shared document whose editor you do not have now names the extension you need and offers to install it, instead of showing only the document type.

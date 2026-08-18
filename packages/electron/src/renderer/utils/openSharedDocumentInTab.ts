@@ -12,6 +12,7 @@
  */
 
 import { store } from '@nimbalyst/runtime/store';
+import type { ResourceRef } from '@nimbalyst/collab-protocol';
 
 import {
   activeCollabScopeAtom,
@@ -21,11 +22,17 @@ import type { CollabDocumentOpenSource } from './collabDocumentOpener';
 import { setWindowModeAtom } from '../store/atoms/windowMode';
 
 export function openSharedDocumentInTab(
-  documentId: string,
+  document: string | ResourceRef,
   analyticsSource: CollabDocumentOpenSource,
-): void {
+): boolean {
   const scope = store.get(activeCollabScopeAtom);
-  if (!scope) return;
+  if (!scope) return false;
+  const documentId = typeof document === 'string' ? document : document.sourceId;
+  if (typeof document !== 'string') {
+    if (document.kind !== 'document' || document.orgId !== scope.orgId) return false;
+    const activeProjectId = scope.indexConfig.teamProjectId ?? undefined;
+    if (document.projectId && document.projectId !== activeProjectId) return false;
+  }
   store.set(setWindowModeAtom, 'collab');
   store.set(pendingCollabDocumentAtom, {
     documentId,
@@ -33,4 +40,5 @@ export function openSharedDocumentInTab(
     orgId: scope.orgId,
     analyticsSource,
   });
+  return true;
 }

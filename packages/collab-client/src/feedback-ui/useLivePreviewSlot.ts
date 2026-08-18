@@ -27,10 +27,16 @@ import { useEffect, useRef, useState } from 'react';
 export const MAX_CONCURRENT_LIVE_PREVIEWS = 4;
 
 let livePreviewCount = 0;
+const slotListeners = new Set<() => void>();
+
+function notifySlotListeners(): void {
+  for (const listener of slotListeners) listener();
+}
 
 /** Test-only: the module counter outlives a single render tree. */
 export function resetLivePreviewSlots(): void {
   livePreviewCount = 0;
+  notifySlotListeners();
 }
 
 export function livePreviewSlotsInUse(): number {
@@ -41,6 +47,15 @@ export function useLivePreviewSlot<T extends HTMLElement>(enabled: boolean) {
   const ref = useRef<T | null>(null);
   const [visible, setVisible] = useState(false);
   const [hasSlot, setHasSlot] = useState(false);
+  const [slotVersion, setSlotVersion] = useState(0);
+
+  useEffect(() => {
+    const listener = () => setSlotVersion((version) => version + 1);
+    slotListeners.add(listener);
+    return () => {
+      slotListeners.delete(listener);
+    };
+  }, []);
 
   useEffect(() => {
     const node = ref.current;
@@ -60,14 +75,21 @@ export function useLivePreviewSlot<T extends HTMLElement>(enabled: boolean) {
   }, [enabled]);
 
   useEffect(() => {
+    if (!enabled && hasSlot) {
+      setHasSlot(false);
+      return;
+    }
     if (!enabled || !visible || hasSlot) return;
     if (livePreviewCount >= MAX_CONCURRENT_LIVE_PREVIEWS) return;
     livePreviewCount += 1;
     setHasSlot(true);
-  }, [enabled, visible, hasSlot]);
+  }, [enabled, visible, hasSlot, slotVersion]);
 
   useEffect(() => () => {
-    if (hasSlot) livePreviewCount -= 1;
+    if (hasSlot) {
+      livePreviewCount -= 1;
+      notifySlotListeners();
+    }
   }, [hasSlot]);
 
   return { ref, mounted: enabled && hasSlot };

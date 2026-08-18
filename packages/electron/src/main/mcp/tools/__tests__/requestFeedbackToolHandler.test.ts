@@ -10,7 +10,7 @@ import type {
 } from '../collabReadToolHandlers';
 
 const WORKSPACE = '/workspace/design';
-const ORG = { orgId: 'org-design', name: 'Design Team' };
+const ORG = { orgId: 'org-design', name: 'Design Team', teamProjectId: 'project-design' };
 
 function matched(memberId: string, displayName: string, email: string): OrgDirectoryResult {
   return {
@@ -172,7 +172,10 @@ describe('RequestFeedback drafting', () => {
           { askId: 'approve', target: { kind: 'user', userId: 'karl' } },
           { askId: 'requirements-note', target: { kind: 'user', userId: 'dana' } },
         ],
-        subjects: [{ shared: false, ref: { kind: 'file', sourceId: 'mockups/a.html' } }],
+        subjects: [{
+          shared: false,
+          ref: { kind: 'file', sourceId: 'mockups/a.html', projectId: ORG.teamProjectId },
+        }],
       },
     });
     expect(payload.draft).not.toHaveProperty('author');
@@ -237,5 +240,29 @@ describe('RequestFeedback drafting', () => {
       findOrgMembers: vi.fn(async () => matched('karl', 'Karl Jones', 'karl@example.test')),
       getResourceSharingStatus: vi.fn(),
     })).rejects.toThrow(/only supported on singleSelect and reorder/);
+  });
+
+  it('rejects an artifact bound to an unknown entry before checking sharing', async () => {
+    const getResourceSharingStatus = vi.fn();
+    const result = await draftRequestFeedback({
+      recipients: [{ key: 'reviewer', nameOrEmail: 'karl@example.test' }],
+      asks: [{
+        type: 'singleSelect',
+        id: 'direction',
+        label: 'Direction',
+        description: 'Which should we build?',
+        options: [{ id: 'a', label: 'A' }],
+        artifacts: [{ entryId: 'missing', kind: 'file', sourceId: 'mockups/a.html' }],
+      }],
+    }, WORKSPACE, {
+      findOrgMembers: vi.fn(async () => matched('karl', 'Karl Jones', 'karl@example.test')),
+      getResourceSharingStatus,
+    });
+
+    expect(result).toMatchObject({
+      status: 'invalidDraft',
+      errors: [{ code: 'unknownArtifactEntry' }],
+    });
+    expect(getResourceSharingStatus).not.toHaveBeenCalled();
   });
 });

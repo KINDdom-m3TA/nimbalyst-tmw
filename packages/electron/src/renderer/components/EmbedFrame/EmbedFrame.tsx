@@ -182,8 +182,9 @@ function openFileInTab(absolutePath: string): void {
     });
 }
 
-const openSharedDocumentInTab = (documentId: string): void =>
+const openSharedDocumentInTab = (documentId: string): void => {
   openSharedDocument(documentId, 'embedded_document');
+};
 
 type ReadFileResult =
   | null

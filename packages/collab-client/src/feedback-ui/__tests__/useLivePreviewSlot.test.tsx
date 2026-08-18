@@ -11,7 +11,7 @@
 
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 
 import {
   MAX_CONCURRENT_LIVE_PREVIEWS,
@@ -99,6 +99,32 @@ describe('live preview slots', () => {
 
     unmount();
     expect(livePreviewSlotsInUse()).toBe(0);
+  });
+
+  it('hands a released slot to an already-visible waiting preview', async () => {
+    const previews = Array.from({ length: MAX_CONCURRENT_LIVE_PREVIEWS + 1 }, (_, index) => index);
+    const { rerender } = render(
+      <>{previews.map((index) => <Preview key={index} />)}</>,
+    );
+    revealAll();
+    expect(screen.getAllByTestId('mounted')).toHaveLength(MAX_CONCURRENT_LIVE_PREVIEWS);
+
+    rerender(<>{previews.slice(1).map((index) => <Preview key={index} />)}</>);
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('mounted')).toHaveLength(MAX_CONCURRENT_LIVE_PREVIEWS);
+      expect(screen.queryByTestId('gated')).toBeNull();
+    });
+  });
+
+  it('releases a slot when a preview becomes disabled without unmounting', async () => {
+    const { rerender } = render(<Preview />);
+    revealAll();
+    expect(livePreviewSlotsInUse()).toBe(1);
+
+    rerender(<Preview enabled={false} />);
+
+    await waitFor(() => expect(livePreviewSlotsInUse()).toBe(0));
   });
 
   it('takes no slot for a preview that has nothing to mount', () => {
