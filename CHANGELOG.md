@@ -46,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A milestone or release now reports the progress it really has: plans, decisions, and ideas count as finished at their own closing status, abandoned items no longer hold it below 100%, and work still waiting on review no longer counts as done.
 - Closing an item from a commit message now sets a status that item's type actually offers, instead of one missing from its list.
 - Picking a grouping or ordering in the tracker's Display Settings now works instead of closing the panel without changing anything.
-- Grouping by milestone or goal names each lane, row, and card chip after the milestone itself, instead of showing a raw id or an out-of-date name.
+- A milestone or goal now reads as its own name everywhere it appears — lanes, group headers, card chips, and the list and table columns — instead of a raw id or an out-of-date name.
 - Tracker date, link, and people chips now carry their field name, so an item with two dates or several links no longer needs a hover to tell them apart.
 - Collaborator avatars and the sync indicator no longer flicker on every character you type in a shared document.
 - Collaborators in a shared spreadsheet, diagram, or mockup come back after a network blip, instead of the list emptying and staying empty.
