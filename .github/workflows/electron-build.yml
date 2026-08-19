@@ -506,9 +506,19 @@ jobs:
           # handled explicitly later in this workflow, and electron-builder
           # must not create GitHub Releases on its own.
           if [ "${{ matrix.platform }}" == "mac" ]; then
-            export CSC_NAME="$MACOS_CSC_NAME"
-            export CSC_LINK="$MACOS_CSC_LINK"
-            export CSC_KEY_PASSWORD="$MACOS_CSC_KEY_PASSWORD"
+            if [ -n "$MACOS_CSC_LINK" ]; then
+              export CSC_NAME="$MACOS_CSC_NAME"
+              export CSC_LINK="$MACOS_CSC_LINK"
+              export CSC_KEY_PASSWORD="$MACOS_CSC_KEY_PASSWORD"
+            else
+              # Validation build: IS_RELEASE gated the signing material to
+              # empty. Make the unsigned path explicit, the same way the
+              # Windows branch below does. Exporting an EMPTY CSC_LINK makes
+              # electron-builder resolve "" to the working directory and fail
+              # with "packages/electron not a file" (run 32300739314).
+              unset CSC_NAME CSC_LINK CSC_KEY_PASSWORD
+              export CSC_IDENTITY_AUTO_DISCOVERY=false
+            fi
             if [ "${{ github.ref_type }}" == "tag" ] || [ "${{ inputs.release }}" == "true" ]; then
               npm run build:mac:notarized -- --${{ matrix.arch }} --mac dmg zip --publish never
             else
