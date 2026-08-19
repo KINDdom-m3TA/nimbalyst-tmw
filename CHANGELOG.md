@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opening a shared document whose editor you do not have now names the extension you need and offers to install it, instead of showing only the document type.
 - Shared mockup files now have a source pane, so their content can be edited collaboratively.
 - The results column in a shared calc sheet no longer goes blank until you type again.
+- Cutting cells in a spreadsheet can now be undone, and undoing a deleted range restores those cells instead of overwriting the first one.
+- A spreadsheet edit that fails to save now stays marked unsaved, instead of looking saved while the file on disk was unchanged.
 - A milestone or release now reports the progress it really has: plans, decisions, and ideas count as finished at their own closing status, abandoned items no longer hold it below 100%, and work still waiting on review no longer counts as done.
 - Closing an item from a commit message now sets a status that item's type actually offers, instead of one missing from its list.
 - Picking a grouping or ordering in the tracker's Display Settings now works instead of closing the panel without changing anything.
