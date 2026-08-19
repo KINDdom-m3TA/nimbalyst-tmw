@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A Codex tool server that fails to start now shows as failed, instead of the agent quietly losing its tools.
 - Team messages, mentions, and notifications now arrive when the app finishes starting before you are signed in, instead of going quiet for the rest of the session.
 - The inbox's organization filter no longer opens onto an empty menu when there is nothing to narrow by.
+- The effort level you select now applies to Claude Code CLI sessions instead of being ignored. (#996, contributed by @Derazien)
 
 ### Removed
 <!-- Removed features go here -->
