@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- A Claude Code CLI session no longer hangs when the CLI asks you to confirm a model switch.
 - Opening an extension panel while an agent session is running no longer takes the whole window down.
 - Starting an agent after moving, renaming, or deleting the project folder now says the folder is gone and names it, instead of reporting a broken agent binary and then hanging for minutes.
 - Feedback requests now validate attached artifacts before publishing, keep artifact links in their originating team project, and reliably hand live-preview capacity to the next waiting preview.
