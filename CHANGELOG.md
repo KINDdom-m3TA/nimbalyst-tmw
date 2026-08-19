@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The effort level you select now applies to Claude Code CLI sessions instead of being ignored. (#996, contributed by @Derazien)
 - MCP servers configured for a specific project in Claude Code now load on Windows instead of being silently ignored. (#1317, contributed by @Derazien)
 - Long agent sessions that edit many files no longer slow the rest of the app down as they run.
+- A full-screen window now has a visible way out again: an exit button in the title bar, and on macOS the window buttons reappear when you move to the top of the screen.
 
 ### Removed
 <!-- Removed features go here -->
