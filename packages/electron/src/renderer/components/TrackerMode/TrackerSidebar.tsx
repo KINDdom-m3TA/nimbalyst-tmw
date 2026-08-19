@@ -11,6 +11,7 @@ import {
   trackerSidebarCollapsedSectionsAtom,
   trackerSidebarExpandedFoldersAtom,
   type TrackerFilterChip,
+  type TrackerStatusScope,
 } from '../../store/atoms/trackers';
 import type { TrackerViewMode } from './trackerViewModes';
 import type { SavedView } from './trackerSavedViews';
@@ -62,6 +63,7 @@ interface TrackerSidebarProps {
   personalStateHydrated: boolean;
   recentlyViewedDays: 7 | 30 | 90 | null;
   columnFilters: TrackerFilterSet | null;
+  statusScope: TrackerStatusScope;
   /**
    * The chosen mode, which may be one this shortcut row has no button for
    * (`timeline`) -- Display Settings is the full control surface.
@@ -96,6 +98,11 @@ interface SidebarCountProps {
   personalStateHydrated: boolean;
   recentlyViewedDays: 7 | 30 | 90 | null;
   columnFilters: TrackerFilterSet | null;
+  /**
+   * The lifecycle scope the main view is showing. The count has to inherit it,
+   * or "Bugs 128" would be counting closed bugs the list beside it is hiding.
+   */
+  statusScope: TrackerStatusScope;
   nowMs: number;
 }
 
@@ -111,6 +118,7 @@ function SidebarTypeCount({
   personalStateHydrated,
   recentlyViewedDays,
   columnFilters,
+  statusScope,
   nowMs,
 }: SidebarCountProps & { type: TrackerItemType }) {
   const loaded = useAtomValue(trackerDataLoadedAtom);
@@ -118,9 +126,9 @@ function SidebarTypeCount({
   const count = useMemo(() => countFilteredTrackerItemsByTypes(
     items,
     [type],
-    { activeFilters, tagFilter, sourceFilter, recentlyViewedDays, columnFilters },
+    { activeFilters, tagFilter, sourceFilter, recentlyViewedDays, columnFilters, statusScope },
     { identity: currentIdentity, favoriteItemIds, viewedAtByItemId, nowMs },
-  ), [items, type, activeFilters, tagFilter, sourceFilter, currentIdentity, favoriteItemIds, viewedAtByItemId, recentlyViewedDays, columnFilters, nowMs]);
+  ), [items, type, activeFilters, tagFilter, sourceFilter, currentIdentity, favoriteItemIds, viewedAtByItemId, recentlyViewedDays, columnFilters, statusScope, nowMs]);
   // NIM-631: before the tracker atoms finish hydrating, the count map is empty,
   // so populated types would flash "0" during a sync reconnect + renderer
   // reload. Suppress the badge until hydration completes rather than showing a
@@ -171,6 +179,7 @@ function SidebarFolderCount({
   personalStateHydrated,
   recentlyViewedDays,
   columnFilters,
+  statusScope,
   nowMs,
 }: SidebarCountProps & { types: string[] }) {
   const loaded = useAtomValue(trackerDataLoadedAtom);
@@ -178,9 +187,9 @@ function SidebarFolderCount({
   const count = useMemo(() => countFilteredTrackerItemsByTypes(
     items,
     types,
-    { activeFilters, tagFilter, sourceFilter, recentlyViewedDays, columnFilters },
+    { activeFilters, tagFilter, sourceFilter, recentlyViewedDays, columnFilters, statusScope },
     { identity: currentIdentity, favoriteItemIds, viewedAtByItemId, nowMs },
-  ), [items, types, activeFilters, tagFilter, sourceFilter, currentIdentity, favoriteItemIds, viewedAtByItemId, recentlyViewedDays, columnFilters, nowMs]);
+  ), [items, types, activeFilters, tagFilter, sourceFilter, currentIdentity, favoriteItemIds, viewedAtByItemId, recentlyViewedDays, columnFilters, statusScope, nowMs]);
   if (!loaded || (!personalStateHydrated && (
     activeFilters.some((filter) => filter === 'favorites' || filter === 'recently-viewed')
     || (columnFilters?.clauses ?? []).some(clause => clause.field === 'favorite' || clause.field === 'viewed')
@@ -203,6 +212,7 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
   personalStateHydrated,
   recentlyViewedDays,
   columnFilters,
+  statusScope,
   viewMode,
   onSelectType,
   onViewModeChange,
@@ -437,6 +447,7 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
           personalStateHydrated={personalStateHydrated}
           recentlyViewedDays={recentlyViewedDays}
           columnFilters={columnFilters}
+          statusScope={statusScope}
           nowMs={filterClockMs}
         />
       </span>
@@ -781,6 +792,7 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
                     personalStateHydrated={personalStateHydrated}
                     recentlyViewedDays={recentlyViewedDays}
                     columnFilters={columnFilters}
+                    statusScope={statusScope}
                     nowMs={filterClockMs}
                   />
                 </span>
