@@ -19,7 +19,9 @@ import { AlphaBadge } from '../common/AlphaBadge';
 import { FloatingPortal, useFloatingMenu, virtualElement } from '../../hooks/useFloatingMenu';
 import {
   buildTrackerNavigationTree,
+  folderOwnershipOf,
   partitionTrackerNavigationByOwnership,
+  trackerOwnershipOf,
   type TrackerNavigationTree,
   type TrackerOwnership,
 } from './trackerNavigationTree';
@@ -218,7 +220,9 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
   const isSharedLayout = !!workspacePath &&
     trackerSyncConnection?.workspacePath === workspacePath &&
     trackerSyncConnection.projectId !== null;
-  const [creatingFolder, setCreatingFolder] = useState(false);
+  // Which section is taking a folder name right now. A folder is born owned by
+  // the section you created it in, so there is nothing to disambiguate later.
+  const [creatingFolderIn, setCreatingFolderIn] = useState<TrackerOwnership | null>(null);
   const [newFolderName, setNewFolderName] = useState('');
   // Collapse state lives in the persisted mode layout so it survives remounts
   // and restarts (folders used to reset to all-collapsed on every remount).
@@ -278,21 +282,25 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
     });
   };
 
-  const commitCreateFolder = () => {
+  const foldersOwnedBy = (ownership: TrackerOwnership) =>
+    navigationTree.folders.filter((node) => folderOwnershipOf(node.folder) === ownership);
+
+  const commitCreateFolder = (ownership: TrackerOwnership) => {
     const name = newFolderName.trim();
     if (!name) return;
     const folderId = crypto.randomUUID();
-    const lastKey = navigationTree.folders.at(-1)?.folder.sortKey ?? null;
+    const lastKey = foldersOwnedBy(ownership).at(-1)?.folder.sortKey ?? null;
     saveEntry({
       entryId: `folder:${folderId}`,
       kind: 'folder',
       folderId,
       name,
+      ownership,
       sortKey: generateKeyBetween(lastKey, null),
     });
     setFolderExpanded(folderId, true);
     setNewFolderName('');
-    setCreatingFolder(false);
+    setCreatingFolderIn(null);
   };
 
   const commitRenameFolder = (folder: TrackerNavigationFolder) => {
@@ -328,15 +336,20 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
     });
   };
 
+  // Reordering happens among a folder's own section: sort keys are only ever
+  // compared against same-ownership siblings, so a drag can't interleave the
+  // two lists.
   const insertFolderBefore = (folder: TrackerNavigationFolder, target: TrackerNavigationFolder) => {
-    const remaining = navigationTree.folders.filter((node) => node.folder.entryId !== folder.entryId);
+    const remaining = foldersOwnedBy(folderOwnershipOf(target))
+      .filter((node) => node.folder.entryId !== folder.entryId);
     const targetIndex = remaining.findIndex((node) => node.folder.entryId === target.entryId);
     const previousKey = targetIndex > 0 ? remaining[targetIndex - 1].folder.sortKey : null;
     saveEntry({ ...folder, sortKey: generateKeyBetween(previousKey, target.sortKey) });
   };
 
   const appendFolder = (folder: TrackerNavigationFolder) => {
-    const remaining = navigationTree.folders.filter((node) => node.folder.entryId !== folder.entryId);
+    const remaining = foldersOwnedBy(folderOwnershipOf(folder))
+      .filter((node) => node.folder.entryId !== folder.entryId);
     saveEntry({
       ...folder,
       sortKey: generateKeyBetween(remaining.at(-1)?.folder.sortKey ?? null, null),
@@ -346,6 +359,32 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
   const draggedEntry = draggedEntryId
     ? navigationEntries.find((entry) => entry.entryId === draggedEntryId) ?? null
     : null;
+
+  /**
+   * Whose the dragged row is. A tracker's owner is its `sharing`, and a drag
+   * never changes that -- dropping into a folder of the other ownership is
+   * simply refused (no `preventDefault`, so the cursor shows no-drop). Sharing a
+   * tracker has server consequences and stays a deliberate act in the sharing
+   * control.
+   */
+  const ownershipOfDragged = (): TrackerOwnership | null => {
+    if (!draggedEntry) return null;
+    if (draggedEntry.kind === 'folder') return folderOwnershipOf(draggedEntry);
+    const tracker = trackerTypes.find((model) => model.type === draggedEntry.trackerType);
+    return tracker ? trackerOwnershipOf(tracker) : null;
+  };
+
+  // Solo users have no second section, and a tracker left over from a former
+  // team must not become undraggable.
+  const acceptsDrop = (target: TrackerOwnership) =>
+    ownershipSections === null || ownershipOfDragged() === target;
+
+  const canDropTypeInFolder = (folderId: string | null) => {
+    if (draggedEntry?.kind !== 'type-placement') return false;
+    if (folderId === null) return true;
+    const folder = navigationTree.folders.find((node) => node.folder.folderId === folderId)?.folder;
+    return folder ? acceptsDrop(folderOwnershipOf(folder)) : false;
+  };
 
   const renderTypeRow = (
     tracker: TrackerDataModel,
@@ -370,11 +409,13 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
       }}
       onDragEnd={() => setDraggedEntryId(null)}
       onDragOver={(event) => {
-        if (draggedEntry?.kind === 'type-placement') event.preventDefault();
+        if (canDropTypeInFolder(placement.folderId)) event.preventDefault();
       }}
       onDrop={(event) => {
         event.preventDefault();
-        if (draggedEntry?.kind === 'type-placement' && draggedEntry.entryId !== placement.entryId) {
+        if (draggedEntry?.kind === 'type-placement'
+          && draggedEntry.entryId !== placement.entryId
+          && canDropTypeInFolder(placement.folderId)) {
           insertTypeBefore(draggedEntry, placement);
         }
         setDraggedEntryId(null);
@@ -516,41 +557,13 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
                   <MaterialSymbol icon="group" size={13} />
                 </span>
               )}
-              <button
-                className="flex items-center justify-center text-nim-faint hover:text-nim transition-colors"
-                title="New tracker folder"
-                data-testid="tracker-folder-add"
-                onClick={() => setCreatingFolder((value) => !value)}
-              >
-                <MaterialSymbol icon="create_new_folder" size={14} />
-              </button>
+              {/* With sections, the button lives in each section header -- a
+                  folder is born owned, so there is nothing to ask afterwards. */}
+              {ownershipSections === null && renderCreateFolderButton('personal')}
             </span>
           </div>
 
-          {creatingFolder && (
-            <div className="flex items-center gap-1 px-1 mb-1" data-testid="tracker-folder-create-row">
-              <MaterialSymbol icon="folder" size={15} className="text-nim-muted" />
-              <input
-                autoFocus
-                value={newFolderName}
-                onChange={(event) => setNewFolderName(event.target.value)}
-                onKeyDown={(event) => {
-                  event.stopPropagation();
-                  if (event.key === 'Enter') commitCreateFolder();
-                  if (event.key === 'Escape') {
-                    setCreatingFolder(false);
-                    setNewFolderName('');
-                  }
-                }}
-                onBlur={() => {
-                  setCreatingFolder(false);
-                  setNewFolderName('');
-                }}
-                placeholder="Folder name"
-                className="min-w-0 flex-1 px-2 py-1 text-xs bg-nim border border-nim rounded text-nim placeholder:text-nim-faint focus:outline-none focus:border-nim-focus"
-              />
-            </div>
-          )}
+          {ownershipSections === null && renderCreateFolderRow('personal')}
 
           {/* All */}
           <button
@@ -583,7 +596,9 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
                 members={teamMembers}
                 collapsed={collapsedSections.includes(section.ownership)}
                 onToggleCollapsed={() => toggleSectionCollapsed(section.ownership)}
+                actions={renderCreateFolderButton(section.ownership)}
               >
+                {renderCreateFolderRow(section.ownership)}
                 {renderNavigationTree(section.tree)}
               </TrackerOwnershipSection>
             ))}
@@ -629,6 +644,56 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
     </div>
   );
 
+  function renderCreateFolderButton(ownership: TrackerOwnership) {
+    return (
+      <button
+        className="flex items-center justify-center px-1 text-nim-faint hover:text-nim transition-colors"
+        title="New tracker folder"
+        data-testid="tracker-folder-add"
+        data-ownership={ownership}
+        onClick={() => {
+          if (collapsedSections.includes(ownership)) {
+            setModeLayout({
+              collapsedOwnershipSections: toggleListEntry(collapsedSections, ownership, false),
+            });
+          }
+          setNewFolderName('');
+          setCreatingFolderIn((value) => (value === ownership ? null : ownership));
+        }}
+      >
+        <MaterialSymbol icon="create_new_folder" size={14} />
+      </button>
+    );
+  }
+
+  function renderCreateFolderRow(ownership: TrackerOwnership) {
+    if (creatingFolderIn !== ownership) return null;
+    return (
+      <div className="flex items-center gap-1 px-1 mb-1" data-testid="tracker-folder-create-row">
+        <MaterialSymbol icon="folder" size={15} className="text-nim-muted" />
+        <input
+          autoFocus
+          value={newFolderName}
+          onChange={(event) => setNewFolderName(event.target.value)}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === 'Enter') commitCreateFolder(ownership);
+            if (event.key === 'Escape') {
+              setCreatingFolderIn(null);
+              setNewFolderName('');
+            }
+          }}
+          onBlur={() => {
+            setCreatingFolderIn(null);
+            setNewFolderName('');
+          }}
+          placeholder="Folder name"
+          className="min-w-0 flex-1 px-2 py-1 text-xs bg-nim border border-nim rounded text-nim placeholder:text-nim-faint focus:outline-none focus:border-nim-focus"
+        />
+      </div>
+    );
+  }
+
   /** Folders and their trackers, rendered the same way inside or outside a section. */
   function renderNavigationTree(tree: TrackerNavigationTree) {
     return (
@@ -649,9 +714,15 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
                   event.dataTransfer.setData('text/plain', folder.entryId);
                 }}
                 onDragEnd={() => setDraggedEntryId(null)}
-                onDragOver={(event) => event.preventDefault()}
+                onDragOver={(event) => {
+                  if (acceptsDrop(folderOwnershipOf(folder))) event.preventDefault();
+                }}
                 onDrop={(event) => {
                   event.preventDefault();
+                  if (!acceptsDrop(folderOwnershipOf(folder))) {
+                    setDraggedEntryId(null);
+                    return;
+                  }
                   if (draggedEntry?.kind === 'type-placement') {
                     appendTypeToFolder(draggedEntry, folder.folderId);
                     setFolderExpanded(folder.folderId, true);
