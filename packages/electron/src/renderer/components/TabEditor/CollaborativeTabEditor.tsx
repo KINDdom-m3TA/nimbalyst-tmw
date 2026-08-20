@@ -924,6 +924,7 @@ export const CollaborativeTabEditor: React.FC<CollaborativeTabEditorProps> = ({
         .map((m) => ({
           userId: m.userId,
           name: teamMemberDisplayName(m),
+          email: m.email,
           personalOrgId: m.personalOrgId,
         }));
     },
