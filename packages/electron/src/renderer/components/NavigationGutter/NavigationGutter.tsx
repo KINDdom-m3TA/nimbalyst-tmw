@@ -35,8 +35,6 @@ import { stytchIsSignedInAtom } from '../../store/atoms/stytchAuth';
 import { personalAccountsAtom } from '../../store/atoms/settingsDomains';
 import { orgInboxUnreadCountAtomFamily } from '../../store/atoms/teamInbox';
 import { useProjectOrg } from '../../hooks/useProjectOrg';
-import { orgProjectWalkAtom } from '../../store/atoms/orgProjectWalk';
-import { openOrgProjectWalk } from '../../store/listeners/orgProjectWalkListeners';
 import { AlphaBadge } from '../common/AlphaBadge';
 import { AccountInspectorPopover } from '../Accounts/AccountInspectorPopover';
 import { GutterContextMenu } from './GutterContextMenu';
@@ -86,6 +84,8 @@ interface NavigationGutterProps {
   onToggleAgentCollapsed?: () => void;
   /** Callback to toggle Collab mode (Shared Docs) sidebar collapsed state */
   onToggleCollabCollapsed?: () => void;
+  /** Callback to toggle Tracker mode sidebar collapsed state */
+  onToggleTrackerCollapsed?: () => void;
   /** Currently active extension bottom panel ID */
   activeExtensionBottomPanel?: string | null;
   /** Callback when an extension bottom panel is toggled */
@@ -114,6 +114,7 @@ export const NavigationGutter: React.FC<NavigationGutterProps> = ({
   onToggleFilesCollapsed,
   onToggleAgentCollapsed,
   onToggleCollabCollapsed,
+  onToggleTrackerCollapsed,
   activeExtensionBottomPanel,
   onExtensionBottomPanelChange,
 }) => {
@@ -135,10 +136,6 @@ export const NavigationGutter: React.FC<NavigationGutterProps> = ({
   const projectOrgUnread = useAtomValue(
     orgInboxUnreadCountAtomFamily(projectOrg?.orgId ?? ''),
   );
-  // An org the account belongs to with nothing bound here yet. Replaces the
-  // "No organization" row, which is a lie for an actual member.
-  const projectWalk = useAtomValue(orgProjectWalkAtom);
-
   // Global gutter customization (visibility + per-section order).
   const hiddenItems = useAtomValue(hiddenGutterItemsAtom);
   const sectionOrder = useAtomValue(gutterItemOrderAtom);
@@ -348,6 +345,7 @@ export const NavigationGutter: React.FC<NavigationGutterProps> = ({
         icon: 'assignment',
         label: `Tracker (${getShortcutDisplay(KeyboardShortcuts.view.trackerMode)})`,
         contentMode: 'tracker', testId: 'tracker-mode-button',
+        onReclick: () => onToggleTrackerCollapsed?.(),
       }),
     },
     ...(hasPrRemote ? [{
@@ -539,10 +537,9 @@ export const NavigationGutter: React.FC<NavigationGutterProps> = ({
               accounts={accounts}
               projectOrg={projectOrg}
               projectOrgLoading={projectOrgLoading}
-              enterableOrgs={projectWalk.enterableOrgs}
-              onJoinOrganizationProject={() => {
+              onAddProjectToOrganization={() => {
                 setUserMenuOpen(false);
-                openOrgProjectWalk();
+                handleNavigateSettings('project', 'project-sharing');
               }}
               anchorEl={userMenuButtonRef.current}
               onClose={() => setUserMenuOpen(false)}

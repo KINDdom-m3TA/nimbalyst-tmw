@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - A tracker item shows its number as soon as it is created, instead of staying blank until the list is refreshed.
+- A project that belongs to no organization now offers to add it to one you pick, or to a new one, instead of suggesting a single organization at random.
 
 ### Removed
 <!-- Removed features go here -->
