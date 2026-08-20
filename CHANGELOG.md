@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- A shared document that can no longer display collaborators' changes now says so, instead of continuing to report itself as synced.
 - A tracker item shows its number as soon as it is created, instead of staying blank until the list is refreshed.
 - A project that belongs to no organization now offers to add it to one you pick, or to a new one, instead of suggesting a single organization at random.
 
