@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 <!-- New features go here -->
 - The tracker sidebar collapses and reopens the way every other mode's does — click the Tracker icon again, press Cmd+T, or use the title-bar control.
+- Expand the active tab to fill the window from View > Toggle Expanded Tab or with Shift+Escape, in any view mode.
 
 ### Changed
 <!-- Changes to existing functionality go here -->

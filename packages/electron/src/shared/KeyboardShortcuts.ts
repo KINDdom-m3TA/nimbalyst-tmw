@@ -52,6 +52,9 @@ export const KeyboardShortcuts = {
     collabMode: 'Cmd+D',
     prReviewMode: 'Cmd+U',
     toggleSidebar: 'Cmd+B',
+    // Expand the active editor tab to fill the window (same action as
+    // double-clicking a tab). Matches Zed's workspace::ToggleZoom binding.
+    toggleExpandedTab: 'Shift+Escape',
 
     // Navigation
     navigateBack: 'Cmd+[',

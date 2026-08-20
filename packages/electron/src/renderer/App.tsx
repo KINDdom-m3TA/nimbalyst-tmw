@@ -246,6 +246,7 @@ import {
   showSessionImportDialogRequestAtom,
   showTrustToastRequestAtom,
   toggleAIChatPanelRequestAtom,
+  toggleExpandedTabRequestAtom,
 } from './store/atoms/appCommands';
 import { isCollabUri } from '@nimbalyst/collab-protocol';
 import {
@@ -254,7 +255,9 @@ import {
 } from './store/atoms/collabEditor';
 import {
   initTrackerPanelLayout,
+  toggleTrackerSidebarCollapsedAtom,
   trackerModeLayoutAtom,
+  trackerSidebarCollapsedAtom,
 } from './store/atoms/trackers';
 import { prNavigateRequestAtom } from './store/atoms/pullRequests';
 import {
@@ -632,9 +635,12 @@ export default function App() {
   const setActiveMode = useSetAtom(setWindowModeAtom);
   const toggleAgentCollapsed = useSetAtom(toggleSessionHistoryCollapsedAtom);
   const agentHistoryCollapsed = useAtomValue(sessionHistoryCollapsedAtom);
+  const toggleTrackerCollapsed = useSetAtom(toggleTrackerSidebarCollapsedAtom);
+  const trackerSidebarCollapsed = useAtomValue(trackerSidebarCollapsedAtom);
   const filesSidebarCollapsed = useAtomValue(sidebarCollapsedAtomFamily(workspacePath || ''));
   const filesAIChatCollapsed = useAtomValue(aiChatCollapsedAtomFamily(workspacePath || ''));
   const toggleAIChatPanelVersion = useAtomValue(toggleAIChatPanelRequestAtom);
+  const toggleExpandedTabVersion = useAtomValue(toggleExpandedTabRequestAtom);
   const gitStatus = useAtomValue(gitStatusAtom);
   const setGitStatus = useSetAtom(gitStatusAtom);
   const [gitActionState, setGitActionState] = useState<{
@@ -1057,8 +1063,10 @@ export default function App() {
       toggleAgentCollapsed();
     } else if (activeMode === 'collab') {
       collabModeRef.current?.toggleSidebarCollapsed();
+    } else if (activeMode === 'tracker') {
+      toggleTrackerCollapsed();
     }
-  }, [activeMode, isFullscreenPanelActive, toggleAgentCollapsed]);
+  }, [activeMode, isFullscreenPanelActive, toggleAgentCollapsed, toggleTrackerCollapsed]);
 
   const toggleActiveRightPane = useCallback(() => {
     if (isFullscreenPanelActive) return;
@@ -1073,6 +1081,19 @@ export default function App() {
     }
   }, [activeMode, isFullscreenPanelActive]);
 
+  // Expand the active tab to fill the window — the menu/shortcut equivalent of
+  // double-clicking a tab. Only the modes that own editor tabs implement it.
+  const toggleActiveEditorMaximized = useCallback(() => {
+    if (isFullscreenPanelActive) return;
+    if (activeMode === 'files') {
+      editorModeRef.current?.toggleEditorMaximized();
+    } else if (activeMode === 'agent') {
+      agentModeRef.current?.toggleEditorMaximized();
+    } else if (activeMode === 'collab') {
+      collabModeRef.current?.toggleEditorMaximized();
+    }
+  }, [activeMode, isFullscreenPanelActive]);
+
   // Route the ApplicationMenu command through the same mode-owned pane action
   // used by WindowTopBar. Track the request version so React effect replays
   // cannot toggle the pane twice.
@@ -1082,6 +1103,13 @@ export default function App() {
     handledAIChatToggleVersionRef.current = toggleAIChatPanelVersion;
     toggleActiveRightPane();
   }, [toggleAIChatPanelVersion, toggleActiveRightPane]);
+
+  const handledExpandedTabVersionRef = useRef(toggleExpandedTabVersion);
+  useEffect(() => {
+    if (toggleExpandedTabVersion === handledExpandedTabVersionRef.current) return;
+    handledExpandedTabVersionRef.current = toggleExpandedTabVersion;
+    toggleActiveEditorMaximized();
+  }, [toggleExpandedTabVersion, toggleActiveEditorMaximized]);
 
   const windowTopBarPanelControls = useMemo<WindowTopBarPanelControls | undefined>(() => {
     if (isFullscreenPanelActive) return undefined;
@@ -1159,6 +1187,17 @@ export default function App() {
         },
       };
     }
+    if (activeMode === 'tracker') {
+      // Tracker Mode has no title-bar right pane; its detail panel is owned by
+      // the main view.
+      return {
+        left: {
+          label: 'Tracker sidebar',
+          collapsed: trackerSidebarCollapsed,
+          onToggle: toggleActiveLeftPane,
+        },
+      };
+    }
     if (activeMode === 'pr-review') {
       // The PR list remains visible; this mode currently exposes only its
       // persisted right-side AI pane through the title-bar controls.
@@ -1182,6 +1221,7 @@ export default function App() {
     prPanelState,
     toggleActiveLeftPane,
     toggleActiveRightPane,
+    trackerSidebarCollapsed,
   ]);
 
   const windowTopBarNewSessionControl = useMemo(() => {
@@ -2689,6 +2729,9 @@ export default function App() {
         }}
         onToggleCollabCollapsed={() => {
           collabModeRef.current?.toggleSidebarCollapsed();
+        }}
+        onToggleTrackerCollapsed={() => {
+          toggleTrackerCollapsed();
         }}
       />
 
