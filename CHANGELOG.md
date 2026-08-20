@@ -10,12 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- The tracker sidebar collapses and reopens the way every other mode's does — click the Tracker icon again, press Cmd+T, or use the title-bar control.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
 
 ### Fixed
 <!-- Bug fixes go here -->
+- A tracker item shows its number as soon as it is created, instead of staying blank until the list is refreshed.
 
 ### Removed
 <!-- Removed features go here -->
