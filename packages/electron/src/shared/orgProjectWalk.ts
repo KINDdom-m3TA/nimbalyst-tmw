@@ -112,6 +112,29 @@ export function resolveAccountOrgRow(input: {
   return { kind: 'addToOrganization' };
 }
 
+/**
+ * Whether a window sitting in Org mode has to fall back to Files.
+ *
+ * A restored mode outlives the project's organization (left the org, signed
+ * out, switched to a project without one), and Org mode's gutter item goes with
+ * it, so a window left there would have no way back out.
+ *
+ * Leaving a mode the user chose is destructive, though, so it takes a resolved
+ * answer: an organization lookup that has not landed yet reads exactly like a
+ * project that has none. Trusting one of those was what sent every click on the
+ * gutter's Organization item straight back to Files -- the lookup ran before
+ * the auth session loaded, and the `null` it produced never re-resolved.
+ */
+export function shouldLeaveOrgMode(input: {
+  activeMode: string;
+  projectOrg: ProjectWalkOrg | null;
+  projectOrgLoading: boolean;
+}): boolean {
+  if (input.activeMode !== 'org') return false;
+  if (input.projectOrgLoading) return false;
+  return !input.projectOrg;
+}
+
 export interface ProjectFolderFacts {
   exists: boolean;
   isDirectory: boolean;

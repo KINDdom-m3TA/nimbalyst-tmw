@@ -156,7 +156,14 @@ import { initWakeupListeners } from './store/listeners/wakeupListener';
 import { TrackerMode } from './components/TrackerMode';
 import { PullRequestMode, type PullRequestModeRef } from './components/PullRequestMode';
 import { CollabMode, type CollabModeRef } from './components/CollabMode';
-import { TeamManagementApp } from './components/TeamMode';
+import {
+  OrgModeHost,
+  PROJECT_ORG_MODE_SURFACE_ID,
+  TeamManagementApp,
+  type OrgModeHostRef,
+} from './components/TeamMode';
+import { useProjectOrg } from './hooks/useProjectOrg';
+import { shouldLeaveOrgMode } from '../shared/orgProjectWalk';
 import { TrayPanelApp } from './components/TrayPanel/TrayPanelApp';
 import { TerminalBottomPanel } from './components/TerminalBottomPanel';
 import { SessionLaunchPopup } from './components/UnifiedAI/SessionLaunchPopup';
@@ -713,6 +720,17 @@ export default function App() {
     }
   }, [activeMode, developerMode, setActiveMode]);
 
+  // Org mode is the project's own organization; the standalone org window keeps
+  // its own selection. Resolving it here also gates the gutter item, the
+  // shortcut and the mount.
+  const { org: projectOrg, loading: projectOrgLoading } = useProjectOrg(workspacePath);
+
+  useEffect(() => {
+    if (shouldLeaveOrgMode({ activeMode, projectOrg, projectOrgLoading })) {
+      setActiveMode('files');
+    }
+  }, [activeMode, projectOrg, projectOrgLoading, setActiveMode]);
+
   const openMarketplaceInstallRequest = useCallback((request: { extensionId: string; requestedAt?: string }) => {
     if (!request.extensionId) return;
 
@@ -1053,6 +1071,7 @@ export default function App() {
   const agentModeRef = useRef<AgentModeRef>(null);
   const editorModeRef = useRef<EditorModeRef>(null);
   const collabModeRef = useRef<CollabModeRef | null>(null);
+  const orgModeRef = useRef<OrgModeHostRef | null>(null);
   const pullRequestModeRef = useRef<PullRequestModeRef | null>(null);
 
   const toggleActiveLeftPane = useCallback(() => {
@@ -1065,6 +1084,8 @@ export default function App() {
       collabModeRef.current?.toggleSidebarCollapsed();
     } else if (activeMode === 'tracker') {
       toggleTrackerCollapsed();
+    } else if (activeMode === 'org') {
+      orgModeRef.current?.toggleSidebarCollapsed();
     }
   }, [activeMode, isFullscreenPanelActive, toggleAgentCollapsed, toggleTrackerCollapsed]);
 
@@ -1266,6 +1287,7 @@ export default function App() {
       agent: 'Agent',
       tracker: 'Tracker',
       collab: 'Shared Docs',
+      org: 'Organization',
       'pr-review': 'PR Review',
       settings: 'Settings',
     };
@@ -1942,6 +1964,7 @@ export default function App() {
     openHistoryForCurrentDocument,
     isFullscreenPanelActive,
     exitFullscreenPanel: () => setActiveExtensionPanel(null),
+    orgModeAvailable: !!projectOrg,
   });
 
   // Extension-contributed keybindings (reads from manifests, fires commands via registry)
@@ -2670,6 +2693,7 @@ export default function App() {
           panelControls={windowTopBarPanelControls}
           newSessionControl={windowTopBarNewSessionControl}
           workspacePath={workspacePath}
+          onOpenOrgMode={() => setActiveMode('org')}
         />
       )}
       <div data-layout="workspace-row" className="flex flex-row flex-1 min-h-0">
@@ -2732,6 +2756,9 @@ export default function App() {
         }}
         onToggleTrackerCollapsed={() => {
           toggleTrackerCollapsed();
+        }}
+        onToggleOrgCollapsed={() => {
+          orgModeRef.current?.toggleSidebarCollapsed();
         }}
       />
 
@@ -2919,6 +2946,31 @@ export default function App() {
                   onPanelStateChange={setCollabPanelState}
                 />
               )}
+            </div>
+
+            {/* Org Mode - the project's organization inbox, rooms and DMs */}
+            <div
+              data-layout="org-mode-wrapper"
+              className={`flex-1 flex-col overflow-hidden min-h-0 ${
+                activeMode === 'org' && !isFullscreenPanelActive ? 'flex' : 'hidden'
+              }`}
+            >
+              {/* Activity: the surface holds a live room view and an inbox list,
+                  so hidden updates belong at background priority. */}
+              <Activity mode={activeMode === 'org' && !isFullscreenPanelActive ? 'visible' : 'hidden'}>
+                {projectOrg && (
+                  <OrgModeHost
+                    ref={orgModeRef}
+                    orgId={projectOrg.orgId}
+                    workspacePath={workspacePath || undefined}
+                    // Distinct from the standalone window's surface id, so the
+                    // two surfaces cannot navigate each other.
+                    surfaceId={PROJECT_ORG_MODE_SURFACE_ID}
+                    chrome="mode"
+                    isActive={activeMode === 'org'}
+                  />
+                )}
+              </Activity>
             </div>
 
             {/* Extension Fullscreen Panel Mode */}

@@ -17,9 +17,10 @@ const setActiveMode = vi.fn();
 const toggleActiveLeftPane = vi.fn();
 const exitFullscreenPanel = vi.fn();
 
-function Harness({ activeMode, isFullscreenPanelActive = false }: {
+function Harness({ activeMode, isFullscreenPanelActive = false, orgModeAvailable = true }: {
   activeMode: ContentMode;
   isFullscreenPanelActive?: boolean;
+  orgModeAvailable?: boolean;
 }): React.ReactElement {
   useKeyboardShortcuts({
     activeMode,
@@ -33,18 +34,20 @@ function Harness({ activeMode, isFullscreenPanelActive = false }: {
     openHistoryForCurrentDocument: vi.fn(),
     isFullscreenPanelActive,
     exitFullscreenPanel,
+    orgModeAvailable,
   });
   return <div />;
 }
 
 /** Dispatch the app modifier + key, matching the hook's platform detection. */
-function pressAppModifier(key: string): void {
+function pressAppModifier(key: string, extra: KeyboardEventInit = {}): void {
   const isMac = navigator.platform.startsWith('Mac');
   window.dispatchEvent(new KeyboardEvent('keydown', {
     key,
     metaKey: isMac,
     ctrlKey: !isMac,
     bubbles: true,
+    ...extra,
   }));
 }
 
@@ -78,5 +81,23 @@ describe('Cmd+T', () => {
     expect(exitFullscreenPanel).toHaveBeenCalledTimes(1);
     expect(setActiveMode).toHaveBeenCalledWith('tracker');
     expect(toggleActiveLeftPane).not.toHaveBeenCalled();
+  });
+});
+
+describe('Cmd+Alt+M', () => {
+  // Option rewrites the character on macOS (Option+M is "µ"), so the chord is
+  // matched on `code` as well — a `key`-only match silently never fires.
+  it('switches into Org mode when the project has an organization', () => {
+    render(<Harness activeMode="files" />);
+    pressAppModifier('µ', { altKey: true, code: 'KeyM' });
+
+    expect(setActiveMode).toHaveBeenCalledWith('org');
+  });
+
+  it('does nothing when the project has no organization', () => {
+    render(<Harness activeMode="files" orgModeAvailable={false} />);
+    pressAppModifier('m', { altKey: true, code: 'KeyM' });
+
+    expect(setActiveMode).not.toHaveBeenCalled();
   });
 });

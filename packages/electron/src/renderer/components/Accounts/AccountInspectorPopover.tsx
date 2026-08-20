@@ -43,7 +43,7 @@ interface AccountInspectorPopoverProps {
   onManageOrganization: (orgId: string) => void;
   /** Unread inbox deliveries in the active project's organization. */
   messagesUnreadCount?: number;
-  /** Open the organization inbox (the org window). Only used when there's an org. */
+  /** Open the project's organization inbox in Org mode. Only used when there's an org. */
   onOpenMessages?: (orgId: string) => void;
   /** Open the global Application settings. */
   onOpenApplicationSettings: () => void;
@@ -125,8 +125,7 @@ export function AccountInspectorPopover({
 
         <div className="border-t border-[var(--nim-border)]" />
 
-        {/* Messages → the organization inbox, which is what the org window is
-            since NIM-2322 moved administration into a dialog. Kept separate from
+        {/* Messages → the project's organization inbox in Org mode. Kept separate from
             the Organization row below so administration and messaging stay
             apart, and only shown when there is an org whose inbox to open. */}
         {projectOrg && onOpenMessages && (
