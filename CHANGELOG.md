@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - A new install stays on the faster storage engine instead of being switched to the old one after its first launch.
+- A momentary database startup failure no longer empties your sessions and history: Nimbalyst retries before setting the database aside.
 
 ### Removed
 <!-- Removed features go here -->
