@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A question, plan approval, or commit proposal you take more than two minutes to answer stays answerable, instead of losing its buttons and then timing out.
 - Windows open in your theme's own background colour instead of flashing white first, including on themes that come from extensions.
 - Your trackers list your items again instead of coming up empty once your organization has loaded.
+- A background session that marks itself complete still shows as unread in the sessions popover and the menu bar, instead of disappearing before you have read it.
 
 ### Removed
 <!-- Removed features go here -->
