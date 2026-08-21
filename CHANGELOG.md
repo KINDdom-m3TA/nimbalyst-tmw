@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows open in your theme's own background colour instead of flashing white first, including on themes that come from extensions.
 - Your trackers list your items again instead of coming up empty once your organization has loaded.
 - A background session that marks itself complete still shows as unread in the sessions popover and the menu bar, instead of disappearing before you have read it.
+- A tracker item that has only its own local number now shows that number in agent results and the `nim` command, instead of reporting no key at all and pointing you at a Publish action that a personal tracker refuses and a project with no team cannot complete.
+- Opening a project gives every one of its tracker items a number, instead of only the ones a list happened to load.
 
 ### Removed
 <!-- Removed features go here -->
