@@ -9,7 +9,7 @@ import * as fsp from 'fs/promises';
 import path from 'path';
 import { database, legacyPgliteDatabase } from './PGLiteDatabaseWorker';
 import { CORRUPTED_METADATA_WIPE_SQL } from './corruptedMetadataWipe';
-import { resolveBackend } from './sqlite/BackendSelector';
+import { commitFreshInstallSqlite, resolveBackend } from './sqlite/BackendSelector';
 import { refreshMigrationFlagInBackground } from './sqlite/migrationFlag';
 import { dirSizeBytes } from './sqlite/dirSize';
 import { runForcedMigration } from './bootMigration';
@@ -149,6 +149,18 @@ export async function initializeDatabase(): Promise<SessionStore> {
     logger.main.info(
       `[Database] Backend selector resolved to '${backendChoice.backend}' (reason: ${backendChoice.reason})`,
     );
+
+    // Persist a fresh install's SQLite decision immediately, before the
+    // kill-switch refresh below or anything else can touch the flag file.
+    // Leaving it unwritten meant the decision was recomputed every launch and
+    // whoever wrote the file first got to pick the backend (#1347).
+    if (backendChoice.reason === 'fresh-install-defaults-sqlite') {
+      try {
+        commitFreshInstallSqlite(userDataPath);
+      } catch (flagErr) {
+        logger.main.warn('[Database] failed to persist fresh-install backend flag', flagErr);
+      }
+    }
 
     // Unconditional per-launch heartbeat. Until this shipped there was no way
     // to size the population still on PGLite: `database_error` carries the

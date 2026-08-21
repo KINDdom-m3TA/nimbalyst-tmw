@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- A new install stays on the faster storage engine instead of being switched to the old one after its first launch.
 
 ### Removed
 <!-- Removed features go here -->
