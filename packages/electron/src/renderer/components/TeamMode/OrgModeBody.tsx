@@ -275,7 +275,7 @@ export function OrgModeBody({
   ]);
 
   return (
-    <section className="org-mode-host team-mode flex h-full flex-col overflow-hidden" data-testid="team-mode" data-component="OrgModeHost">
+    <section className="org-mode-host team-mode flex h-full flex-col overflow-hidden bg-[var(--nim-bg)] text-[var(--nim-text)]" data-testid="team-mode" data-component="OrgModeHost">
       {/* Renders nothing: the Messages menu and Cmd+K land here. */}
       <OrgWindowCommandBridge
         surfaceId={surfaceId}
