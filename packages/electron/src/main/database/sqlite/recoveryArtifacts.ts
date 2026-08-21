@@ -58,3 +58,55 @@ export function largestDirBytes(userDataPath: string, dirNames: string[]): numbe
   }
   return largest;
 }
+
+/** Rolling backups written by `DatabaseBackupService`, newest first. */
+export const ROLLING_BACKUP_DIR = 'db-backups';
+const ROLLING_BACKUP_NAMES = [
+  'pglite-db.backup-current',
+  'pglite-db.backup-previous',
+  'pglite-db.backup-oldest',
+];
+
+export interface RestorableBackup {
+  /** Absolute path, so the failure dialog can name something the user can find. */
+  path: string;
+  /** Bare directory name. */
+  name: string;
+  bytes: number;
+}
+
+/**
+ * Every copy of the database still on disk, most promising first: the rolling
+ * backups in `db-backups/`, then anything the worker renamed aside.
+ *
+ * Empty directories are excluded — offering a user a 0-byte "backup" during a
+ * failed launch is worse than saying nothing. Exists so the database-failure
+ * dialog can state what is actually recoverable instead of telling the user to
+ * delete the folder (#1347).
+ */
+export function findRestorableBackups(userDataPath: string): RestorableBackup[] {
+  const found: RestorableBackup[] = [];
+  const consider = (dir: string, name: string) => {
+    const full = path.join(dir, name);
+    const bytes = dirSizeBytes(full);
+    if (bytes > 0) found.push({ path: full, name, bytes });
+  };
+  const rollingDir = path.join(userDataPath, ROLLING_BACKUP_DIR);
+  for (const name of ROLLING_BACKUP_NAMES) consider(rollingDir, name);
+  const { corruptionBackupDirs } = findRecoveryArtifacts(userDataPath);
+  for (const name of [...corruptionBackupDirs].reverse()) consider(userDataPath, name);
+  return found;
+}
+
+/** Compact size for display in a plain-text dialog. */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}

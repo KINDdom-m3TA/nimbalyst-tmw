@@ -3,7 +3,12 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { findRecoveryArtifacts, largestDirBytes } from '../recoveryArtifacts';
+import {
+  findRecoveryArtifacts,
+  findRestorableBackups,
+  formatBytes,
+  largestDirBytes,
+} from '../recoveryArtifacts';
 
 describe('recoveryArtifacts', () => {
   let tmp: string;
@@ -49,6 +54,44 @@ describe('recoveryArtifacts', () => {
     const found = findRecoveryArtifacts(tmp);
     expect(found.corruptionBackupDirs).toHaveLength(2);
     expect(largestDirBytes(tmp, found.corruptionBackupDirs)).toBeGreaterThanOrEqual(5000);
+  });
+
+  // The database-failure dialog reads this to decide whether it can promise
+  // the user their data is recoverable. Getting it wrong in either direction
+  // is what made #1347 destructive.
+  it('lists rolling backups ahead of renamed-aside databases', () => {
+    seedDir(path.join('db-backups', 'pglite-db.backup-current'), 900);
+    seedDir(path.join('db-backups', 'pglite-db.backup-previous'), 800);
+    seedDir('pglite-db.backup-2026-08-20T11-00-00-000Z', 700);
+
+    const names = findRestorableBackups(tmp).map((b) => b.name);
+    expect(names).toEqual([
+      'pglite-db.backup-current',
+      'pglite-db.backup-previous',
+      'pglite-db.backup-2026-08-20T11-00-00-000Z',
+    ]);
+  });
+
+  it('omits empty backups rather than offering a 0-byte recovery', () => {
+    fs.mkdirSync(path.join(tmp, 'db-backups', 'pglite-db.backup-current'), { recursive: true });
+    seedDir(path.join('db-backups', 'pglite-db.backup-previous'), 640);
+
+    const found = findRestorableBackups(tmp);
+    expect(found.map((b) => b.name)).toEqual(['pglite-db.backup-previous']);
+    expect(found[0].bytes).toBeGreaterThanOrEqual(640);
+    expect(found[0].path).toContain(path.join('db-backups', 'pglite-db.backup-previous'));
+  });
+
+  it('says there is nothing to restore when no backup holds data', () => {
+    seedDir('pglite-db', 4096);
+    expect(findRestorableBackups(tmp)).toEqual([]);
+  });
+
+  it('formats sizes for the dialog', () => {
+    expect(formatBytes(512)).toBe('512 B');
+    expect(formatBytes(1024)).toBe('1.0 KB');
+    expect(formatBytes(30 * 1024 * 1024)).toBe('30 MB');
+    expect(formatBytes(1536 * 1024 * 1024)).toBe('1.5 GB');
   });
 
   it('returns nothing rather than throwing when userData is unreadable', () => {

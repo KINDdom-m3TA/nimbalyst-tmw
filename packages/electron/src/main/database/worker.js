@@ -21,6 +21,7 @@ const path = require('path');
 const inspector = require('node:inspector');
 const { performance } = require('node:perf_hooks');
 const { serializeWorkerError } = require('./workerErrorSerialization');
+const { planInitFailureResponse } = require('./pgliteInitRecovery');
 
 // ---------------------------------------------------------------------------
 // CPU profile auto-capture for the PGLite worker.
@@ -502,11 +503,19 @@ class PGLiteWorker {
 
           console.error(`[PGLite Worker] Database initialization failed (attempt ${initAttempt}/${maxAttempts}):`, errorStr);
 
-          // An abort, which *may* mean on-disk damage but usually does not.
-          const isCorruptionError = errorStr.includes('Aborted') || errorName === 'RuntimeError';
+          // Decision lives in pgliteInitRecovery.js so it can be tested
+          // without standing up a real PGLite.
+          const plan = planInitFailureResponse({
+            errorMessage: errorStr,
+            errorName,
+            attempt: initAttempt,
+            maxAttempts,
+            renameAllowedFromAttempt,
+            dataDirExists: fs.existsSync(this.dataDir),
+          });
 
-          if (!isCorruptionError || initAttempt >= maxAttempts) {
-            // Not recoverable here, or we are out of attempts - re-throw.
+          if (plan.action === 'rethrow') {
+            console.error(`[PGLite Worker] Not recovering (${plan.reason})`);
             throw dbError;
           }
 
@@ -519,13 +528,9 @@ class PGLiteWorker {
           }
           this.db = null;
 
-          if (initAttempt < renameAllowedFromAttempt) {
+          if (plan.action === 'retry') {
             console.warn('[PGLite Worker] Init aborted; retrying the same data directory before any recovery');
             continue;
-          }
-
-          if (!fs.existsSync(this.dataDir)) {
-            throw dbError;
           }
 
           // Repeated aborts on the same directory. Now treat it as corrupt:
