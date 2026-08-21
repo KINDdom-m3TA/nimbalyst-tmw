@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Nimbalyst never sets an existing database aside on its own: if it will not start, you are shown the backups that exist and asked, instead of being handed an empty app that looks fine.
 
 ### Removed
 <!-- Removed features go here -->
