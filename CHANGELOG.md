@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Removing a team member or revoking their project access now takes effect immediately on connections they already have open, instead of only when they next reconnect.
 
 ### Removed
 <!-- Removed features go here -->
