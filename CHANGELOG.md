@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Turning off an automation now actually stops it — a disabled automation could keep running on its schedule while showing as Disabled.
 - Removing a team member or revoking their project access now takes effect immediately on connections they already have open, instead of only when they next reconnect.
 - The context-usage indicator hides itself for agents that cannot report usage, instead of sitting at a permanent 0%.
 
