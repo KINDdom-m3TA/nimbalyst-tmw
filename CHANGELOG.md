@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- Calc Sheets can mix narrative Markdown with calculations without treating prose as a formula error, and now recognize `ln` as the natural logarithm.
 
 ### Fixed
 <!-- Bug fixes go here -->
