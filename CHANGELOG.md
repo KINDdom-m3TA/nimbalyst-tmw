@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OpenCode sessions support slash commands and Compact, and can run as one of your configured agent roles.
 - Creating an automation can now set where its output goes, what the output file is called, and whether it starts enabled.
 - Click a spot on a shared mockup to leave a comment there: pins are labeled with the author, sync live to everyone in the document, keep their place when an AI regenerates the mockup, and can be read and replied to by an agent — on the desktop and in the browser.
+- Trackers can record what an item is waiting on, and a built-in Ready view lists the open work whose blockers are all cleared, most-unblocking first, with blocked items showing what is holding them up and a warning when a set of items is waiting on itself.
 
 ### Changed
 <!-- Changes to existing functionality go here -->

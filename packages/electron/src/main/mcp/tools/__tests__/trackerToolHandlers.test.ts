@@ -62,7 +62,7 @@ const {
   mockGlobalRegistry: {
     // `(): any` so tests can return partial models; inferring `undefined` from
     // this default made every such override an error.
-    get: vi.fn((): any => undefined),
+    get: vi.fn((_type?: string): any => undefined),
     getAll: vi.fn(() => []),
     validate: vi.fn(() => ({ valid: true, errors: [] as Array<{ field: string; message: string }> })),
   },
@@ -150,6 +150,7 @@ vi.mock('../../../window/WindowManager', () => ({
 
 vi.mock('@nimbalyst/runtime/plugins/TrackerPlugin/models/TrackerDataModel', () => ({
   globalRegistry: mockGlobalRegistry,
+  getRoleField: (model: any, role: string) => model?.roles?.[role],
 }));
 
 vi.mock('electron', () => ({
@@ -185,6 +186,7 @@ import {
   handleTrackerLinkSession,
   handleTrackerList,
   handleTrackerListTypes,
+  handleTrackerReady,
   handleTrackerUnlinkSession,
   handleTrackerUpdate,
   readLinkedTrackerItemIds,
@@ -195,12 +197,17 @@ import { getTrackerDisplayRef, issueKeyMessage, issueKeyStatus } from '../tracke
 import { isTrackerSyncActive, isTrackerSyncConfigured, syncTrackerItem } from '../../../services/TrackerSyncManager';
 import { assignLocalKeysToRows } from '../../../services/tracker/localKeyAllocator';
 import { getEffectiveTrackerSharingPolicy, shouldSyncTrackerItem } from '../../../services/TrackerPolicyService';
-import { resolveTrackerPromotionEligibility } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerLifecycle';
+import {
+  resolveTrackerPromotionEligibility,
+  TRACKER_LOCAL_ISSUE_KEY_MESSAGE,
+} from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerLifecycle';
+import { READINESS_FILTER_FIELD } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerStatusCategory';
 
 describe('handleTrackerList structured records', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDocumentServices.clear();
+    mockGlobalRegistry.get.mockReturnValue(undefined);
   });
 
   it('returns custom fields under `full` and honors the all-items sentinel', async () => {
@@ -249,6 +256,454 @@ describe('handleTrackerList structured records', () => {
     // The blank binary clause must select the empty-owner item, not vanish and
     // return everything (the pre-`is-empty` idiom).
     expect(items.map((i: any) => i.id)).toEqual(['a']);
+  });
+
+  it('computes readiness before open and archive filters remove blockers', async () => {
+    mockGlobalRegistry.get.mockImplementation((type?: string) => type === 'task' ? {
+      type: 'task',
+      roles: { workflowStatus: 'status' },
+      fields: [
+        {
+          name: 'status',
+          type: 'select',
+          options: [
+            { value: 'to-do', label: 'To Do', category: 'unstarted' },
+            { value: 'in-progress', label: 'In Progress', category: 'started' },
+            { value: 'done', label: 'Done', category: 'done' },
+          ],
+        },
+        {
+          name: 'dependsOn',
+          type: 'relationship',
+          relationshipTypeKey: 'depends-on',
+        },
+      ],
+    } : undefined);
+    mockDocService.listTrackerItems.mockResolvedValue([
+      {
+        id: 'terminal-blocker',
+        type: 'task',
+        typeTags: ['task'],
+        title: 'Terminal blocker',
+        status: 'done',
+        workspace: '/tmp/ws',
+        archived: 1,
+      },
+      {
+        id: 'open-blocker',
+        type: 'task',
+        typeTags: ['task'],
+        title: 'Open blocker',
+        status: 'in-progress',
+        workspace: '/tmp/ws',
+        archived: 1,
+      },
+      {
+        id: 'cleared-dependent',
+        type: 'task',
+        typeTags: ['task'],
+        title: 'Cleared dependent',
+        status: 'to-do',
+        workspace: '/tmp/ws',
+        archived: 0,
+        customFields: { dependsOn: [{ itemId: 'terminal-blocker' }] },
+      },
+      {
+        id: 'blocked-dependent',
+        type: 'task',
+        typeTags: ['task'],
+        title: 'Blocked dependent',
+        status: 'to-do',
+        workspace: '/tmp/ws',
+        archived: 0,
+        customFields: { dependsOn: [{ itemId: 'open-blocker' }] },
+      },
+    ]);
+    mockDocumentServices.set('/tmp/ws', mockDocService);
+
+    const result = await handleTrackerList(
+      { where: [{ field: READINESS_FILTER_FIELD, op: '=', value: 'ready' }] },
+      '/tmp/ws',
+    );
+    const items = JSON.parse(result.content[0].text!).structured.items;
+
+    expect(items.map((item: any) => item.id)).toEqual(['cleared-dependent']);
+  });
+
+  it('ranks ready work by leverage before priority', async () => {
+    mockGlobalRegistry.get.mockImplementation((type?: string) => type === 'task' ? {
+      type: 'task',
+      roles: { workflowStatus: 'status', priority: 'priority' },
+      fields: [
+        {
+          name: 'status',
+          type: 'select',
+          options: [
+            { value: 'to-do', label: 'To Do', category: 'unstarted' },
+            { value: 'done', label: 'Done', category: 'done' },
+          ],
+        },
+        {
+          name: 'priority',
+          type: 'select',
+          options: ['low', 'medium', 'high', 'critical'],
+        },
+        {
+          name: 'dependsOn',
+          type: 'relationship',
+          relationshipTypeKey: 'depends-on',
+        },
+      ],
+    } : undefined);
+    mockDocService.listTrackerItems.mockResolvedValue([
+      {
+        id: 'high-priority',
+        type: 'task',
+        typeTags: ['task'],
+        title: 'High priority',
+        status: 'to-do',
+        priority: 'critical',
+        workspace: '/tmp/ws',
+        updated: '2026-08-22T12:00:00.000Z',
+      },
+      {
+        id: 'high-leverage',
+        type: 'task',
+        typeTags: ['task'],
+        title: 'High leverage',
+        status: 'to-do',
+        priority: 'low',
+        workspace: '/tmp/ws',
+        updated: '2026-08-22T11:00:00.000Z',
+      },
+      ...['dependent-a', 'dependent-b'].map((id) => ({
+        id,
+        type: 'task',
+        typeTags: ['task'],
+        title: id,
+        status: 'to-do',
+        priority: 'high',
+        workspace: '/tmp/ws',
+        customFields: { dependsOn: [{ itemId: 'high-leverage' }] },
+      })),
+    ]);
+    mockDocumentServices.set('/tmp/ws', mockDocService);
+
+    const result = await handleTrackerReady({ type: 'task' }, '/tmp/ws');
+    const items = JSON.parse(result.content[0].text!).structured.items;
+
+    expect(items.map((item: any) => item.id)).toEqual(['high-leverage', 'high-priority']);
+    expect(items.map((item: any) => item.unblocks)).toEqual([2, 0]);
+  });
+
+  // Readiness is derived over the unfiltered corpus (pinned by the test above)
+  // and must stay that way, so the explanation reaching the caller is the only
+  // thing the caller's own scope may narrow. A blocker the filters excluded
+  // still has to be counted -- work that reads unready with no reason is its own
+  // bug -- but its title is attacker-influenced free text landing in an agent's
+  // context, and its dotted ref is private to this machine.
+  it('counts a filtered-out blocker without disclosing its title or ref', async () => {
+    mockGlobalRegistry.get.mockImplementation((type?: string) => {
+      const statusField = (options: Array<{ value: string; category: string }>) => ({
+        name: 'status',
+        type: 'select',
+        options: options.map((option) => ({ ...option, label: option.value })),
+      });
+      if (type === 'bug') {
+        return {
+          type: 'bug',
+          roles: { workflowStatus: 'status' },
+          fields: [
+            statusField([
+              { value: 'to-do', category: 'unstarted' },
+              { value: 'in-progress', category: 'started' },
+              { value: 'done', category: 'done' },
+            ]),
+            { name: 'dependsOn', type: 'relationship', relationshipTypeKey: 'depends-on' },
+          ],
+        };
+      }
+      if (type === 'plan') {
+        return {
+          type: 'plan',
+          roles: { workflowStatus: 'status' },
+          fields: [
+            statusField([
+              { value: 'in-progress', category: 'started' },
+              { value: 'completed', category: 'done' },
+            ]),
+          ],
+        };
+      }
+      return undefined;
+    });
+    mockDocService.listTrackerItems.mockResolvedValue([
+      {
+        id: 'visible-blocker',
+        localKey: 'NIM.10',
+        type: 'bug',
+        typeTags: ['bug'],
+        title: 'Open bug blocker',
+        status: 'in-progress',
+        workspace: '/tmp/ws',
+        archived: 0,
+      },
+      {
+        id: 'hidden-blocker',
+        localKey: 'NIM.9001',
+        type: 'plan',
+        typeTags: ['plan'],
+        title: 'Confidential roadmap',
+        status: 'in-progress',
+        workspace: '/tmp/ws',
+        archived: 1,
+      },
+      {
+        id: 'dependent',
+        localKey: 'NIM.11',
+        type: 'bug',
+        typeTags: ['bug'],
+        title: 'Dependent bug',
+        status: 'to-do',
+        workspace: '/tmp/ws',
+        archived: 0,
+        customFields: {
+          dependsOn: [{ itemId: 'hidden-blocker' }, { itemId: 'visible-blocker' }],
+        },
+      },
+    ]);
+    mockDocumentServices.set('/tmp/ws', mockDocService);
+
+    const result = await handleTrackerList({ type: 'bug', readiness: 'blocked' }, '/tmp/ws');
+    const text = result.content[0].text!;
+    const items = JSON.parse(text).structured.items;
+
+    expect(items.map((item: any) => item.id)).toEqual(['dependent']);
+    // Exact, not `objectContaining`: the point of the redaction is the fields
+    // that are absent, and a partial match would pass with the title present.
+    expect(items[0].blockedBy).toEqual([
+      {
+        itemId: 'hidden-blocker',
+        type: 'plan',
+        status: 'in-progress',
+        statusCategory: 'started',
+        outOfScope: true,
+      },
+      {
+        itemId: 'visible-blocker',
+        ref: 'NIM.10',
+        refStatus: 'local',
+        title: 'Open bug blocker',
+        type: 'bug',
+        status: 'in-progress',
+        statusCategory: 'started',
+      },
+    ]);
+    expect(text).not.toContain('Confidential roadmap');
+    expect(text).not.toContain('NIM.9001');
+  });
+
+  // A dangling target does not block -- it is far likelier to be a deletion than
+  // real outstanding work -- but swallowing it leaves the item indistinguishable
+  // from genuinely dependency-free work with a broken link nobody can see.
+  it('reports a dangling dependency on work it still classifies as ready', async () => {
+    mockGlobalRegistry.get.mockImplementation((type?: string) => type === 'task' ? {
+      type: 'task',
+      roles: { workflowStatus: 'status' },
+      fields: [
+        {
+          name: 'status',
+          type: 'select',
+          options: [
+            { value: 'to-do', label: 'To Do', category: 'unstarted' },
+            { value: 'done', label: 'Done', category: 'done' },
+          ],
+        },
+        { name: 'dependsOn', type: 'relationship', relationshipTypeKey: 'depends-on' },
+      ],
+    } : undefined);
+    mockDocService.listTrackerItems.mockResolvedValue([
+      {
+        id: 'orphaned',
+        type: 'task',
+        typeTags: ['task'],
+        title: 'Declares a deleted blocker',
+        status: 'to-do',
+        workspace: '/tmp/ws',
+        customFields: { dependsOn: [{ itemId: 'deleted-blocker' }] },
+      },
+    ]);
+    mockDocumentServices.set('/tmp/ws', mockDocService);
+
+    const payload = JSON.parse(
+      (await handleTrackerReady({ type: 'task' }, '/tmp/ws')).content[0].text!,
+    );
+
+    expect(payload.structured.items).toEqual([
+      expect.objectContaining({
+        id: 'orphaned',
+        blockedBy: [],
+        unresolvedBlockerIds: ['deleted-blocker'],
+      }),
+    ]);
+    expect(payload.summary).toContain('no longer in this workspace');
+  });
+
+  it('groups ready work into graph-derived tracks and reports the independent track count', async () => {
+    mockGlobalRegistry.get.mockImplementation((type?: string) => type === 'task' ? {
+      type: 'task',
+      roles: { workflowStatus: 'status' },
+      fields: [
+        {
+          name: 'status',
+          type: 'select',
+          options: [
+            { value: 'to-do', label: 'To Do', category: 'unstarted' },
+            { value: 'done', label: 'Done', category: 'done' },
+          ],
+        },
+        {
+          name: 'dependsOn',
+          type: 'relationship',
+          relationshipTypeKey: 'depends-on',
+        },
+      ],
+    } : undefined);
+    mockDocService.listTrackerItems.mockResolvedValue([
+      {
+        id: 'component-a-dependent',
+        type: 'task',
+        typeTags: ['task'],
+        title: 'Component A dependent',
+        status: 'to-do',
+        workspace: '/tmp/ws',
+        customFields: {
+          dependsOn: [{ itemId: 'component-a-root-1' }, { itemId: 'component-a-root-2' }],
+        },
+      },
+      {
+        id: 'component-a-root-1',
+        type: 'task',
+        typeTags: ['task'],
+        title: 'Component A root 1',
+        status: 'to-do',
+        workspace: '/tmp/ws',
+        updated: '2026-08-22T14:00:00.000Z',
+      },
+      {
+        id: 'isolated',
+        type: 'task',
+        typeTags: ['task'],
+        title: 'Isolated',
+        status: 'to-do',
+        workspace: '/tmp/ws',
+        updated: '2026-08-22T13:00:00.000Z',
+      },
+      {
+        id: 'component-a-root-2',
+        type: 'task',
+        typeTags: ['task'],
+        title: 'Component A root 2',
+        status: 'to-do',
+        workspace: '/tmp/ws',
+        updated: '2026-08-22T12:00:00.000Z',
+      },
+      {
+        id: 'component-b-dependent',
+        type: 'task',
+        typeTags: ['task'],
+        title: 'Component B dependent',
+        status: 'to-do',
+        workspace: '/tmp/ws',
+        customFields: { dependsOn: [{ itemId: 'component-b-root' }] },
+      },
+      {
+        id: 'component-b-root',
+        type: 'task',
+        typeTags: ['task'],
+        title: 'Component B root',
+        status: 'to-do',
+        workspace: '/tmp/ws',
+        updated: '2026-08-22T11:00:00.000Z',
+      },
+    ]);
+    mockDocumentServices.set('/tmp/ws', mockDocService);
+
+    const result = await handleTrackerReady({ type: 'task' }, '/tmp/ws');
+    const payload = JSON.parse(result.content[0].text!);
+
+    expect(payload.structured.trackCount).toBe(3);
+    expect(payload.structured.items.map((item: any) => [item.id, item.trackId])).toEqual([
+      ['component-b-root', 'component-b-dependent'],
+      ['component-a-root-1', 'component-a-dependent'],
+      ['component-a-root-2', 'component-a-dependent'],
+      ['isolated', 'isolated'],
+    ]);
+  });
+
+  it('formats personal blocker refs and emits the local caveat once per response', async () => {
+    mockGlobalRegistry.get.mockImplementation((type?: string) => type === 'task' ? {
+      type: 'task',
+      roles: { workflowStatus: 'status' },
+      fields: [
+        {
+          name: 'status',
+          type: 'select',
+          options: [
+            { value: 'to-do', label: 'To Do', category: 'unstarted' },
+            { value: 'done', label: 'Done', category: 'done' },
+          ],
+        },
+        {
+          name: 'dependsOn',
+          type: 'relationship',
+          relationshipTypeKey: 'depends-on',
+        },
+      ],
+    } : undefined);
+    mockDocService.listTrackerItems.mockResolvedValue([
+      {
+        id: 'blocker',
+        localKey: 'NIM.75',
+        type: 'task',
+        typeTags: ['task'],
+        title: 'Local blocker',
+        status: 'to-do',
+        workspace: '/tmp/ws',
+      },
+      {
+        id: 'dependent',
+        localKey: 'NIM.76',
+        type: 'task',
+        typeTags: ['task'],
+        title: 'Local dependent',
+        status: 'to-do',
+        workspace: '/tmp/ws',
+        customFields: { dependsOn: [{ itemId: 'blocker' }] },
+      },
+    ]);
+    mockDocumentServices.set('/tmp/ws', mockDocService);
+
+    const result = await handleTrackerList({ readiness: 'blocked' }, '/tmp/ws');
+    const text = result.content[0].text!;
+    const payload = JSON.parse(text);
+
+    expect(payload.structured.items).toEqual([
+      expect.objectContaining({
+        id: 'dependent',
+        localKey: 'NIM.76',
+        blockedBy: [expect.objectContaining({
+          itemId: 'blocker',
+          ref: 'NIM.75',
+          refStatus: 'local',
+        })],
+        unblocks: 0,
+      }),
+    ]);
+    expect(payload.structured.items[0]).not.toHaveProperty('issueKey');
+    expect(payload.summary).toContain('[ref: NIM.76]');
+    expect(text).not.toContain('NIM-75');
+    expect(text.split(TRACKER_LOCAL_ISSUE_KEY_MESSAGE)).toHaveLength(2);
   });
 
   // NIM-2072 / NIM-2280: on the SQLite backend `archived` reaches the handler as
