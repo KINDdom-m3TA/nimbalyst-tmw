@@ -12,14 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- New features go here -->
 - OpenCode's model picker now lists the models you are actually signed in for, discovered live instead of a fixed built-in list, with per-model hiding and a refresh control in settings.
 - OpenCode sessions support slash commands and Compact, and can run as one of your configured agent roles.
+- Creating an automation can now set where its output goes, what the output file is called, and whether it starts enabled.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
 - Calc Sheets can mix narrative Markdown with calculations without treating prose as a formula error, and now recognize `ln` as the natural logarithm.
+- Find (Cmd+F) in Tracker Mode jumps to the search box.
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Edits you make to a team tracker while offline — including archiving and deleting — now reach the team as soon as you reconnect, instead of waiting for the next app launch or being lost entirely.
+- Creating a published item while disconnected no longer claims the workspace has no team; it says the issue key is pending until you reconnect.
 - Turning off an automation now actually stops it — a disabled automation could keep running on its schedule while showing as Disabled.
+- Automations write to the output file name you configured; append and replace modes ignored it and always wrote to `output.md`.
 - Removing a team member or revoking their project access now takes effect immediately on connections they already have open, instead of only when they next reconnect.
 - The context-usage indicator hides itself for agents that cannot report usage, instead of sitting at a permanent 0%.
 
