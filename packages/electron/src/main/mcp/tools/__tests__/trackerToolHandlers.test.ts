@@ -101,6 +101,7 @@ vi.mock('../../../services/TrackerPolicyService', () => ({
 
 vi.mock('../../../services/TrackerSyncManager', () => ({
   isTrackerSyncActive: vi.fn(() => false),
+  isTrackerSyncConfigured: vi.fn(() => false),
   syncTrackerItem: vi.fn(),
   onTrackerItemApplied: mockOnTrackerItemApplied,
 }));
@@ -191,7 +192,7 @@ import {
   rowToTrackerItem,
 } from '../trackerToolHandlers';
 import { getTrackerDisplayRef, issueKeyMessage, issueKeyStatus } from '../trackerToolResult';
-import { isTrackerSyncActive, syncTrackerItem } from '../../../services/TrackerSyncManager';
+import { isTrackerSyncActive, isTrackerSyncConfigured, syncTrackerItem } from '../../../services/TrackerSyncManager';
 import { assignLocalKeysToRows } from '../../../services/tracker/localKeyAllocator';
 import { getEffectiveTrackerSharingPolicy, shouldSyncTrackerItem } from '../../../services/TrackerPolicyService';
 import { resolveTrackerPromotionEligibility } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerLifecycle';
@@ -351,6 +352,8 @@ describe('handleTrackerCreate issue-key timing', () => {
     mockGlobalRegistry.validate.mockReturnValue({ valid: true, errors: [] });
     mockAwaitServerIssueKey.mockResolvedValue(null);
     vi.mocked(isTrackerSyncActive).mockReturnValue(true);
+    // Connected implies a room exists; only the offline test parts them.
+    vi.mocked(isTrackerSyncConfigured).mockReturnValue(true);
     vi.mocked(shouldSyncTrackerItem).mockReturnValue(true);
   });
 
@@ -360,6 +363,7 @@ describe('handleTrackerCreate issue-key timing', () => {
     // survives `clearAllMocks` -- either one leaking turns a later test's
     // unrelated create into a synced one.
     vi.mocked(isTrackerSyncActive).mockReturnValue(false);
+    vi.mocked(isTrackerSyncConfigured).mockReturnValue(false);
     vi.mocked(shouldSyncTrackerItem).mockReturnValue(false);
     mockQuery.mockReset();
   });
@@ -384,8 +388,32 @@ describe('handleTrackerCreate issue-key timing', () => {
     return JSON.parse(result.content[0].text);
   }
 
+  // NIM-3659: `canIssueKeys` used to be `isTrackerSyncActive`, which is false
+  // whenever the room is merely disconnected. A published item in a real team
+  // tracker created offline was therefore told the workspace has no team and
+  // that publishing would never produce a key -- both false, and the opposite
+  // polarity of the #1346 failure this message exists to prevent. Whether a key
+  // can EVER be minted is a question about the team, not about the socket.
+  it('tells an offline create the key is pending, not that there is no team', async () => {
+    vi.mocked(isTrackerSyncActive).mockReturnValue(false);
+    vi.mocked(isTrackerSyncConfigured).mockReturnValue(true);
+    vi.mocked(shouldSyncTrackerItem).mockReturnValue(true);
+    setupUnkeyedCreateQueue({ published: true, serverKeyArrives: false });
+
+    const result = await handleTrackerCreate({ type: 'bug', title: 'Offline bug' }, '/tmp/ws');
+    const { structured } = parseResult(result);
+
+    expect(structured.item.issueKeyStatus).toBe('unassigned');
+    expect(structured.item.issueKeyMessage).toMatch(/still pending/);
+    expect(structured.item.issueKeyMessage).not.toMatch(/no team/);
+    // Nothing to wait for while the socket is closed -- that stays on the
+    // connected predicate, or every offline create pays the 2s timeout.
+    expect(mockAwaitServerIssueKey).not.toHaveBeenCalled();
+  });
+
   it('leaves a personal tracker item without any key', async () => {
     vi.mocked(isTrackerSyncActive).mockReturnValue(false);
+    vi.mocked(isTrackerSyncConfigured).mockReturnValue(false);
     vi.mocked(shouldSyncTrackerItem).mockReturnValue(false);
     setupUnkeyedCreateQueue({ published: false, serverKeyArrives: false });
 
