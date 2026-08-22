@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OpenCode's model picker now lists the models you are actually signed in for, discovered live instead of a fixed built-in list, with per-model hiding and a refresh control in settings.
 - OpenCode sessions support slash commands and Compact, and can run as one of your configured agent roles.
 - Creating an automation can now set where its output goes, what the output file is called, and whether it starts enabled.
+- Click a spot on a shared mockup to leave a comment there: pins are labeled with the author, sync live to everyone in the document, keep their place when an AI regenerates the mockup, and can be read and replied to by an agent — on the desktop and in the browser.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
@@ -27,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Automations write to the output file name you configured; append and replace modes ignored it and always wrote to `output.md`.
 - Removing a team member or revoking their project access now takes effect immediately on connections they already have open, instead of only when they next reconnect.
 - The context-usage indicator hides itself for agents that cannot report usage, instead of sitting at a permanent 0%.
+- Arrow keys move through the @-mention list in document comments instead of snapping back to the first name.
 
 ### Removed
 <!-- Removed features go here -->
