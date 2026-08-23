@@ -245,7 +245,7 @@ export class CollabOutboxDrainCoordinator {
   private reportStuckDocuments(stuck: StuckOutboxDocument[]): void {
     const now = Date.now();
     for (const document of stuck) {
-      const key = `${document.identity.orgId} ${document.identity.documentId}`;
+      const key = `${document.identity.orgId}\x00${document.identity.documentId}`;
       const lastReported = this.stuckReportedAt.get(key) ?? 0;
       if (now - lastReported < STUCK_REPORT_INTERVAL_MS) continue;
       this.stuckReportedAt.set(key, now);
