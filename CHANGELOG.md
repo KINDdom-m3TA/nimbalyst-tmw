@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The context-usage indicator hides itself for agents that cannot report usage, instead of sitting at a permanent 0%.
 - Arrow keys move through the @-mention list in document comments instead of snapping back to the first name.
 - A background shell command killed when its turn ends is now reported as killed, with how long it ran, instead of vanishing silently and leaving the agent unable to tell it apart from work you stopped.
+- A file open in an editor tab no longer silently reverts changes an agent or another program makes to it on disk; if the tab cannot show you the new content it stops saving, retries, and tells you rather than overwriting.
 
 ### Removed
 <!-- Removed features go here -->
