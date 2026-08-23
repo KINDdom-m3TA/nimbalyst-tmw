@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Changes to existing functionality go here -->
 - Calc Sheets can mix narrative Markdown with calculations without treating prose as a formula error, and now recognize `ln` as the natural logarithm.
 - Find (Cmd+F) in Tracker Mode jumps to the search box.
+- The feedback request list moved from Shared Docs to your organization, beside the Inbox, so requests you sent are findable alongside the ones sent to you.
 
 ### Fixed
 <!-- Bug fixes go here -->
