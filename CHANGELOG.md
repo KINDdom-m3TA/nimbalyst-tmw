@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Saving a file, opening a folder and switching sessions no longer hang for seconds at a time on a busy workspace — several of the most frequent database queries were scanning whole tables or repeating work they had already done.
 - Edits you make to a team tracker while offline — including archiving and deleting — now reach the team as soon as you reconnect, instead of waiting for the next app launch or being lost entirely.
 - Creating a published item while disconnected no longer claims the workspace has no team; it says the issue key is pending until you reconnect.
 - Turning off an automation now actually stops it — a disabled automation could keep running on its schedule while showing as Disabled.
