@@ -51,6 +51,7 @@ describe('GithubIssueOverlayService', () => {
       };
       const service = createGithubIssueOverlayService({
         db,
+        engine: 'sqlite',
         getDocumentService: () => documentService,
       });
       const input = {

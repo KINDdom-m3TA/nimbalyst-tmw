@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { TrackerItem } from '@nimbalyst/runtime';
 import { getDatabase } from '../database/initialize';
+import { jsonKeyExpr } from '../database/jsonKeyExpr';
+import type { DatabaseEngine } from '../database/PGLiteDatabaseWorker';
 import { documentServices } from '../window/WindowManager';
 import type { ElectronDocumentService } from './ElectronDocumentService';
 import { assertGithubIssueNumber, assertGithubRemote, assertWorkspacePath } from './ghApiHelpers';
@@ -36,6 +38,8 @@ interface DocumentServiceLike {
 
 interface GithubIssueOverlayDependencies {
   db: DatabaseLike;
+  /** Which JSON accessor the overlay-url index is declared with; see jsonKeyExpr. */
+  engine: DatabaseEngine;
   getDocumentService(workspacePath: string): DocumentServiceLike | undefined;
 }
 
@@ -103,7 +107,7 @@ export function createGithubIssueOverlayService(dependencies: GithubIssueOverlay
        WHERE workspace = $1
          AND type = '${GITHUB_ISSUE_OVERLAY_TYPE}'
          AND deleted_at IS NULL
-         AND LOWER(data->>'issueUrl') = $2
+         AND LOWER(${jsonKeyExpr(dependencies.engine, 'data', 'issueUrl')}) = $2
        ORDER BY created ASC
        LIMIT 1`,
       [workspacePath, issueUrl.toLowerCase()],
@@ -189,6 +193,7 @@ export function getGithubIssueOverlayService() {
   if (!instance) {
     instance = createGithubIssueOverlayService({
       db: getDatabase(),
+      engine: getDatabase().getEngine(),
       getDocumentService: (workspacePath) => documentServices.get(workspacePath),
     });
   }
