@@ -8,6 +8,7 @@
 import { atom, type Setter } from 'jotai';
 import { atomFamily } from '../debug/atomFamilyRegistry';
 import { store } from '@nimbalyst/runtime/store';
+import type { TrackerDataSource } from '@nimbalyst/collab-client/trackers';
 
 // ============================================================
 // Types
@@ -671,7 +672,15 @@ export const deleteTrackerViewAtom = atom(
  * and it round-trips through the tracker room's saved-view lane.
  */
 export const sharedTrackerSavedViewsAtom = atom<SavedView[]>([]);
-let sharedViewsLoadVersion = 0;
+const trackerDataSourceAtom = atom<TrackerDataSource | null>(null);
+
+/** Bind the active host data source without exposing its transport to tracker atoms. */
+export const setTrackerDataSourceAtom = atom(
+  null,
+  (_get, set, dataSource: TrackerDataSource | null) => {
+    set(trackerDataSourceAtom, dataSource);
+  },
+);
 
 /** Local + shared views, as the sidebar renders them. */
 export const allTrackerSavedViewsAtom = atom<SavedView[]>((get) =>
@@ -686,13 +695,9 @@ function applySharedViewRecords(set: Setter, records: unknown): void {
   );
 }
 
-export const loadSharedTrackerViewsAtom = atom(
+export const replaceSharedTrackerViewsAtom = atom(
   null,
-  async (_get, set, workspacePath: string) => {
-    const loadVersion = ++sharedViewsLoadVersion;
-    set(sharedTrackerSavedViewsAtom, []);
-    const records = await window.electronAPI.invoke('tracker-saved-views:list', workspacePath);
-    if (loadVersion !== sharedViewsLoadVersion) return;
+  (_get, set, records: unknown) => {
     applySharedViewRecords(set, records);
   },
 );
@@ -705,11 +710,12 @@ export const shareTrackerViewAtom = atom(
   null,
   async (get, set, view: SavedView) => {
     if (!currentWorkspacePath) return;
-    const records = await window.electronAPI.invoke(
-      'tracker-saved-views:share',
-      currentWorkspacePath,
-      { viewId: view.id, payload: serializeSharedSavedView(view) },
-    );
+    const dataSource = get(trackerDataSourceAtom);
+    if (!dataSource) return;
+    const { savedViews: records = [] } = await dataSource.command({
+      type: 'share-saved-view',
+      savedView: { viewId: view.id, payload: serializeSharedSavedView(view) },
+    });
     applySharedViewRecords(set, records);
     const localRemainder = get(trackerSavedViewsAtom).filter((v) => v.id !== view.id);
     if (localRemainder.length !== get(trackerSavedViewsAtom).length) {
@@ -724,11 +730,12 @@ export const unshareTrackerViewAtom = atom(
   null,
   async (get, set, view: SavedView) => {
     if (!currentWorkspacePath) return;
-    const records = await window.electronAPI.invoke(
-      'tracker-saved-views:unshare',
-      currentWorkspacePath,
-      view.id,
-    );
+    const dataSource = get(trackerDataSourceAtom);
+    if (!dataSource) return;
+    const { savedViews: records = [] } = await dataSource.command({
+      type: 'unshare-saved-view',
+      viewId: view.id,
+    });
     applySharedViewRecords(set, records);
     const current = get(trackerSavedViewsAtom);
     if (!current.some((v) => v.id === view.id)) {
@@ -747,11 +754,12 @@ export const removeTrackerViewAtom = atom(
   null,
   async (get, set, view: SavedView) => {
     if (view.shared && currentWorkspacePath) {
-      const records = await window.electronAPI.invoke(
-        'tracker-saved-views:unshare',
-        currentWorkspacePath,
-        view.id,
-      );
+      const dataSource = get(trackerDataSourceAtom);
+      if (!dataSource) return;
+      const { savedViews: records = [] } = await dataSource.command({
+        type: 'unshare-saved-view',
+        viewId: view.id,
+      });
       applySharedViewRecords(set, records);
       return;
     }

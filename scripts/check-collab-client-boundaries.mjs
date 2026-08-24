@@ -76,6 +76,10 @@ export const COLLAB_CLIENT_FORBIDDEN_DEPENDENCIES = [
     name: 'node:*',
     test: (id) => id.startsWith('node:'),
   },
+  {
+    name: 'fs',
+    test: (id) => id === 'fs' || id.startsWith('fs/'),
+  },
 ];
 
 export function findCollabClientBoundaryViolations(moduleIds) {

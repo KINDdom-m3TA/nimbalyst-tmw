@@ -42,15 +42,17 @@ test('allows the draggable block handle into the browser bundle', () => {
   assert.deepEqual(violations, []);
 });
 
-test('fails loudly when React, Lexical, or Yjs is bundled', () => {
+test('fails loudly when React, Lexical, RevoGrid, or Yjs is bundled', () => {
   const violations = findBundledSingletons([
     { id: '/repo/node_modules/react/index.js', external: false },
     { id: '/repo/node_modules/@lexical/yjs/LexicalYjs.mjs', external: false },
+    { id: '/repo/node_modules/@revolist/react-datagrid/dist/react-datagrid.js', external: false },
+    { id: '/repo/node_modules/@revolist/revogrid/dist/index.js?v=one', external: false },
     { id: '/repo/node_modules/yjs/dist/yjs.mjs', external: false },
     { id: 'react', external: true },
   ]);
 
-  assert.deepEqual(violations.map(({ name }) => name), ['React', 'Lexical', 'Yjs']);
+  assert.deepEqual(violations.map(({ name }) => name), ['React', 'Lexical', 'RevoGrid', 'Yjs']);
 });
 
 test('fails loudly when Jotai or the runtime store resolves through two embedded lanes', () => {

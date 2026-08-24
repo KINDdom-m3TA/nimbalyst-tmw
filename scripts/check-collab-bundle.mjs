@@ -98,6 +98,14 @@ export const SINGLETON_CATEGORIES = [
       || id.startsWith('@lexical/'),
   },
   {
+    name: 'RevoGrid',
+    test: (id) => /(^|\/)node_modules\/@revolist\/(?:react-datagrid|revogrid)(?:\/|$)/.test(id)
+      || id === '@revolist/react-datagrid'
+      || id.startsWith('@revolist/react-datagrid/')
+      || id === '@revolist/revogrid'
+      || id.startsWith('@revolist/revogrid/'),
+  },
+  {
     name: 'Yjs',
     test: (id) => /(^|\/)node_modules\/yjs(?:\/|$)/.test(id)
       || id === 'yjs'
@@ -213,7 +221,15 @@ export function findEntrySeparationViolations(report) {
 function resolveSingletonCopies() {
   const hostRequire = createRequire(path.join(repoRoot, 'package.json'));
   const bundleRequire = createRequire(path.join(packageRoot, 'package.json'));
-  const packageNames = ['react', 'react-dom', 'lexical', '@lexical/yjs', 'yjs'];
+  const packageNames = [
+    'react',
+    'react-dom',
+    'lexical',
+    '@lexical/yjs',
+    '@revolist/react-datagrid',
+    '@revolist/revogrid',
+    'yjs',
+  ];
   const resolvePackageRoot = (requireFrom, packageName) => {
     let cursor = path.dirname(requireFrom.resolve(packageName));
     while (cursor !== path.dirname(cursor)) {
@@ -237,7 +253,15 @@ function checkSingletonPeerContract() {
   const manifest = JSON.parse(
     fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'),
   );
-  const requiredPeers = ['react', 'react-dom', 'lexical', '@lexical/yjs', 'yjs'];
+  const requiredPeers = [
+    'react',
+    'react-dom',
+    'lexical',
+    '@lexical/yjs',
+    '@revolist/react-datagrid',
+    '@revolist/revogrid',
+    'yjs',
+  ];
   const missingPeers = requiredPeers.filter((name) => !manifest.peerDependencies?.[name]);
   const runtimeDependencies = requiredPeers.filter((name) => manifest.dependencies?.[name]);
   if (missingPeers.length > 0 || runtimeDependencies.length > 0) {
@@ -370,7 +394,7 @@ export function checkCollabBundle() {
     ]).join('\n');
     throw new Error(
       `host singletons were bundled instead of externalized:\n${details}\n`
-      + 'React, Lexical, and Yjs must be supplied once by the host page.',
+      + 'React, Lexical, RevoGrid, and Yjs must be supplied once by the host page.',
     );
   }
 

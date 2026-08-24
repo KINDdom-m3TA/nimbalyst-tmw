@@ -12,13 +12,15 @@
 import type { ExtensionPlatformService, ExtensionModule } from '@nimbalyst/runtime';
 
 // Import host dependencies that will be shared with extensions
-// ONLY React and Lexical need to be shared (singleton requirements)
+// React, Lexical, and RevoGrid need to be shared (singleton requirements)
 // Extensions should bundle their own utility libraries (zustand, html2canvas, etc.)
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import * as ReactDOMClient from 'react-dom/client';
 import * as jsxRuntime from 'react/jsx-runtime';
 import * as jsxDevRuntime from 'react/jsx-dev-runtime';
+import * as ReactDataGrid from '@revolist/react-datagrid';
+import * as RevoGridCore from '@revolist/revogrid';
 import { createJsxDevRuntimeBridge } from './jsxDevRuntimeBridge';
 import { createReactDomCompat } from './reactDomCompat';
 
@@ -140,6 +142,14 @@ ${exportNames.map((name) => `export const ${name} = __mod?.${name};`).join('\n')
     imports['react-dom/client'] = createModuleUrl('react-dom/client', deps['react-dom/client']);
     imports['react/jsx-runtime'] = createModuleUrl('react/jsx-runtime', deps['react/jsx-runtime']);
     imports['react/jsx-dev-runtime'] = createModuleUrl('react/jsx-dev-runtime', deps['react/jsx-dev-runtime']);
+    imports['@revolist/react-datagrid'] = createModuleUrl(
+      '@revolist/react-datagrid',
+      deps['@revolist/react-datagrid'],
+    );
+    imports['@revolist/revogrid'] = createModuleUrl(
+      '@revolist/revogrid',
+      deps['@revolist/revogrid'],
+    );
 
     imports['lexical'] = createModuleUrl('lexical', deps.lexical);
     imports['@lexical/react/LexicalComposerContext'] = createModuleUrl(
@@ -414,7 +424,7 @@ CHECK:
   /**
    * Expose host dependencies on the window object for extensions to use.
    *
-   * IMPORTANT: Only React and Lexical are shared (singleton requirements).
+   * IMPORTANT: React, Lexical, and RevoGrid are shared (singleton requirements).
    * Extensions should bundle their own utility libraries (zustand, html2canvas, etc.)
    */
   private exposeHostDependencies(): void {
@@ -440,6 +450,10 @@ CHECK:
       'react-dom/client': ReactDOMClient,
       'react/jsx-runtime': jsxRuntime,
       'react/jsx-dev-runtime': shimmedJsxDevRuntime,
+      // RevoGrid's Stencil runtime registers <revo-grid> globally. Every
+      // extension and built-in tracker grid must resolve this one host copy.
+      '@revolist/react-datagrid': ReactDataGrid,
+      '@revolist/revogrid': RevoGridCore,
       // Lexical - extensions contribute nodes to host's editor
       lexical: lexical,
       '@lexical/react/LexicalComposerContext': lexicalReact,

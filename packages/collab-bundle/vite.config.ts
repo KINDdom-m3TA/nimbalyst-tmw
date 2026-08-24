@@ -114,6 +114,10 @@ function isHostSingleton(id: string): boolean {
     || id === 'lexical'
     || id.startsWith('lexical/')
     || id.startsWith('@lexical/')
+    || id === '@revolist/react-datagrid'
+    || id.startsWith('@revolist/react-datagrid/')
+    || id === '@revolist/revogrid'
+    || id.startsWith('@revolist/revogrid/')
     || id === 'yjs'
     || id.startsWith('yjs/');
 }
@@ -146,6 +150,8 @@ export default defineConfig({
       'react-dom',
       'lexical',
       '@lexical/yjs',
+      '@revolist/react-datagrid',
+      '@revolist/revogrid',
       'yjs',
       'jotai',
       'jotai-family',
@@ -175,6 +181,8 @@ export default defineConfig({
       'react-dom',
       'lexical',
       '@lexical/yjs',
+      '@revolist/react-datagrid',
+      '@revolist/revogrid',
       'yjs',
       'jotai',
       'jotai-family',
