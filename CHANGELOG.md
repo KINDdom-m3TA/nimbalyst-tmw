@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 <!-- Changes to existing functionality go here -->
 - The context meter now reports the window Claude Code actually resolved rather than inferring one, so it stays accurate when a compaction limit caps a large-window model.
+- Codex sessions now run on the 0.149.1 Codex release.
 
 ### Fixed
 <!-- Bug fixes go here -->
