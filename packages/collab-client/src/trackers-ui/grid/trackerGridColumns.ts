@@ -41,13 +41,17 @@ function textNode(createElement: HyperFunc<VNode>, text: string, title?: string)
   return createElement('span', { class: 'tracker-grid-cell-text', ...(title ? { title } : {}) }, text);
 }
 
+/**
+ * The hue is handed over as `--tracker-swatch` and `trackerGrid.css` derives the
+ * fill, border and text from it against the theme, the same way the list and
+ * board pills do. The previous `${color}22` / `${color}66` arithmetic printed a
+ * 600-level schema hue at full strength on a tint of itself, which is under AA
+ * on every dark theme.
+ */
 function badgeNode(createElement: HyperFunc<VNode>, text: string, color: string): VNode {
   return createElement(
     'span',
-    {
-      class: 'tracker-grid-cell-badge',
-      style: { backgroundColor: `${color}22`, color, borderColor: `${color}66` },
-    },
+    { class: 'tracker-grid-cell-badge', style: { '--tracker-swatch': color } },
     text,
   );
 }

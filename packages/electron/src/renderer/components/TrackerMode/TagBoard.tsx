@@ -9,6 +9,7 @@ import {
   NEUTRAL_SWATCH,
   PRIORITY_COLORS,
   TrackerSurfaceMessage,
+  TrackerSwatchBadge,
   TYPE_COLORS,
 } from '@nimbalyst/collab-client/trackers-ui';
 
@@ -140,15 +141,10 @@ export const TagBoard: React.FC<TagBoardProps> = ({
                           {getRecordTitle(item)}
                         </div>
                         <div className="flex items-center gap-1.5 mt-1.5">
-                          <span
-                            className="text-[10px] font-medium px-1.5 py-0.5 rounded"
-                            style={{
-                              color: TYPE_COLORS[item.primaryType] || NEUTRAL_SWATCH,
-                              backgroundColor: `${TYPE_COLORS[item.primaryType] || NEUTRAL_SWATCH}20`,
-                            }}
-                          >
-                            {item.primaryType}
-                          </span>
+                          <TrackerSwatchBadge
+                            label={item.primaryType}
+                            color={TYPE_COLORS[item.primaryType] || NEUTRAL_SWATCH}
+                          />
                           {(() => {
                             const owner = getFieldByRole(item, 'assignee') as string | undefined;
                             return owner ? (

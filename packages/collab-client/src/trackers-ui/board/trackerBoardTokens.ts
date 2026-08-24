@@ -41,14 +41,14 @@ export const PRIORITY_COLORS: Record<string, string> = {
   low: '#6b7280',
 };
 
-export const TYPE_COLORS: Record<string, string> = {
-  bug: '#dc2626',
-  task: '#2563eb',
-  plan: '#7c3aed',
-  idea: '#ca8a04',
-  decision: '#8b5cf6',
-  feature: '#10b981',
-};
+/**
+ * Re-exported, not restated. This was a fourth copy of the built-in type
+ * accents and had already lost `automation`, which exists only in the runtime
+ * map -- an `automation` card fell through to the neutral swatch and read as a
+ * type with no color rather than as a missing entry. `trackerTypeIdentity.ts`
+ * is dependency-free precisely so surfaces can consume it directly.
+ */
+export { DEFAULT_TRACKER_TYPE_COLORS as TYPE_COLORS } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerTypeIdentity';
 
 /** Fallback swatch for a value with no assigned color. */
 export const NEUTRAL_SWATCH = '#6b7280';

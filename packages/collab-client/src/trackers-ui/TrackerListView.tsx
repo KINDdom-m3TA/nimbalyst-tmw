@@ -23,6 +23,7 @@ import { groupTrackerItems } from '@nimbalyst/collab-client/trackers';
 import { TrackerSurfaceMessage } from './primitives/TrackerSurfaceMessage';
 import { TrackerSwatchBadge } from './primitives/TrackerSwatchBadge';
 import { NEUTRAL_SWATCH, PRIORITY_COLORS } from './board/trackerBoardTokens';
+import './trackerList.css';
 
 export interface TrackerListViewProps {
   rows: TrackerRecord[];
@@ -67,16 +68,29 @@ function TrackerListRow({
       />
       {unreadSlot}
       {item.issueKey ? (
-        <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.08em] text-nim-faint">
+        // `text-nim-muted`, not `text-nim-faint`: the key is the item's
+        // citable identifier, so it is content. Faint is the decorative tier
+        // and measures 3.49:1 on the dark row background, under AA at any size.
+        <span className="shrink-0 font-mono text-[11px] uppercase tracking-[0.06em] text-nim-muted">
           {item.issueKey}
         </span>
       ) : null}
       <span className="min-w-0 flex-1 truncate text-sm text-nim">{getRecordTitle(item)}</span>
-      <TrackerSwatchBadge label={item.primaryType} color={getTypeColor(item.primaryType)} />
+      <TrackerSwatchBadge
+        label={item.primaryType}
+        color={getTypeColor(item.primaryType)}
+        className="tracker-swatch-badge-column"
+      />
       {status ? (
-        <TrackerSwatchBadge label={status} color={getStatusColor(status, item.primaryType)} />
+        <TrackerSwatchBadge
+          label={status}
+          color={getStatusColor(status, item.primaryType)}
+          className="tracker-swatch-badge-column"
+        />
       ) : null}
-      {owner ? <UserAvatar identity={owner} size={18} /> : null}
+      <span className="tracker-list-row-owner">
+        {owner ? <UserAvatar identity={owner} size={18} /> : null}
+      </span>
     </button>
   );
 }
@@ -117,7 +131,7 @@ export function TrackerListView({
       {groups.map((group) => (
         <div key={group.key} data-testid="tracker-list-group" data-group-key={group.key}>
           {groupBy === 'none' ? null : (
-            <div className="sticky top-0 z-[1] flex items-center gap-2 bg-nim-secondary px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-nim-faint">
+            <div className="sticky top-0 z-[1] flex items-center gap-2 bg-nim-secondary px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-nim-muted">
               <MaterialSymbol icon="chevron_right" size={12} />
               <span className="flex-1 truncate">{group.label}</span>
               <span>{group.items.length}</span>

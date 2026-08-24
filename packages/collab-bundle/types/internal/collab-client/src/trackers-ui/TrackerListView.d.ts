@@ -9,6 +9,7 @@
 import React from 'react';
 import type { TrackerRecord } from '../../../runtime/src/core/TrackerRecord';
 import type { TrackerGroupBy } from '../../../runtime/src/plugins/TrackerPlugin/models/index';
+import './trackerList.css';
 export interface TrackerListViewProps {
     rows: TrackerRecord[];
     groupBy: TrackerGroupBy;

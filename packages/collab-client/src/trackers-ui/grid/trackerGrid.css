@@ -105,12 +105,17 @@
   white-space: nowrap;
 }
 
+/* Same derivation as `trackerSwatch.css`: the cell supplies only the hue. */
 .tracker-grid-cell-badge {
+  --tracker-swatch: var(--nim-text-muted);
+
   display: inline-flex;
   align-items: center;
   padding: 1px 6px;
   border-radius: 9999px;
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--tracker-swatch) 32%, transparent);
+  background: color-mix(in srgb, var(--tracker-swatch) 15%, transparent);
+  color: color-mix(in oklab, var(--tracker-swatch) 55%, var(--nim-text));
   font-size: 11px;
   line-height: 16px;
   white-space: nowrap;

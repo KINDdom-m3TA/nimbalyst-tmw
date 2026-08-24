@@ -5,11 +5,16 @@
  * `color` + `${color}20` background arithmetic, at three slightly different font
  * sizes for no reason anyone recorded. Two sizes are enough: the value's own
  * badge, and the secondary tags that sit beside it.
+ *
+ * The hue is handed to CSS as `--tracker-swatch` and every derived color is
+ * resolved from it against the canonical theme variables -- see
+ * `trackerSwatch.css` for why that is not done here in JS.
  */
 import React from 'react';
+import './trackerSwatch.css';
 export interface TrackerSwatchBadgeProps {
     label: string;
-    /** Hex swatch; the fill and border are derived from it. */
+    /** Hex swatch from the schema; the fill, border and text are derived from it. */
     color: string;
     /** `secondary` is smaller and outlined, for the trailing type tags. */
     variant?: 'primary' | 'secondary';

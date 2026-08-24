@@ -5,7 +5,9 @@
   "license": "MIT",
   "description": "Shared headless and React collaboration client surfaces for Nimbalyst hosts.",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "**/*.css"
+  ],
   "exports": {
     "./core": {
       "types": "./src/core/index.ts",

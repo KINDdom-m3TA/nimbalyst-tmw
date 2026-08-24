@@ -72,7 +72,7 @@ export const TrackerSavedViewsSection: React.FC<{
             )}
             {onDeleteView && !view.builtIn && (
               <button
-                className="opacity-0 group-hover:opacity-100 px-1.5 text-nim-faint hover:text-[#ef4444] transition-opacity"
+                className="opacity-0 group-hover:opacity-100 px-1.5 text-nim-faint hover:text-nim-error transition-opacity"
                 onClick={() => onDeleteView(view)}
                 title={view.shared ? 'Delete view for the whole team' : 'Delete view'}
                 data-testid="tracker-saved-view-delete"

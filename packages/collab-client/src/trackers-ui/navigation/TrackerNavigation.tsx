@@ -38,6 +38,7 @@ import {
 } from '@nimbalyst/collab-client/trackers';
 import { TrackerSavedViewsSection } from '../TrackerSavedViewsSection';
 import { useTrackerUICapabilities } from '../TrackersUIProvider';
+import { ALL_TRACKERS_NAV_MODEL, TrackerNavTypeRow } from './TrackerNavTypeRow';
 
 export interface TrackerNavigationProps {
   trackerTypes: TrackerDataModel[];
@@ -55,37 +56,6 @@ export interface TrackerNavigationProps {
   /** Omit where a view cannot be deleted or reshared; the control is then absent. */
   onDeleteView?: (view: SavedView) => void;
   onToggleShareView?: (view: SavedView) => void;
-}
-
-function TypeRow({
-  tracker,
-  selected,
-  count,
-  nested,
-  onSelect,
-}: {
-  tracker: TrackerDataModel;
-  selected: boolean;
-  count?: number;
-  nested: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      data-testid="tracker-nav-type"
-      data-tracker-type={tracker.type}
-      className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors ${
-        nested ? 'pl-7' : ''
-      } ${selected ? 'bg-nim-active text-nim' : 'text-nim-muted hover:bg-nim-tertiary hover:text-nim'}`}
-      onClick={onSelect}
-    >
-      <MaterialSymbol icon={tracker.icon || 'checklist'} size={16} />
-      <span className="flex-1 text-left truncate">{tracker.displayNamePlural || tracker.displayName}</span>
-      {count === undefined ? null : (
-        <span className="text-[10px] font-semibold text-nim-faint min-w-[20px] text-right">{count}</span>
-      )}
-    </button>
-  );
 }
 
 export function TrackerNavigation({
@@ -114,11 +84,12 @@ export function TrackerNavigation({
   const expanded = useMemo(() => new Set(expandedFolderIds), [expandedFolderIds]);
 
   return (
+    // No "Trackers" title bar over the sections. Desktop needs one because its
+    // sidebar sits under a workspace summary that names a project, not a
+    // surface; here the gutter's selected mode and the pane header above both
+    // already say it, and a third restatement was the same redundancy as the
+    // duplicated breadcrumb segment beside it.
     <div className="tracker-navigation flex flex-col h-full min-h-0" data-testid="tracker-navigation">
-      <div className="px-3 py-1.5 border-b border-nim text-[11px] font-semibold text-nim-muted uppercase tracking-wider">
-        Trackers
-      </div>
-
       <div className="flex-1 overflow-y-auto">
         <TrackerSavedViewsSection
           savedViews={savedViews}
@@ -134,19 +105,12 @@ export function TrackerNavigation({
             Types
           </div>
 
-          <button
+          <TrackerNavTypeRow
             data-testid="tracker-nav-type"
-            data-tracker-type="all"
-            className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors ${
-              selectedType === 'all'
-                ? 'bg-nim-active text-nim'
-                : 'text-nim-muted hover:bg-nim-tertiary hover:text-nim'
-            }`}
+            tracker={ALL_TRACKERS_NAV_MODEL}
+            selected={selectedType === 'all'}
             onClick={() => onSelectType('all')}
-          >
-            <MaterialSymbol icon="checklist" size={16} />
-            <span className="flex-1 text-left truncate">All</span>
-          </button>
+          />
 
           {tree.folders.map(({ folder, trackerTypes: folderTypes }) => {
             const open = expanded.has(folder.folderId);
@@ -164,13 +128,14 @@ export function TrackerNavigation({
                 </button>
                 {open
                   ? folderTypes.map(({ tracker }) => (
-                    <TypeRow
+                    <TrackerNavTypeRow
                       key={tracker.type}
+                      data-testid="tracker-nav-type"
                       tracker={tracker}
                       nested
                       selected={selectedType === tracker.type}
                       count={countsByType?.get(tracker.type)}
-                      onSelect={() => onSelectType(tracker.type)}
+                      onClick={() => onSelectType(tracker.type)}
                     />
                   ))
                   : null}
@@ -179,13 +144,13 @@ export function TrackerNavigation({
           })}
 
           {tree.rootTypes.map(({ tracker }) => (
-            <TypeRow
+            <TrackerNavTypeRow
               key={tracker.type}
+              data-testid="tracker-nav-type"
               tracker={tracker}
-              nested={false}
               selected={selectedType === tracker.type}
               count={countsByType?.get(tracker.type)}
-              onSelect={() => onSelectType(tracker.type)}
+              onClick={() => onSelectType(tracker.type)}
             />
           ))}
         </div>

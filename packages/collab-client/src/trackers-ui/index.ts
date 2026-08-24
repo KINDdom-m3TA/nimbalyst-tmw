@@ -5,7 +5,13 @@
  * Explicit export lists, not `export *` chains -- a re-export shim that silently
  * loses a symbol fails at the far end of the graph, in a host that never
  * changed.
+ *
+ * The entry, not a component, carries the surfaces' element reset: it is the
+ * one module every host loads, and the rule has to be present before any
+ * portalled markup mounts. See `primitives/trackerSurfaceReset.css`.
  */
+
+import './primitives/trackerSurfaceReset.css';
 
 export {
   TrackersUIProvider,
@@ -58,6 +64,9 @@ export type { TrackerSwatchBadgeProps } from './primitives/TrackerSwatchBadge';
 
 export { TrackerNavigation } from './navigation/TrackerNavigation';
 export type { TrackerNavigationProps } from './navigation/TrackerNavigation';
+
+export { ALL_TRACKERS_NAV_MODEL, TrackerNavTypeRow } from './navigation/TrackerNavTypeRow';
+export type { TrackerNavTypeModel, TrackerNavTypeRowProps } from './navigation/TrackerNavTypeRow';
 
 export { TrackerBoardCard } from './board/TrackerBoardCard';
 export type { TrackerBoardCardProps } from './board/TrackerBoardCard';

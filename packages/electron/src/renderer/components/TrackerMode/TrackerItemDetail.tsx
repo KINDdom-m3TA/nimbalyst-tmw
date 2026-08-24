@@ -19,6 +19,7 @@ import {
   NEUTRAL_SWATCH,
   PRIORITY_COLORS,
   STATUS_COLORS,
+  TrackerSwatchBadge,
   TYPE_COLORS,
 } from '@nimbalyst/collab-client/trackers-ui';
 import { isFileBackedRecord, isNativeItem, resolveTrackerContentMode } from './trackerContentMode';
@@ -1305,19 +1306,13 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
               .filter(tag => tag !== item.primaryType)
               .map(tag => {
                 const tagModel = globalRegistry.get(tag);
-                const tagColor = TYPE_COLORS[tag] || NEUTRAL_SWATCH;
                 return (
-                  <span
+                  <TrackerSwatchBadge
                     key={tag}
-                    className="text-[10px] font-medium px-1.5 py-0.5 rounded"
-                    style={{
-                      color: tagColor,
-                      backgroundColor: `${tagColor}15`,
-                      border: `1px solid ${tagColor}30`,
-                    }}
-                  >
-                    {tagModel?.displayName || tag}
-                  </span>
+                    label={tagModel?.displayName || tag}
+                    color={TYPE_COLORS[tag] || NEUTRAL_SWATCH}
+                    variant="secondary"
+                  />
                 );
               })}
             {isNativeItem(item) && (

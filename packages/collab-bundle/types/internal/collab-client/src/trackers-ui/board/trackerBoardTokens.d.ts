@@ -18,6 +18,13 @@ export declare const STATUS_COLORS: Record<string, string>;
  */
 export declare const STATUS_CATEGORY_COLORS: Record<string, string>;
 export declare const PRIORITY_COLORS: Record<string, string>;
-export declare const TYPE_COLORS: Record<string, string>;
+/**
+ * Re-exported, not restated. This was a fourth copy of the built-in type
+ * accents and had already lost `automation`, which exists only in the runtime
+ * map -- an `automation` card fell through to the neutral swatch and read as a
+ * type with no color rather than as a missing entry. `trackerTypeIdentity.ts`
+ * is dependency-free precisely so surfaces can consume it directly.
+ */
+export { DEFAULT_TRACKER_TYPE_COLORS as TYPE_COLORS } from '../../../../runtime/src/plugins/TrackerPlugin/models/trackerTypeIdentity';
 /** Fallback swatch for a value with no assigned color. */
 export declare const NEUTRAL_SWATCH = "#6b7280";
