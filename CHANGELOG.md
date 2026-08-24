@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- Mockups and data models embedded in a document now render as the live editor instead of a saved screenshot, and existing embeds convert on open.
 
 ### Fixed
 <!-- Bug fixes go here -->
@@ -21,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 <!-- Removed features go here -->
-- The `/datamodel` slash command; embed a data model in a document the same way as any other file, by putting a link to it on its own line.
+- The `/datamodel` and `/Mockup` slash commands; embed either in a document the same way as any other file, by putting a link to it on its own line.
 
 ## [0.75.2] - 2026-08-24
 

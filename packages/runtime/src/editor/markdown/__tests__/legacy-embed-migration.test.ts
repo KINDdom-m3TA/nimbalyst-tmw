@@ -35,10 +35,28 @@ describe('upgradeLegacyEmbeds', () => {
     ).toBe('[./billing.prisma](./billing.prisma)');
   });
 
+  it('migrates the retired mockup linked-image form, keeping its size', () => {
+    expect(
+      upgradeLegacyEmbeds(
+        '[![Tracker Studio](.previews/tracker.png)](./tracker-studio.mockup.html){1200x760}',
+      ),
+    ).toBe('[Tracker Studio](./tracker-studio.mockup.html "width=1200 height=760")');
+  });
+
+  it('leaves a linked thumbnail pointing at an ordinary file alone', () => {
+    // The retired form is only reinterpretable for suffixes that actually
+    // shipped a node writing it. A clickable thumbnail is normal CommonMark and
+    // rewriting one would drop the image the author put there on purpose.
+    const markdown = '[![Full size](thumb.png)](photo.png){800x600}';
+
+    expect(upgradeLegacyEmbeds(markdown)).toBe(markdown);
+  });
+
   it('leaves current embed links and ordinary images unchanged', () => {
     const markdown = [
       '[Architecture](../architecture/system.excalidraw "width=1000 height=650")',
       '[Billing schema](./schemas/billing.prisma "width=900 height=640")',
+      '[Tracker Studio](./tracker-studio.mockup.html "width=1200 height=760")',
       '![Screenshot](screenshot.png){800x600}',
     ].join('\n\n');
 
