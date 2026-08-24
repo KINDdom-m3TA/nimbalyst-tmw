@@ -77,7 +77,7 @@
     "@types/ws": "^8.18.1",
     "@vscode/ripgrep": "^1.17.1",
     "abort-controller": "^3.0.0",
-    "adm-zip": "^0.5.18",
+    "adm-zip": "^0.6.0",
     "agentkeepalive": "^4.6.0",
     "better-sqlite3": "13.0.1",
     "chardet": "^2.1.1",
