@@ -30,6 +30,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { PGlite } from '@electric-sql/pglite';
 import { SQLiteDatabase } from '../SQLiteDatabase';
 import { SQLiteBackupService } from '../../../services/database/SQLiteBackupService';
+import { verifyBackupOffThread } from '../backupVerification';
 import { MigrationOrchestrator, type LivePgliteReader as OrchestratorLivePgliteReader } from '../MigrationOrchestrator';
 import { MigrationDryRunner } from '../MigrationDryRunner';
 import { MigrationAdopter } from '../MigrationAdopter';
@@ -333,6 +334,13 @@ async function handle(req: RequestEnvelope): Promise<unknown> {
         sqlite,
         log: (level, msg, meta) => log(level, msg, meta),
         copiesKept: opts.backupCopiesKept,
+        // Verification is a full synchronous scan of a file that can be
+        // several GB. Run on this thread it stops the message loop dead and
+        // every queued `query` times out; hand it to a short-lived worker
+        // instead. `__filename` is this bundle, and the verify bundle ships
+        // beside it (out/ in dev, Resources/ when packaged).
+        verify: (backupPath) =>
+          verifyBackupOffThread(backupPath, path.dirname(__filename), log),
       });
       await backupService.initialize();
       sqlite.setBackupService(backupService);
@@ -397,7 +405,8 @@ async function handle(req: RequestEnvelope): Promise<unknown> {
 
     case 'verifyBackup': {
       const { backupPath } = req.payload as VerifyBackupPayload;
-      return ensureInitialized().verifyBackup(backupPath);
+      // Off-thread for the same reason the backup service verifies off-thread.
+      return verifyBackupOffThread(backupPath, path.dirname(__filename), log);
     }
 
     case 'getBackupStatus':
