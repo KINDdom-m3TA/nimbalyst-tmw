@@ -79,6 +79,27 @@ function migrateViewMode(
 }
 
 /**
+ * Reload the team-shared saved views for a workspace.
+ *
+ * The shared views are normally populated by the tracker sync listener's
+ * startup snapshot, but `initTrackerPanelLayout` clears them synchronously and
+ * the two run on independent async chains -- when the snapshot's IPC round
+ * trips beat React's commit of `workspacePath`, the clear lands last and the
+ * team's views vanish from the sidebar until an unrelated share/unshare event
+ * happens to refill them (#3731). Whoever clears the atom must also refill it.
+ */
+async function refreshSharedSavedViews(workspacePath: string): Promise<void> {
+  try {
+    const records = await window.electronAPI.invoke('tracker-saved-views:list', workspacePath);
+    // A response for a project the user has already left must not repopulate.
+    if (currentWorkspacePath !== workspacePath) return;
+    store.set(replaceSharedTrackerViewsAtom, records);
+  } catch (err) {
+    console.error('[trackers] Failed to load shared saved views:', err);
+  }
+}
+
+/**
  * Initialize tracker layout from workspace state.
  * Call this when workspace path is known.
  */
@@ -90,6 +111,7 @@ export async function initTrackerPanelLayout(workspacePath: string): Promise<voi
   store.set(trackerModeLayoutAtom, DEFAULT_MODE_LAYOUT);
   store.set(trackerSavedViewsAtom, []);
   store.set(sharedTrackerSavedViewsAtom, []);
+  void refreshSharedSavedViews(workspacePath);
 
   try {
     const workspaceState = await window.electronAPI.invoke(

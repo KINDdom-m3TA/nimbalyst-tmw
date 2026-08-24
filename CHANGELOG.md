@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - The inbox now names who sent each message instead of showing your teammates as "Unknown member".
+- Saved views shared with your team no longer go missing from the tracker sidebar on startup.
 - Sending a queued prompt while a background sub-agent is running no longer leaves the session stuck on "Thinking..." or later claims a sub-agent was interrupted when none was.
 - On a large database, the startup backup no longer stalls everything you do for about a minute, flooding the app with timeout errors and then reporting the backup as failed when it had actually succeeded.
 
