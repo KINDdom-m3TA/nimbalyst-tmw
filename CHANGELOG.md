@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 <!-- Removed features go here -->
+- The `/datamodel` slash command; embed a data model in a document the same way as any other file, by putting a link to it on its own line.
 
 ## [0.75.2] - 2026-08-24
 

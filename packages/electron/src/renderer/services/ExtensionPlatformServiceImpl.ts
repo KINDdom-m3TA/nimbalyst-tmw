@@ -69,8 +69,6 @@ import * as yProtocolsAwareness from 'y-protocols/awareness';
 import { MonacoEditor, MonacoCodeEditor } from '@nimbalyst/runtime/editors';
 import { NimbalystMarkdownEditor } from '../components/editors/NimbalystMarkdownEditor';
 
-// Import DataModel platform service for datamodellm extension
-import { DataModelPlatformServiceImpl } from './DataModelPlatformServiceImpl';
 import { buildExtensionFileWriteInvocation } from './extensionFileWriteInvocation';
 
 // Declare importShim global from es-module-shims
@@ -191,11 +189,6 @@ ${exportNames.map((name) => `export const ${name} = __mod?.${name};`).join('\n')
       '@nimbalyst/screenshot-service',
       deps['@nimbalyst/screenshot-service']
     );
-    imports['@nimbalyst/datamodel-platform-service'] = createModuleUrl(
-      '@nimbalyst/datamodel-platform-service',
-      deps['@nimbalyst/datamodel-platform-service']
-    );
-
     // @nimbalyst/runtime - umbrella module that re-exports common extension dependencies
     imports['@nimbalyst/runtime'] = createModuleUrl(
       '@nimbalyst/runtime',
@@ -478,11 +471,6 @@ CHECK:
       // Core services for extensions
       '@nimbalyst/screenshot-service': {
         screenshotService,
-      },
-      // Extension-specific services
-      '@nimbalyst/datamodel-platform-service': {
-        DataModelPlatformServiceImpl,
-        getInstance: () => DataModelPlatformServiceImpl.getInstance(),
       },
       // @nimbalyst/runtime - umbrella re-export of common extension dependencies
       // Extensions can import { MaterialSymbol, useDocumentPath, useEditorLifecycle, ... } from '@nimbalyst/runtime'

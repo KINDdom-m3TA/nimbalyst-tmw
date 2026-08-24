@@ -46,19 +46,39 @@ export interface EnhancedImportResult {
 }
 
 /**
- * Upgrade the retired screenshot-plus-`{mockup:...}` syntax to the universal
- * paragraph-link contract used by EmbeddedFileNode. Keeping this migration at
+ * Upgrade the retired per-extension embed syntaxes to the universal
+ * paragraph-link contract used by EmbeddedFileNode. Keeping these migrations at
  * the markdown import boundary lets old plans repair themselves on their next
  * save without teaching the image transformer about custom editors.
+ *
+ * Two retired forms:
+ *
+ *   - `![alt](shot.png){mockup:path}{WxH}` — MockupLM's screenshot-plus-brace.
+ *   - `[![alt](shot.png)](path.prisma){WxH}` — DataModelLM's linked image. It
+ *     shipped its own Lexical node and markdown transformer; both were removed
+ *     once the neutral embed covered the same job.
+ *
+ * The linked-image form does survive without this pass -- it is already a link
+ * whose target is embeddable, so `EmbedExtension` upgrades it -- but the inner
+ * image would be its only label, and the `{WxH}` suffix would be left stranded
+ * as literal text beside the embed. Rewriting it here keeps the sizing.
  */
-export function upgradeLegacyMockupEmbeds(markdown: string): string {
-  return markdown.replace(
-    /!\[([^\]]*)\]\(([^)]*)\)\{mockup:([^}]+)\}(?:\{(\d+)x(\d+)\})?/g,
-    (_match, altText: string, _screenshotPath: string, embeddedPath: string, width?: string, height?: string) => {
-      const title = width && height ? ` "width=${width} height=${height}"` : '';
-      return `[${altText || embeddedPath}](${embeddedPath}${title})`;
-    },
-  );
+export function upgradeLegacyEmbeds(markdown: string): string {
+  return markdown
+    .replace(
+      /!\[([^\]]*)\]\(([^)]*)\)\{mockup:([^}]+)\}(?:\{(\d+)x(\d+)\})?/g,
+      (_match, altText: string, _screenshotPath: string, embeddedPath: string, width?: string, height?: string) => {
+        const title = width && height ? ` "width=${width} height=${height}"` : '';
+        return `[${altText || embeddedPath}](${embeddedPath}${title})`;
+      },
+    )
+    .replace(
+      /\[!\[([^\]]*)\]\([^)]*\)\]\(([^)]*\.prisma)\)(?:\{(\d+)x(\d+)\})?/g,
+      (_match, altText: string, embeddedPath: string, width?: string, height?: string) => {
+        const title = width && height ? ` "width=${width} height=${height}"` : '';
+        return `[${altText || embeddedPath}](${embeddedPath}${title})`;
+      },
+    );
 }
 
 /**
@@ -105,7 +125,7 @@ export function $convertFromEnhancedMarkdownString(
     }
   }
 
-  content = upgradeLegacyMockupEmbeds(content);
+  content = upgradeLegacyEmbeds(content);
 
   // Normalize the markdown if requested
   if (normalize) {
