@@ -203,6 +203,7 @@ export default defineConfig({
         editor: resolve(import.meta.dirname, 'src/editor/index.ts'),
         'docs-ui': resolve(import.meta.dirname, 'src/docs-ui.ts'),
         'feedback-ui': resolve(import.meta.dirname, 'src/feedback-ui.ts'),
+        'trackers-ui': resolve(import.meta.dirname, 'src/trackers-ui.ts'),
         inbox: resolve(import.meta.dirname, 'src/inbox.ts'),
       },
       formats: ['es'],

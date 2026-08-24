@@ -433,7 +433,7 @@ CHECK:
 
     // Use the imported modules from the top of this file
     // IMPORTANT: Use namespace imports (* as) to prevent tree-shaking in production builds
-    w.__nimbalyst_extensions = {
+    const hostDependencies = Object.freeze({
       // React core - multiple instances break hooks
       react: React,
       // Compat shape: pre-React-19 extension bundles resolve createRoot off
@@ -495,7 +495,13 @@ CHECK:
         // (see calc-sheets CalcSheetShareViewer).
         MonacoCodeEditor,
       },
-    };
+    });
+    Object.defineProperty(w, '__nimbalyst_extensions', {
+      value: hostDependencies,
+      writable: false,
+      configurable: false,
+      enumerable: false,
+    });
 
     // console.log('[ExtensionPlatformService] Host dependencies exposed');
   }

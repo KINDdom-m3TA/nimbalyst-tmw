@@ -5,6 +5,12 @@ import { TrackerFavoriteStar, type TrackerItemType } from '@nimbalyst/runtime/pl
 import { getRecordTitle, getRecordPriority, getFieldByRole } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerRecordAccessors';
 import { UserAvatar } from '@nimbalyst/runtime/plugins/TrackerPlugin/components/UserAvatar';
 import { groupTrackerItemsByTag } from './trackerTagFilterUtils';
+import {
+  NEUTRAL_SWATCH,
+  PRIORITY_COLORS,
+  TrackerSurfaceMessage,
+  TYPE_COLORS,
+} from '@nimbalyst/collab-client/trackers-ui';
 
 interface TagBoardProps {
   filterType: TrackerItemType | 'all';
@@ -20,22 +26,6 @@ interface TagBoardProps {
   favoriteItemIds?: ReadonlySet<string>;
   onToggleFavorite?: (itemId: string) => void;
 }
-
-const PRIORITY_COLORS: Record<string, string> = {
-  critical: '#ef4444',
-  high: '#f97316',
-  medium: '#eab308',
-  low: '#6b7280',
-};
-
-const TYPE_COLORS: Record<string, string> = {
-  bug: '#dc2626',
-  task: '#2563eb',
-  plan: '#7c3aed',
-  idea: '#ca8a04',
-  decision: '#8b5cf6',
-  feature: '#10b981',
-};
 
 /**
  * Tag board view (NIM-774). Columns are driven by the schema `tags` role —
@@ -69,24 +59,17 @@ export const TagBoard: React.FC<TagBoardProps> = ({
 
   if (allItems.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-nim-muted">
-        <div className="text-center">
-          <MaterialSymbol icon="sell" size={48} className="opacity-30" />
-          <p className="mt-2 text-sm">No items to display</p>
-        </div>
-      </div>
+      <TrackerSurfaceMessage icon="sell" message="No items to display" />
     );
   }
 
   if (columns.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-nim-muted">
-        <div className="text-center">
-          <MaterialSymbol icon="sell" size={48} className="opacity-30" />
-          <p className="mt-2 text-sm">No tags on these items yet</p>
-          <p className="mt-1 text-xs text-nim-faint">Add tags to group them on the tag board.</p>
-        </div>
-      </div>
+      <TrackerSurfaceMessage
+        icon="sell"
+        message="No tags on these items yet"
+        hint="Add tags to group them on the tag board."
+      />
     );
   }
 
@@ -143,7 +126,7 @@ export const TagBoard: React.FC<TagBoardProps> = ({
                     <div className="flex items-start gap-2">
                       <span
                         className="w-2 h-2 rounded-full mt-1.5 shrink-0"
-                        style={{ backgroundColor: PRIORITY_COLORS[getRecordPriority(item) || 'medium'] || '#6b7280' }}
+                        style={{ backgroundColor: PRIORITY_COLORS[getRecordPriority(item) || 'medium'] || NEUTRAL_SWATCH }}
                       />
                       <TrackerUnreadDot itemId={item.id} className="mt-1" />
                       <TrackerFavoriteStar itemId={item.id} isFavorite={favoriteItemIds.has(item.id)} onToggle={onToggleFavorite} />
@@ -160,8 +143,8 @@ export const TagBoard: React.FC<TagBoardProps> = ({
                           <span
                             className="text-[10px] font-medium px-1.5 py-0.5 rounded"
                             style={{
-                              color: TYPE_COLORS[item.primaryType] || '#6b7280',
-                              backgroundColor: `${TYPE_COLORS[item.primaryType] || '#6b7280'}20`,
+                              color: TYPE_COLORS[item.primaryType] || NEUTRAL_SWATCH,
+                              backgroundColor: `${TYPE_COLORS[item.primaryType] || NEUTRAL_SWATCH}20`,
                             }}
                           >
                             {item.primaryType}

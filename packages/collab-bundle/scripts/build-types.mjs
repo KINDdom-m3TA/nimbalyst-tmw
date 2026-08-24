@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const typesRoot = path.join(packageRoot, 'types');
 const internalRoot = path.join(typesRoot, 'internal');
-const publicEntries = ['commenting-ui', 'docs-ui', 'feedback-ui', 'inbox'].map((entryName) => ({
+const publicEntries = ['commenting-ui', 'docs-ui', 'feedback-ui', 'trackers-ui', 'inbox'].map((entryName) => ({
   generated: path.join(internalRoot, `collab-bundle/src/${entryName}.d.ts`),
   public: path.join(typesRoot, `${entryName}.d.ts`),
 }));
@@ -34,7 +34,7 @@ function declarationFiles(directory) {
 }
 
 function internalTarget(specifier) {
-  const collabClient = specifier.match(/^@nimbalyst\/collab-client\/(core|docs|docs-ui|feedback|feedback-ui)$/);
+  const collabClient = specifier.match(/^@nimbalyst\/collab-client\/(core|docs|docs-ui|feedback|feedback-ui|trackers|trackers-ui)$/);
   if (collabClient) {
     return path.join(internalRoot, 'collab-client/src', collabClient[1], 'index.d.ts');
   }

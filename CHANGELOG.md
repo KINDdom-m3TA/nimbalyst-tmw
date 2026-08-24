@@ -10,10 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- Work your team's shared trackers from the web console: browse saved views in grid and kanban, open an item and read its body live, edit fields, comment, create items, and drag cards between columns, all converging with the desktop app in real time.
+- A tracker now shows who else is viewing it.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
 - Mockups and data models embedded in a document now render as the live editor instead of a saved screenshot, and existing embeds convert on open.
+- Editing many tracker rows at once — pasting a range, or changing status or priority on a multi-row selection — now applies as a single update instead of one per row.
 
 ### Fixed
 <!-- Bug fixes go here -->

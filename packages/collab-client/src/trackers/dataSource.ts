@@ -1,7 +1,14 @@
 import type { CollabCommand, CollabCommandResult, Unsubscribe } from '@nimbalyst/collab-client/core';
+import type { TrackerMutationRejectCode } from '@nimbalyst/collab-protocol';
 import type { TrackerItem } from '@nimbalyst/runtime/core/DocumentService';
+import type { TeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
+import type { TrackerAccessTermination } from '@nimbalyst/runtime/sync/trackerAccessTermination';
 
 export type { TrackerItem } from '@nimbalyst/runtime/core/DocumentService';
+export type {
+  TrackerAccessTermination,
+  TrackerAccessTerminationReason,
+} from '@nimbalyst/runtime/sync/trackerAccessTermination';
 
 export type TrackerSyncStatus = 'disconnected' | 'connecting' | 'syncing' | 'connected' | 'error';
 
@@ -9,6 +16,20 @@ export interface TrackerSyncState {
   workspacePath: string;
   status: TrackerSyncStatus;
   projectId: string | null;
+  /**
+   * Why the room refused this client, when it did so permanently.
+   *
+   * `status` alone cannot carry this: `error` is also what a transient server
+   * error looks like, and `disconnected` is what a dropped socket looks like,
+   * and both of those are being retried. A surface that cannot tell them apart
+   * either spins forever on a revocation or claims a network blip is a
+   * permission problem. When this is set, no reconnect is pending and none
+   * will be attempted.
+   *
+   * Optional so a host that cannot observe refusals -- the desktop IPC data
+   * source, which sees only the status string -- keeps satisfying the contract.
+   */
+  access?: TrackerAccessTermination | null;
 }
 
 /** Serialized shared-view row projected by TrackerPersistence. */
@@ -20,14 +41,22 @@ export interface TrackerSavedViewRecord {
 export interface TrackerDataSnapshot {
   items: TrackerItem[];
   savedViews: TrackerSavedViewRecord[];
+  /** Remote members currently connected to this tracker room. */
+  presence: TrackerPresenceMember[];
   sync: TrackerSyncState;
+}
+
+export interface TrackerPresenceMember {
+  teamMemberId: TeamMemberId;
+  displayName: string;
+  avatarUrl: string | null;
 }
 
 export interface TrackerMutationRejection {
   workspacePath: string;
   itemId: string;
   clientMutationId?: string;
-  code: 'staleKeyEpoch' | 'rotationLocked' | 'custodyUnavailable' | 'forbidden' | 'malformed';
+  code: TrackerMutationRejectCode;
   message?: string;
 }
 
@@ -36,6 +65,7 @@ export type TrackerDataChange =
   | { type: 'items-upserted'; items: TrackerItem[] }
   | { type: 'items-removed'; itemIds: string[] }
   | { type: 'saved-views-replaced'; savedViews: TrackerSavedViewRecord[] }
+  | { type: 'presence'; members: TrackerPresenceMember[] }
   | { type: 'status'; sync: TrackerSyncState }
   | { type: 'mutation-rejected'; rejection: TrackerMutationRejection }
   | {

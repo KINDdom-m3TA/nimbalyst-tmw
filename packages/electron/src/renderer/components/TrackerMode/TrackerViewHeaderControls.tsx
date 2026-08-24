@@ -13,7 +13,6 @@ import {
   opsForFieldType,
   OP_LABELS,
   UNARY_OPS,
-  type FieldType,
   type TrackerFieldFilter,
   type TrackerFilterOp,
   type TrackerFilterSet,
@@ -29,20 +28,9 @@ import { TrackerAdvancedFilterBuilder } from './TrackerAdvancedFilterBuilder';
 import { TrackerFilterValueMenu } from './TrackerFilterValueMenu';
 import { TRACKER_VIEW_MODE_OPTIONS, normalizeTrackerViewMode } from './trackerViewModes';
 
-export interface TrackerFilterField {
-  id: string;
-  label: string;
-  type?: FieldType;
-  multiValue?: boolean;
-  options?: Array<{
-    value: string;
-    label: string;
-    count?: number;
-    color?: string;
-    icon?: string;
-  }>;
-  group?: 'common' | 'custom' | 'system';
-}
+import type { TrackerFilterField } from '@nimbalyst/collab-client/trackers-ui';
+
+export type { TrackerFilterField, TrackerFilterFieldOption } from '@nimbalyst/collab-client/trackers-ui';
 
 interface TrackerViewHeaderControlsProps {
   itemCount: number;

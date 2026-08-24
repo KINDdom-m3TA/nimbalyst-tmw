@@ -41,12 +41,14 @@ import {
   TrackerViewHeaderControls,
   type TrackerFilterField,
 } from './TrackerViewHeaderControls';
-import { TrackerViewTitle } from './TrackerViewTitle';
-import { TrackerActiveFilterPills } from './TrackerActiveFilterPills';
 import { TrackerFilterOmnibox } from './TrackerFilterOmnibox';
 import { TrackerSyncRejectionBanner } from './TrackerSyncRejectionBanner';
 import { TrackerSharingMigrationBanner } from './TrackerSharingMigrationBanner';
-import { TrackerDependencyCycleBanner } from './TrackerDependencyCycleBanner';
+import {
+  TrackerActiveFilterPills,
+  TrackerDependencyCycleBanner,
+  TrackerViewTitle,
+} from '@nimbalyst/collab-client/trackers-ui';
 import { ImportFromSourceDialog } from './ImportFromSourceDialog';
 import { TrackerDocumentView } from './TrackerDocumentView';
 import {

@@ -31,7 +31,7 @@ import { toggleListEntry } from './trackerSidebarCollapse';
 import type { TrackerTeam } from './useTrackerTeamMembers';
 import type { OwnershipMember } from '../common/TrackerOwnershipChip';
 import { TrackerOwnershipSection } from './TrackerOwnershipSection';
-import { TrackerSavedViewsSection } from './TrackerSavedViewsSection';
+import { TrackerSavedViewsSection } from '@nimbalyst/collab-client/trackers-ui';
 import { trackerSyncConnectionAtom } from '../../store/atoms/trackerSync';
 import { trackerSnoozedUntilByItemIdAtom } from '../../store/atoms/trackerPersonalState';
 import { countInboxItems, type InboxSignals } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';

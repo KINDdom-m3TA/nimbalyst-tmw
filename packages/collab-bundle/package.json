@@ -31,6 +31,10 @@
       "types": "./types/feedback-ui.d.ts",
       "import": "./dist/feedback-ui.js"
     },
+    "./trackers-ui": {
+      "types": "./types/trackers-ui.d.ts",
+      "import": "./dist/trackers-ui.js"
+    },
     "./inbox": {
       "types": "./types/inbox.d.ts",
       "import": "./dist/inbox.js"

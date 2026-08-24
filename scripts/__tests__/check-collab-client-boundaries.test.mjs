@@ -51,6 +51,7 @@ test('derives future headless domains from package exports and excludes UI entri
     './docs-ui': { default: './src/docs-ui/index.ts' },
     './trackers': { default: './src/trackers/index.ts' },
     './trackers-ui': { default: './src/trackers-ui/index.ts' },
+    './trackers-ui/board.css': './src/trackers-ui/board/TrackerBoardCard.css',
   }, '/repo/packages/collab-client');
 
   // Compare relative to the synthetic root, normalized to POSIX separators,

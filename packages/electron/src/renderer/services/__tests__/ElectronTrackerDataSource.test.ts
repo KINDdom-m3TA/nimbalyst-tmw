@@ -38,9 +38,11 @@ describe('ElectronTrackerDataSource', () => {
   it('projects snapshots and translates scoped IPC events into contract changes', async () => {
     let listedItems = [item('one')];
     let savedViews = [{ viewId: 'mine', payload: '{"name":"Mine"}' }];
+    const presence = [{ teamMemberId: 'member-bob', displayName: 'Bob', avatarUrl: null }];
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'document-service:tracker-items-list') return listedItems;
       if (channel === 'tracker-saved-views:list') return savedViews;
+      if (channel === 'tracker-sync:get-presence') return presence;
       if (channel === 'tracker-sync:get-status') {
         return { status: 'connected', projectId: 'project-1' };
       }
@@ -57,6 +59,7 @@ describe('ElectronTrackerDataSource', () => {
     await expect(source.snapshot()).resolves.toEqual({
       items: listedItems,
       savedViews,
+      presence,
       sync: {
         workspacePath: '/workspace/one',
         status: 'connected',
@@ -88,6 +91,10 @@ describe('ElectronTrackerDataSource', () => {
     handlers.get('tracker-sync:config-changed')?.({
       workspacePath: '/workspace/one',
       config: { issueKeyPrefix: 'NIM' },
+    });
+    handlers.get('tracker-sync:presence-changed')?.({
+      workspacePath: '/workspace/one',
+      members: presence,
     });
 
     listedItems = [item('metadata-refresh')];
@@ -135,6 +142,7 @@ describe('ElectronTrackerDataSource', () => {
           workspacePath: '/workspace/one',
           config: { issueKeyPrefix: 'NIM' },
         },
+        { type: 'presence', members: presence },
       ]),
     );
     expect(changes).not.toContainEqual(

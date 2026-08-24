@@ -1,0 +1,139 @@
+/**
+ * The two ways a browser host can silently render the wrong answer.
+ *
+ * Both are invisible on screen, and both come from the same missing lane: a
+ * view whose clause the host cannot answer shows zero rows, and a personal
+ * tracker the host cannot carry items for shows an empty grid. Each looks like
+ * a sync that has not arrived yet. Neither prints a warning.
+ */
+
+import React from 'react';
+import { describe, expect, it } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
+import type { TrackerDataModel } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
+import {
+  createDefaultViewDefinition,
+  type SavedViewDefinition,
+} from '@nimbalyst/collab-client/trackers';
+import {
+  BROWSER_TRACKER_UI_CAPABILITIES,
+  DESKTOP_TRACKER_UI_CAPABILITIES,
+  PersonalClauseNotice,
+  TrackerNavigation,
+  TrackersUIProvider,
+  useTrackerViewRows,
+  type TrackerUICapabilities,
+} from '../index';
+
+function record(id: string): TrackerRecord {
+  return {
+    id,
+    primaryType: 'bug',
+    typeTags: ['bug'],
+    issueKey: id.toUpperCase(),
+    fields: { title: id },
+    system: {
+      workspace: '/w',
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    },
+  } as unknown as TrackerRecord;
+}
+
+/** A team-shared view built on the author's own star list. */
+const favoritesView: SavedViewDefinition = {
+  ...createDefaultViewDefinition(),
+  statusScope: 'all',
+  columnFilters: { combinator: 'and', clauses: [{ field: 'favorite', op: '=', value: true }] },
+};
+
+function ViewRowsProbe({ definition }: { definition: SavedViewDefinition }) {
+  const { rows, personalClauses } = useTrackerViewRows(
+    [record('a'), record('b')],
+    definition,
+    { identity: null },
+  );
+  return (
+    <>
+      <span data-testid="row-count">{rows.length}</span>
+      <PersonalClauseNotice clauses={personalClauses} />
+    </>
+  );
+}
+
+function renderProbe(capabilities: TrackerUICapabilities) {
+  return render(
+    <TrackersUIProvider identity={null} capabilities={capabilities}>
+      <ViewRowsProbe definition={favoritesView} />
+    </TrackersUIProvider>,
+  );
+}
+
+describe('a shared view built on a personal-lane clause', () => {
+  it('drops the clause and says so, rather than rendering zero rows, where there is no personal lane', () => {
+    renderProbe(BROWSER_TRACKER_UI_CAPABILITIES);
+    expect(screen.getByTestId('row-count').textContent).toBe('2');
+    expect(screen.getByTestId('tracker-personal-clause-notice').textContent)
+      .toContain('your favorites');
+  });
+
+  it('evaluates the clause, and says nothing, on a host that has the lane', () => {
+    renderProbe(DESKTOP_TRACKER_UI_CAPABILITIES);
+    // Nothing is favorited in this fixture, so the honest desktop answer is zero
+    // rows -- and no marker, because nothing was dropped.
+    expect(screen.getByTestId('row-count').textContent).toBe('0');
+    expect(screen.queryByTestId('tracker-personal-clause-notice')).toBeNull();
+  });
+});
+
+const trackerModel = (type: string, sharing: 'team' | 'personal'): TrackerDataModel => ({
+  type,
+  displayName: type,
+  displayNamePlural: `${type}s`,
+  icon: 'check',
+  color: '#000',
+  modes: { inline: true, fullDocument: false },
+  idPrefix: type.toUpperCase(),
+  idFormat: 'uuid',
+  fields: [],
+  sharing,
+} as TrackerDataModel);
+
+function renderNavigation(capabilities: TrackerUICapabilities) {
+  render(
+    <TrackersUIProvider identity={null} capabilities={capabilities}>
+      <TrackerNavigation
+        trackerTypes={[trackerModel('bug', 'team'), trackerModel('notes', 'personal')]}
+        navigationEntries={[
+          { entryId: 'folder:d', kind: 'folder', folderId: 'd', name: 'Delivery', sortKey: 'a0', ownership: 'team' },
+          { entryId: 'type:bug', kind: 'type-placement', trackerType: 'bug', folderId: 'd', sortKey: 'a0' },
+          { entryId: 'type:notes', kind: 'type-placement', trackerType: 'notes', folderId: 'd', sortKey: 'a1' },
+        ]}
+        savedViews={[]}
+        activeSavedViewId={null}
+        selectedType="all"
+        expandedFolderIds={['d']}
+        onToggleFolder={() => {}}
+        onSelectType={() => {}}
+        onApplyView={() => {}}
+        onDeleteView={() => {}}
+        onToggleShareView={() => {}}
+      />
+    </TrackersUIProvider>,
+  );
+  return screen.getAllByTestId('tracker-nav-type').map((element) => element.dataset.trackerType);
+}
+
+describe('tracker navigation', () => {
+  it('omits a personal tracker where there is no personal lane to fill it', () => {
+    // `notes` is filed in a team folder and would render as a selectable
+    // tracker with nothing in it -- no room carries personal items, so the
+    // empty result reads as a sync that has not arrived.
+    expect(renderNavigation(BROWSER_TRACKER_UI_CAPABILITIES)).toEqual(['all', 'bug']);
+  });
+
+  it('lists it on a host that has the lane', () => {
+    expect(renderNavigation(DESKTOP_TRACKER_UI_CAPABILITIES)).toEqual(['all', 'bug', 'notes']);
+  });
+});

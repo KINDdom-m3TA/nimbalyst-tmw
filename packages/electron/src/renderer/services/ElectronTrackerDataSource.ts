@@ -5,10 +5,12 @@ import type {
   TrackerDataSnapshot,
   TrackerDataSource,
   TrackerItem,
+  TrackerPresenceMember,
   TrackerSavedViewRecord,
   TrackerSyncState,
   TrackerSyncStatus,
 } from '@nimbalyst/collab-client/trackers';
+import { asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 
 interface TrackerItemChangeEvent {
   added?: TrackerItem[];
@@ -41,6 +43,20 @@ function normalizeStatus(value: unknown): TrackerSyncStatus {
     : 'disconnected';
 }
 
+function normalizePresence(value: unknown): TrackerPresenceMember[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((member) => {
+    if (!member || typeof member !== 'object') return [];
+    const candidate = member as Record<string, unknown>;
+    if (typeof candidate.teamMemberId !== 'string' || typeof candidate.displayName !== 'string') return [];
+    return [{
+      teamMemberId: asTeamMemberId(candidate.teamMemberId),
+      displayName: candidate.displayName,
+      avatarUrl: typeof candidate.avatarUrl === 'string' ? candidate.avatarUrl : null,
+    }];
+  });
+}
+
 /** Electron renderer adapter over the existing main-process tracker IPC surface. */
 export class ElectronTrackerDataSource implements TrackerDataSource {
   private readonly workspacePath: string;
@@ -63,9 +79,10 @@ export class ElectronTrackerDataSource implements TrackerDataSource {
 
   async snapshot(): Promise<TrackerDataSnapshot> {
     this.assertActive();
-    const [itemsValue, savedViewsValue, statusValue] = await Promise.all([
+    const [itemsValue, savedViewsValue, presenceValue, statusValue] = await Promise.all([
       this.ipc.invoke('document-service:tracker-items-list'),
       this.ipc.invoke('tracker-saved-views:list', this.workspacePath),
+      this.ipc.invoke('tracker-sync:get-presence', { workspacePath: this.workspacePath }),
       this.ipc.invoke('tracker-sync:get-status', {
         workspacePath: this.workspacePath,
       }),
@@ -74,6 +91,7 @@ export class ElectronTrackerDataSource implements TrackerDataSource {
     return {
       items: Array.isArray(itemsValue) ? (itemsValue as TrackerItem[]) : [],
       savedViews: normalizeSavedViews(savedViewsValue),
+      presence: normalizePresence(presenceValue),
       sync: this.syncState,
     };
   }
@@ -198,6 +216,10 @@ export class ElectronTrackerDataSource implements TrackerDataSource {
       ),
       this.ipc.on('tracker-sync:mutation-rejected', (rejection) => {
         if (rejection) this.emit({ type: 'mutation-rejected', rejection });
+      }),
+      this.ipc.on('tracker-sync:presence-changed', (data) => {
+        if (data?.workspacePath !== this.workspacePath) return;
+        this.emit({ type: 'presence', members: normalizePresence(data.members) });
       }),
       this.ipc.on('tracker-sync:config-changed', (data) => {
         if (!data?.workspacePath || !data.config) return;

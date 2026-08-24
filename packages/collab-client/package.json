@@ -30,7 +30,13 @@
     "./feedback-ui": {
       "types": "./src/feedback-ui/index.ts",
       "default": "./src/feedback-ui/index.ts"
-    }
+    },
+    "./trackers-ui": {
+      "types": "./src/trackers-ui/index.ts",
+      "default": "./src/trackers-ui/index.ts"
+    },
+    "./trackers-ui/board.css": "./src/trackers-ui/board/TrackerBoardCard.css",
+    "./trackers-ui/grid.css": "./src/trackers-ui/grid/trackerGrid.css"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
@@ -43,10 +49,22 @@
     "jotai-family": "^1.1.0"
   },
   "peerDependencies": {
+    "@revolist/react-datagrid": "4.21.4",
+    "@revolist/revogrid": "4.21.4",
     "react": "^19.2.7",
     "yjs": ">=13.5.42"
   },
+  "peerDependenciesMeta": {
+    "@revolist/react-datagrid": {
+      "optional": true
+    },
+    "@revolist/revogrid": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@revolist/react-datagrid": "4.21.4",
+    "@revolist/revogrid": "4.21.4",
     "@types/react": "^19.2.17",
     "react": "^19.2.7",
     "typescript": "^5.0.0",
