@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Commit with AI now pre-selects the hunks your session actually wrote, instead of opening with every change in the file checked.
 
 ### Removed
 <!-- Removed features go here -->
