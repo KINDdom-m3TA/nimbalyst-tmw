@@ -477,7 +477,8 @@
     },
     "linux": {
       "target": "AppImage",
-      "artifactName": "${productName}-Linux.${ext}"
+      "artifactName": "${productName}-Linux.${ext}",
+      "executableName": "nimbalyst"
     },
     "buildVersion": "0.36.5"
   }
