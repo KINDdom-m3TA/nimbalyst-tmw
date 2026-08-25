@@ -7,7 +7,9 @@
  * readable in a browser tab, and all of which would have to be re-proved against
  * a different mutation path. What is shared is the part that must never fork:
  * `buildGridColumns` / `buildGridSource`, which decide what a cell contains and
- * how it compares.
+ * how it compares, and the gesture that separates opening a row from editing a
+ * cell (`handleCellFocus`) -- a table where click means something different in
+ * the browser than on the desktop is worse than either answer alone.
  *
  * RevoGrid is a Stencil web component and its custom elements register
  * globally, so the host page owns exactly one copy (externalized peer,
@@ -36,6 +38,10 @@ export interface TrackerGridSurfaceProps {
     isRowEditable?: (itemId: string) => boolean;
     /** One callback for one cell or a whole pasted range; hosts can batch it. */
     onItemsUpdate?: (entries: readonly TrackerGridUpdateEntry[]) => Promise<unknown> | unknown;
+    /** The row the detail pane is showing; highlighted here so the table agrees. */
+    selectedItemId?: string | null;
+    /** Opens a row into the host's detail. See `handleCellFocus` for the gesture. */
+    onOpenItem?: (itemId: string) => void;
     /** False until the first snapshot resolves. */
     loaded: boolean;
 }
@@ -43,4 +49,4 @@ export interface TrackerGridUpdateEntry {
     itemId: string;
     updates: Record<string, unknown>;
 }
-export declare function TrackerGridSurface({ rows, trackerType, columnConfig, sortBy, sortDirection, columnFilters, onColumnFiltersChange, resolveRelationshipLabel, isRowEditable, onItemsUpdate, loaded, }: TrackerGridSurfaceProps): React.JSX.Element;
+export declare function TrackerGridSurface({ rows, trackerType, columnConfig, sortBy, sortDirection, columnFilters, onColumnFiltersChange, resolveRelationshipLabel, isRowEditable, onItemsUpdate, selectedItemId, onOpenItem, loaded, }: TrackerGridSurfaceProps): React.JSX.Element;

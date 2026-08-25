@@ -7,7 +7,9 @@
  * readable in a browser tab, and all of which would have to be re-proved against
  * a different mutation path. What is shared is the part that must never fork:
  * `buildGridColumns` / `buildGridSource`, which decide what a cell contains and
- * how it compares.
+ * how it compares, and the gesture that separates opening a row from editing a
+ * cell (`handleCellFocus`) -- a table where click means something different in
+ * the browser than on the desktop is worse than either answer alone.
  *
  * RevoGrid is a Stencil web component and its custom elements register
  * globally, so the host page owns exactly one copy (externalized peer,
@@ -16,9 +18,14 @@
  * surface is empty and the row count is not, look there first.
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { RevoGrid, type RevoGridCustomEvent } from '@revolist/react-datagrid';
-import type { AfterEditEvent, BeforeSaveDataDetails, SortingConfig } from '@revolist/revogrid';
+import type {
+  AfterEditEvent,
+  BeforeSaveDataDetails,
+  FocusAfterRenderEvent,
+  SortingConfig,
+} from '@revolist/revogrid';
 import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
 import {
   getDefaultColumnConfig,
@@ -62,6 +69,10 @@ export interface TrackerGridSurfaceProps {
   isRowEditable?: (itemId: string) => boolean;
   /** One callback for one cell or a whole pasted range; hosts can batch it. */
   onItemsUpdate?: (entries: readonly TrackerGridUpdateEntry[]) => Promise<unknown> | unknown;
+  /** The row the detail pane is showing; highlighted here so the table agrees. */
+  selectedItemId?: string | null;
+  /** Opens a row into the host's detail. See `handleCellFocus` for the gesture. */
+  onOpenItem?: (itemId: string) => void;
   /** False until the first snapshot resolves. */
   loaded: boolean;
 }
@@ -72,6 +83,17 @@ export interface TrackerGridUpdateEntry {
 }
 
 const NEVER_EDITABLE = () => false;
+
+/**
+ * Row key RevoGrid reads for a per-row class, and the class it carries.
+ *
+ * A class on the row model rather than a DOM write, because rows are
+ * virtualized and re-rendered on scroll, and because the row's grid index moves
+ * under RevoGrid's own sort model -- neither of which an imperative
+ * `classList.add` survives.
+ */
+const ROW_CLASS_KEY = '__trackerRowClass';
+const ROW_SELECTED_CLASS = 'tracker-grid-row-selected';
 
 export function TrackerGridSurface({
   rows,
@@ -84,6 +106,8 @@ export function TrackerGridSurface({
   resolveRelationshipLabel,
   isRowEditable = NEVER_EDITABLE,
   onItemsUpdate,
+  selectedItemId,
+  onOpenItem,
   loaded,
 }: TrackerGridSurfaceProps) {
   const [filterTarget, setFilterTarget] = useState<{ columnId: string; rect: DOMRect } | null>(null);
@@ -91,7 +115,16 @@ export function TrackerGridSurface({
   const gridCanvasRef = useRef<HTMLDivElement | null>(null);
   const gridRef = useRef<(HTMLElement & {
     getVisibleSource?: (type: 'rgRow') => Promise<Array<Record<string, unknown>>>;
+    getFocused?: () => Promise<{
+      cell: { x: number; y: number };
+      column?: { prop?: string | number };
+      rowType?: string;
+    } | null>;
+    setCellEdit?: (row: number, prop: string | number, rowType?: string) => Promise<void>;
   }) | null>(null);
+  // 'keyboard' only between the keydown that will move focus and the resulting
+  // `afterfocus`; everything else is a pointer.
+  const focusOriginRef = useRef<'keyboard' | null>(null);
 
   const schemaType = trackerType === 'all' ? '' : trackerType;
   const allColumnDefs = useMemo(() => resolveColumnsForType(schemaType), [schemaType]);
@@ -137,6 +170,15 @@ export function TrackerGridSurface({
   const gridSource = useMemo(
     () => buildGridSource(rows, visibleColumnDefs),
     [rows, visibleColumnDefs],
+  );
+
+  const markedGridSource = useMemo(
+    () => (selectedItemId
+      ? gridSource.map((row) => (row[ROW_ITEM_ID] === selectedItemId
+        ? { ...row, [ROW_CLASS_KEY]: ROW_SELECTED_CLASS }
+        : row))
+      : gridSource),
+    [gridSource, selectedItemId],
   );
 
   const gridSorting = useMemo<SortingConfig | undefined>(() => {
@@ -205,20 +247,96 @@ export function TrackerGridSurface({
     }
   }, [buildUpdate, onItemsUpdate]);
 
+  /**
+   * A pointer landing on a cell opens that row; the arrow keys do not, until the
+   * detail is already open and browsing should keep it in step.
+   *
+   * This is the gesture desktop's `TrackerGridView` settled on, and the reason
+   * it costs inline editing nothing: RevoGrid starts an edit on double-click,
+   * F2, or typing -- never on the single click that focuses the cell. Opening on
+   * focus rather than on double-click leaves the double-click free to mean
+   * "edit this cell", which is what it means in every other table.
+   */
+  const handleCellFocus = useCallback(async (
+    event: RevoGridCustomEvent<FocusAfterRenderEvent>,
+  ): Promise<void> => {
+    const rowIndex = event.detail?.rowIndex;
+    const keyboardFocused = focusOriginRef.current === 'keyboard';
+    focusOriginRef.current = null;
+    if (!onOpenItem || typeof rowIndex !== 'number') return;
+    if (keyboardFocused && !selectedItemId) return;
+    const item = await resolveGridRecord(rowIndex);
+    if (item) onOpenItem(item.id);
+  }, [onOpenItem, resolveGridRecord, selectedItemId]);
+
+  const openFocusedItem = useCallback(async (): Promise<void> => {
+    const rowIndex = (await gridRef.current?.getFocused?.())?.cell?.y;
+    if (typeof rowIndex !== 'number') return;
+    const item = await resolveGridRecord(rowIndex);
+    if (item && onOpenItem) onOpenItem(item.id);
+  }, [onOpenItem, resolveGridRecord]);
+
+  /** Enter is spent on opening the row, so keyboard editing moves to F2. */
+  const editFocusedCell = useCallback(async (): Promise<void> => {
+    const grid = gridRef.current;
+    const focused = await grid?.getFocused?.();
+    const prop = focused?.column?.prop;
+    if (!grid || !focused || prop == null) return;
+    await grid.setCellEdit?.(focused.cell.y, prop, focused.rowType);
+  }, []);
+
+  const handleKeyDownCapture = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!onOpenItem) return;
+    const key = event.key;
+    const isEditing = event.nativeEvent.composedPath().some((target) =>
+      target instanceof HTMLElement
+      && (
+        target.classList.contains('tracker-grid-editor-input')
+        || target.classList.contains('tracker-grid-editor-select')
+        || target.classList.contains('tracker-grid-editor-checkbox')
+      ));
+
+    // RevoGrid owns editor keystrokes. Remember the keyboard origin so the focus
+    // change that ends the edit does not read as a request to open the row.
+    if (isEditing) {
+      if (key === 'Enter' || key === 'Tab') focusOriginRef.current = 'keyboard';
+      return;
+    }
+
+    if (key === 'ArrowUp' || key === 'ArrowDown' || key === 'ArrowLeft' || key === 'ArrowRight' || key === 'Tab') {
+      focusOriginRef.current = 'keyboard';
+      return;
+    }
+
+    if (key === 'Enter' || key === 'F2') {
+      event.preventDefault();
+      event.stopPropagation();
+      void (key === 'Enter' ? openFocusedItem() : editFocusedCell());
+    }
+  }, [editFocusedCell, onOpenItem, openFocusedItem]);
+
   useEffect(() => {
-    if (!onItemsUpdate) return undefined;
+    if (!onItemsUpdate && !onOpenItem) return undefined;
     let bound: typeof gridRef.current = null;
     const bind = (): boolean => {
       const grid = gridCanvasRef.current?.querySelector('revo-grid') as typeof gridRef.current;
       if (!grid || grid === bound) return Boolean(grid);
-      bound?.removeEventListener('afteredit', listener);
+      unbind(bound);
       bound = grid;
       gridRef.current = grid;
-      grid.addEventListener('afteredit', listener);
+      if (onItemsUpdate) grid.addEventListener('afteredit', editListener);
+      if (onOpenItem) grid.addEventListener('afterfocus', focusListener);
       return true;
     };
-    const listener = (event: Event) => {
+    const unbind = (grid: typeof gridRef.current) => {
+      grid?.removeEventListener('afteredit', editListener);
+      grid?.removeEventListener('afterfocus', focusListener);
+    };
+    const editListener = (event: Event) => {
       void handleAfterEdit(event as RevoGridCustomEvent<AfterEditEvent>);
+    };
+    const focusListener = (event: Event) => {
+      void handleCellFocus(event as RevoGridCustomEvent<FocusAfterRenderEvent>);
     };
     const observer = typeof MutationObserver === 'undefined'
       ? null
@@ -228,10 +346,10 @@ export function TrackerGridSurface({
     if (!bind() && gridCanvasRef.current) observer?.observe(gridCanvasRef.current, { childList: true, subtree: true });
     return () => {
       observer?.disconnect();
-      bound?.removeEventListener('afteredit', listener);
+      unbind(bound);
       if (gridRef.current === bound) gridRef.current = null;
     };
-  }, [handleAfterEdit, onItemsUpdate]);
+  }, [handleAfterEdit, handleCellFocus, onItemsUpdate, onOpenItem]);
 
   if (!loaded) {
     return (
@@ -261,7 +379,13 @@ export function TrackerGridSurface({
           {mutationError}
         </div>
       ) : null}
-      <div ref={gridCanvasRef} className="tracker-grid-canvas relative min-h-0 flex-1 outline-none">
+      <div
+        ref={gridCanvasRef}
+        className="tracker-grid-canvas relative min-h-0 flex-1 outline-none"
+        tabIndex={onOpenItem ? 0 : undefined}
+        onKeyDownCapture={handleKeyDownCapture}
+        onPointerDownCapture={() => { focusOriginRef.current = null; }}
+      >
         {rows.length === 0 && !columnFiltersActive ? (
           <TrackerSurfaceMessage
             icon="table"
@@ -272,7 +396,8 @@ export function TrackerGridSurface({
           <RevoGrid
             key={`${schemaType}:${sortBy ?? ''}:${sortDirection}`}
             columns={gridColumns}
-            source={gridSource}
+            source={markedGridSource}
+            rowClass={ROW_CLASS_KEY}
             sorting={gridSorting}
             theme="compact"
             resize

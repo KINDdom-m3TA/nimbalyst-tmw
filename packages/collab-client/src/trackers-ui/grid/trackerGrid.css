@@ -71,6 +71,16 @@
   background: var(--nim-bg-hover);
 }
 
+/*
+ * The open row. Tinted rather than filled: the focused-cell rectangle and the
+ * range selection are both drawn in `--nim-primary` on top of this, so a solid
+ * fill would leave nothing for them to read against.
+ */
+.tracker-grid-view .rgRow.tracker-grid-row-selected .rgCell,
+.tracker-grid-view .rgRow.tracker-grid-row-selected:hover .rgCell {
+  background: color-mix(in srgb, var(--nim-primary) 14%, var(--nim-bg));
+}
+
 /* Focus + range selection */
 .tracker-grid-view revogr-focus {
   border: 2px solid var(--nim-primary);
