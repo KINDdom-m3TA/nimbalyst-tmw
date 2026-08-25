@@ -699,6 +699,43 @@ function getWorkspaceStore(): Store<Record<string, WorkspaceState>> {
   return _workspaceStore;
 }
 
+/**
+ * Read-through cache over the workspace store's on-disk JSON.
+ *
+ * `conf` has no cache: its `get store()` runs `readFileSync` + `JSON.parse`
+ * on *every* `.get()`. That is ~19ms of synchronous main-thread time against
+ * a 7.5MB `workspace-settings.json`, and `getWorkspaceState` sits on the hot
+ * path for team resolution and document sync (see `getLocalOrgBinding`), so
+ * the cost lands in the event loop dozens of times per user action.
+ *
+ * The main process is the only writer of this file within a userData dir --
+ * each dev instance gets its own -- so a process-local cache cannot go stale.
+ * Every write goes through `writeWorkspaceEntry`, which keeps the two in step.
+ */
+let _workspaceStoreCache: Record<string, WorkspaceState> | null = null;
+
+function readWorkspaceStore(): Record<string, WorkspaceState> {
+  if (!_workspaceStoreCache) {
+    _workspaceStoreCache = getWorkspaceStore().store ?? {};
+  }
+  return _workspaceStoreCache;
+}
+
+function writeWorkspaceEntry(key: string, value: WorkspaceState): void {
+  getWorkspaceStore().set(key, value);
+  // Populate rather than invalidate: the next read is almost always for the
+  // key just written, and re-reading would pay the full parse again.
+  readWorkspaceStore()[key] = value;
+}
+
+/**
+ * Drop the cache so the next read comes from disk. For tests and for any
+ * path that mutates the file outside `writeWorkspaceEntry`.
+ */
+export function invalidateWorkspaceStoreCache(): void {
+  _workspaceStoreCache = null;
+}
+
 const DEFAULT_TAB_MANAGER_STATE: TabManagerState = {
   tabs: [],
   activeTabId: null,
@@ -873,10 +910,10 @@ function cloneWorkspaceState(state: WorkspaceState): WorkspaceState {
 
 function ensureWorkspaceState(path: string): WorkspaceState {
   const key = workspaceKey(path);
-  const raw = getWorkspaceStore().get(key);
+  const raw = readWorkspaceStore()[key];
   const normalized = normalizeWorkspaceState(raw, path);
   if (!raw) {
-    getWorkspaceStore().set(key, cloneWorkspaceState(normalized));
+    writeWorkspaceEntry(key, cloneWorkspaceState(normalized));
   }
   return normalized;
 }
@@ -884,7 +921,7 @@ function ensureWorkspaceState(path: string): WorkspaceState {
 function persistWorkspaceState(path: string, state: WorkspaceState): WorkspaceState {
   const key = workspaceKey(path);
   const next = cloneWorkspaceState({ ...state, lastUpdated: Date.now() });
-  getWorkspaceStore().set(key, next);
+  writeWorkspaceEntry(key, next);
   return next;
 }
 
@@ -1118,7 +1155,7 @@ export function updateWorkspaceState(
  */
 export function getTakenLocalKeyPrefixes(excludeWorkspacePath?: string): string[] {
   const excludeKey = excludeWorkspacePath ? workspaceKey(excludeWorkspacePath) : null;
-  const all = getWorkspaceStore().store ?? {};
+  const all = readWorkspaceStore();
   return Object.entries(all)
     .filter(([key]) => key.startsWith('ws:') && key !== excludeKey)
     .map(([, state]) => state?.localKeyPrefix)
@@ -2814,7 +2851,7 @@ export function runMigrations(currentVersion: string): void {
   // rather than having it silently reappear. Flag-guarded so it runs once.
   if (!getAppStore().get('gutterButtonsMigratedToGlobal')) {
     try {
-      const workspaces = getWorkspaceStore().store;
+      const workspaces = readWorkspaceStore();
       const union = new Set<string>(getAppStore().get('hiddenGutterItems') ?? []);
       for (const state of Object.values(workspaces ?? {})) {
         for (const id of state?.hiddenGutterButtons ?? []) {
