@@ -216,6 +216,11 @@ export function getMigrations(schemaDir: string): Migration[] {
       name: 'github_issues',
       sqlFile: path.join(schemaDir, '0035_github_issues.sql'),
     },
+    {
+      version: 36,
+      name: 'history_file_timestamp_index',
+      sqlFile: path.join(schemaDir, '0036_history_file_timestamp_index.sql'),
+    },
   ];
 }
 
