@@ -31,6 +31,7 @@
  *   SQL transaction when the caller asks for `persistedEnqueue` semantics.
  */
 import type { TrackerItemEnvelope, SyncId, TrackerItemPayload, TrackerTransactionRow, TrackerTransactionState, TrackerMutationRejectCode } from './trackerProtocol';
+import type { TeamMemberId } from '../auth/jwtScopes';
 /**
  * The pre-write state of a row, captured by `applyOptimistic` and handed
  * back to `rollbackOptimistic` if the server rejects the mutation. `null`
@@ -42,11 +43,18 @@ export interface TrackerRowSnapshot {
     /** `true` if the prior state was a tombstone (we re-tombstone on rollback). */
     isTombstone: boolean;
 }
-/** Identity tuple that owns a durable browser mutation. */
+/**
+ * Identity tuple that owns a durable browser mutation.
+ *
+ * `teamMemberId` is the TEAM-org member id, not the personal one — Stytch B2B
+ * issues a different member id per org, so an outbox row keyed by the personal
+ * id would replay under an identity the tracker room does not recognize. The
+ * branded type makes that mix-up a compile error rather than a sync bug.
+ */
 export interface TrackerTransactionOwner {
     orgId: string;
     teamProjectId: string;
-    teamMemberId: string;
+    teamMemberId: TeamMemberId;
 }
 /**
  * Browser-only durable fields carried beside the wire-neutral transaction row.

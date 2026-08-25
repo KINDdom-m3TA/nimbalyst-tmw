@@ -30,6 +30,25 @@ export interface TrackerSyncState {
    * source, which sees only the status string -- keeps satisfying the contract.
    */
   access?: TrackerAccessTermination | null;
+  /**
+   * The reconnect drain refused to run, so team items are not syncing.
+   *
+   * Like `access`, this cannot ride on `status`: the socket is fine and the
+   * status is `connected`. Only the drain declined, because it could not
+   * resolve the sharing policy and would otherwise have deleted previously
+   * shared items from the room on a guess (NIM-2968).
+   *
+   * Cleared by the next drain that runs to completion, so a transient
+   * resolution failure self-heals rather than sticking.
+   */
+  drainHold?: TrackerDrainHold | null;
+}
+
+/** Why the reconnect drain held back rather than touching the team room. */
+export interface TrackerDrainHold {
+  reason: 'unresolved-policy-would-delete' | 'zero-upserts-with-deletes';
+  /** Local rows waiting on the hold. */
+  rowsHeldBack: number;
 }
 
 /** Serialized shared-view row projected by TrackerPersistence. */

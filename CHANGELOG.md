@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The inbox now names who sent each message instead of showing your teammates as "Unknown member".
 - Saved views shared with your team no longer go missing from the tracker sidebar on startup.
 - Sending a queued prompt while a background sub-agent is running no longer leaves the session stuck on "Thinking..." or later claims a sub-agent was interrupted when none was.
+- Nimbalyst no longer removes items from your team's tracker when it can't tell which of your trackers are shared; it now holds off and tells you instead of assuming they were made private.
+- Tracker items that were stuck and never reached your team now sync, including in a project that isn't the one you're focused on, and items belonging to a tracker that is no longer shared stop being retried on every reconnect.
+- Settings can now edit a built-in tracker type you have already customised; the edit button silently did nothing for those types.
 - On a large database, the startup backup no longer stalls everything you do for about a minute, flooding the app with timeout errors and then reporting the backup as failed when it had actually succeeded.
 
 ### Removed

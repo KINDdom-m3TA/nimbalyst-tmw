@@ -34,7 +34,7 @@ import {
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerDataAtoms';
 import { trackerItemToRecord, type TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
 import { globalRegistry, isRelationshipField } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
-import { trackerSyncConfigChangeAtom, trackerSyncConnectionAtom, trackerSyncRejectionAtom, type TrackerSyncRejectionCode } from '../atoms/trackerSync';
+import { trackerSyncConfigChangeAtom, trackerSyncConnectionAtom, trackerSyncDrainHoldAtom, trackerSyncRejectionAtom, type TrackerSyncRejectionCode } from '../atoms/trackerSync';
 import { activeWorkspacePathAtom } from '../atoms/openProjects';
 import { loadTrackerNavigationAtom } from '../atoms/trackerNavigation';
 import {
@@ -185,6 +185,15 @@ export function initTrackerSyncListeners(): () => void {
         return;
       case 'status':
         store.set(trackerSyncConnectionAtom, change.sync);
+        // Rides on the sync state rather than its own event: the socket is
+        // `connected` while a drain hold is in force, so `status` alone cannot
+        // carry it (NIM-2968). Null clears the banner on recovery.
+        store.set(
+          trackerSyncDrainHoldAtom,
+          change.sync.drainHold
+            ? { workspacePath: change.sync.workspacePath, ...change.sync.drainHold }
+            : null,
+        );
         return;
       case 'config-changed':
         configChangeVersion += 1;

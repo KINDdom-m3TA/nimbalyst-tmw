@@ -60,6 +60,7 @@ import {
 import {
   applyRemoteWorkspaceTrackerSchemaDef,
   encodeTrackerSchemaDefForPush,
+  refreshWorkspaceSchemaLayer,
 } from './TrackerSchemaService';
 import {
   applyRemoteWorkspaceTrackerNavigationEntry,
@@ -80,14 +81,14 @@ import {
   registerTrackerSavedViewFlushHandler,
 } from './TrackerSavedViewService';
 import { windows, windowStates } from '../window/windowState';
-import { getEffectiveTrackerSharingPolicy } from './TrackerPolicyService';
-import { drainPendingTrackerItems } from './tracker/trackerItemBackfill';
+import { getEffectiveTrackerSharingPolicy, resolveTrackerSharingPolicy } from './TrackerPolicyService';
+import { drainPendingTrackerItems, type TrackerDrainAbort } from './tracker/trackerItemBackfill';
 import { rowToTrackerItem } from '../mcp/tools/trackerToolHandlers';
 import { getWorkspaceState, updateWorkspaceState } from '../utils/store';
 import { AnalyticsService } from './analytics/AnalyticsService';
 import { sendTeamAnalyticsEvent } from './analytics/TeamAnalytics';
 import { CollaborationHealthAttemptTracker } from '../../shared/analytics/collaborationHealth';
-import { categorizeTeamAnalyticsError, toStableAnalyticsCategory } from '../../shared/analytics/teamAnalytics';
+import { bucketItemCount, categorizeTeamAnalyticsError, toStableAnalyticsCategory } from '../../shared/analytics/teamAnalytics';
 
 // ============================================================================
 // Engine registry (per workspace)
@@ -582,17 +583,64 @@ async function backfillSharedLocalItems(workspacePath: string): Promise<void> {
   const db = getDatabase();
   if (!db) return;
 
-  await drainPendingTrackerItems(workspacePath, {
+  const result = await drainPendingTrackerItems(workspacePath, {
     query: (sql, params) => db.query(sql, params),
     upsertItem: async (item) => { await entry.engine.upsertItem(trackerItemToPayload(item)); },
     deleteItem: async (itemId) => { await entry.engine.deleteItem(itemId); },
-    resolvePolicy: (path, type) => getEffectiveTrackerSharingPolicy(path, type),
+    // resolveTrackerSharingPolicy, NOT getEffectiveTrackerSharingPolicy: this
+    // decides whether to delete from the team room, and the display-only read
+    // answers `personal` for a schema it merely failed to load (NIM-2968).
+    resolvePolicy: (path, type) => resolveTrackerSharingPolicy(path, type),
+    countSyncedRows: async (path) => {
+      const result = await db.query(
+        `SELECT COUNT(*)::int AS count FROM tracker_items
+         WHERE workspace = $1 AND sync_id IS NOT NULL AND deleted_at IS NULL`,
+        [path],
+      );
+      return Number(result.rows?.[0]?.count ?? 0);
+    },
+    emitEvent: (event) => { emitTrackerDrainAbort(event); },
+    reloadSchemas: (path) => refreshWorkspaceSchemaLayer(path),
     toItem: (row) => rowToTrackerItem(row) as TrackerItem,
     log: {
       info: (...args) => logger.main.info(...(args as [string, ...unknown[]])),
       warn: (...args) => logger.main.warn(...(args as [string, ...unknown[]])),
     },
   });
+
+  // A pass that ran to completion clears any earlier degraded state, so a
+  // transient resolution failure does not leave a stuck banner. `skippedRun`
+  // means another pass owns this workspace right now and decided nothing.
+  if (!result.aborted && !result.skippedRun) clearTrackerDrainAbort(workspacePath);
+}
+
+/**
+ * An aborted drain means team items are silently not syncing -- the exact
+ * symptom users report as "my teammate can't see this". Surface it rather than
+ * leaving it in the log, and record it for analytics so the abort rate is
+ * observable once this ships.
+ */
+function emitTrackerDrainAbort(event: TrackerDrainAbort): void {
+  lastDrainAbortByWorkspace.set(event.workspacePath, event);
+  broadcastToAllWindows('tracker-sync:drain-aborted', event);
+  sendTeamAnalyticsEvent(trackerSyncAnalytics, 'tracker_drain_aborted', {
+    reason: event.reason,
+    trackerTypeCount: bucketItemCount(event.trackerTypes.length),
+    rowsHeldBack: bucketItemCount(event.heldBack),
+  });
+}
+
+/** Cleared on the next successful drain, so a transient failure self-heals. */
+const lastDrainAbortByWorkspace = new Map<string, TrackerDrainAbort>();
+
+/** The current degraded-sync state for a workspace, or null when healthy. */
+export function getTrackerDrainAbort(workspacePath: string): TrackerDrainAbort | null {
+  return lastDrainAbortByWorkspace.get(workspacePath) ?? null;
+}
+
+export function clearTrackerDrainAbort(workspacePath: string): void {
+  if (!lastDrainAbortByWorkspace.delete(workspacePath)) return;
+  broadcastToAllWindows('tracker-sync:drain-recovered', { workspacePath });
 }
 
 /**

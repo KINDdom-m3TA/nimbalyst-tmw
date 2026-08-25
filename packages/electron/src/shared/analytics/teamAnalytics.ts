@@ -379,6 +379,18 @@ export const TEAM_ANALYTICS_EVENT_SCHEMAS = {
     errorCategory: syncErrorCategory,
     connectionPath,
   },
+  /**
+   * The reconnect drain refused to run because it could not trust its sharing
+   * policy read. Team items are not syncing while this fires, so the rate is
+   * the health signal for NIM-2968 / NIM-3702 once the fix ships. Deliberately
+   * carries no tracker type NAMES -- those are workspace-defined and can be
+   * customer data.
+   */
+  tracker_drain_aborted: {
+    reason: enumRule('unresolved-policy-would-delete', 'zero-upserts-with-deletes'),
+    trackerTypeCount: itemCountBucket,
+    rowsHeldBack: itemCountBucket,
+  },
 } as const satisfies Record<string, Record<string, PropertyRule>>;
 
 type SchemaMap = typeof TEAM_ANALYTICS_EVENT_SCHEMAS;

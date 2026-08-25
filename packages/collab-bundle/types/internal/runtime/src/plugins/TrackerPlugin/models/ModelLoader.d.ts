@@ -17,6 +17,25 @@ export declare const BUILTIN_TRACKER_YAML: ReadonlyArray<{
  */
 export declare function parseBuiltinTrackers(): TrackerDataModel[];
 /**
+ * True for the `<type>.patch.yaml` shape, which carries only a delta from a
+ * builtin seed and legitimately has no `displayName`.
+ */
+export declare function isTrackerPatchFileName(fileName: string): boolean;
+/**
+ * Resolve a workspace schema file's content to a fully-resolved model,
+ * whichever of the two on-disk shapes it is.
+ *
+ * Every reader of `.nimbalyst/trackers/*.yaml` must go through this. Running
+ * the full-model parser over a patch throws `Missing required field:
+ * displayName` — which is how the renderer silently dropped every builtin
+ * override on each workspace load, and how the Settings "Edit schema override"
+ * button silently did nothing (NIM-3065).
+ *
+ * Throws on a patch whose target type has no seed, so a stray patch surfaces
+ * instead of registering a broken model.
+ */
+export declare function resolveTrackerSchemaFileContent(fileName: string, content: string): TrackerDataModel;
+/**
  * Load all built-in tracker definitions
  */
 export declare function loadBuiltinTrackers(): void;

@@ -259,6 +259,24 @@ export declare class TrackerDataModelRegistry {
      */
     private scopedLayer;
     get(type: string): TrackerDataModel | undefined;
+    /** True when a cached layer exists for a non-active workspace. */
+    hasWorkspaceLayer(workspacePath: string): boolean;
+    /**
+     * Resolve a type on behalf of an EXPLICIT workspace, with no dependence on
+     * ambient async context (#1359 / NIM-3702).
+     *
+     * `get()` reaches the right answer only when a scope provider is installed on
+     * the current async context, which is true for exactly one consumer — the MCP
+     * HTTP server, which wraps a whole request. The tracker sync lane is driven
+     * from a WebSocket `onStatusChange` callback that has no such relationship to
+     * whoever opened the workspace, so it lost the scope and read the *other*
+     * project's schemas. Callers that already hold a workspace path use this.
+     *
+     * Note the builtin fallback: `get()`'s unscoped branch does not have one, so
+     * a miss there returned `undefined` even for `bug`/`task`/`plan`/`decision`,
+     * all of which ship `sharing: team`. Both branches fall back here.
+     */
+    getForWorkspace(workspacePath: string | null | undefined, type: string): TrackerDataModel | undefined;
     getAll(): TrackerDataModel[];
     has(type: string): boolean;
     isBuiltin(type: string): boolean;

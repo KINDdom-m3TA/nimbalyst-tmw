@@ -207,6 +207,9 @@ export class ElectronTrackerDataSource implements TrackerDataSource {
           const eventWorkspace = typeof value === 'string' ? this.workspacePath : value?.workspacePath;
           if (eventWorkspace !== this.workspacePath) return;
           this.syncState = {
+            // Spread, so a socket status change does not silently clear a drain
+            // hold that is still in force.
+            ...this.syncState,
             workspacePath: this.workspacePath,
             status: normalizeStatus(typeof value === 'string' ? value : value.status),
             projectId: typeof value !== 'string' && value.shared ? 'shared' : this.syncState.projectId,
@@ -216,6 +219,30 @@ export class ElectronTrackerDataSource implements TrackerDataSource {
       ),
       this.ipc.on('tracker-sync:mutation-rejected', (rejection) => {
         if (rejection) this.emit({ type: 'mutation-rejected', rejection });
+      }),
+      // The drain refused to touch the team room. The socket is still
+      // `connected`, so this cannot ride on `status` (NIM-2968).
+      this.ipc.on(
+        'tracker-sync:drain-aborted',
+        (event: { workspacePath?: string; reason?: string; heldBack?: number }) => {
+          if (event?.workspacePath !== this.workspacePath) return;
+          this.syncState = {
+            ...this.syncState,
+            drainHold: {
+              reason: event.reason === 'zero-upserts-with-deletes'
+                ? 'zero-upserts-with-deletes'
+                : 'unresolved-policy-would-delete',
+              rowsHeldBack: event.heldBack ?? 0,
+            },
+          };
+          this.emit({ type: 'status', sync: this.syncState });
+        },
+      ),
+      this.ipc.on('tracker-sync:drain-recovered', (event: { workspacePath?: string }) => {
+        if (event?.workspacePath !== this.workspacePath) return;
+        if (!this.syncState.drainHold) return;
+        this.syncState = { ...this.syncState, drainHold: null };
+        this.emit({ type: 'status', sync: this.syncState });
       }),
       this.ipc.on('tracker-sync:presence-changed', (data) => {
         if (data?.workspacePath !== this.workspacePath) return;

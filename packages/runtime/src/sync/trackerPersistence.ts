@@ -39,6 +39,7 @@ import type {
   TrackerTransactionState,
   TrackerMutationRejectCode,
 } from './trackerProtocol';
+import type { TeamMemberId } from '../auth/jwtScopes';
 import { mergeLabelMaps } from './trackerLabels';
 
 // ============================================================================
@@ -57,11 +58,18 @@ export interface TrackerRowSnapshot {
   isTombstone: boolean;
 }
 
-/** Identity tuple that owns a durable browser mutation. */
+/**
+ * Identity tuple that owns a durable browser mutation.
+ *
+ * `teamMemberId` is the TEAM-org member id, not the personal one — Stytch B2B
+ * issues a different member id per org, so an outbox row keyed by the personal
+ * id would replay under an identity the tracker room does not recognize. The
+ * branded type makes that mix-up a compile error rather than a sync bug.
+ */
 export interface TrackerTransactionOwner {
   orgId: string;
   teamProjectId: string;
-  teamMemberId: string;
+  teamMemberId: TeamMemberId;
 }
 
 /**
