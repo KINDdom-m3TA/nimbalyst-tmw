@@ -16,6 +16,7 @@ import {
   ORG_PROJECT_WALK_DISMISSED_SETTING_KEY,
 } from '../../shared/orgProjectWalk';
 import { normalizeCodexProviderConfig, omitModelsField } from '@nimbalyst/runtime/ai/server/utils/modelConfigUtils';
+import { planWorkstreamStatePrune } from './workstreamStatePrune';
 import type { OpenCodeModelCatalogCache } from '@nimbalyst/runtime/ai/server';
 
 // Theme can be a built-in theme or an extension theme ID (format: "extensionId:themeId")
@@ -734,6 +735,66 @@ function writeWorkspaceEntry(key: string, value: WorkspaceState): void {
  */
 export function invalidateWorkspaceStoreCache(): void {
   _workspaceStoreCache = null;
+}
+
+/**
+ * Workspaces still carrying legacy offline collab edits in their settings.
+ *
+ * `collabPendingUpdates` predates `CollabDocumentReplicaStore`; the migration
+ * off it only ran when the specific document was reopened, so blobs for
+ * documents nobody revisited sat here for months inflating every read and
+ * write of the settings file. This lets a startup pass find them all.
+ */
+export function listLegacyPendingUpdateWorkspaces(): Array<{
+  workspacePath: string;
+  pending: Record<string, { mergedUpdateBase64: string; updatedAt: number }>;
+}> {
+  const out: Array<{
+    workspacePath: string;
+    pending: Record<string, { mergedUpdateBase64: string; updatedAt: number }>;
+  }> = [];
+
+  for (const state of Object.values(readWorkspaceStore())) {
+    const pending = state?.collabPendingUpdates;
+    if (!pending || Object.keys(pending).length === 0) continue;
+    if (!state.workspacePath) continue;
+    out.push({ workspacePath: state.workspacePath, pending });
+  }
+
+  return out;
+}
+
+/**
+ * Evict per-workstream UI state for sessions that no longer exist.
+ *
+ * Entries accumulated one per workstream and were never removed, so the
+ * settings file carried thousands of them. `conf` rewrites the entire file on
+ * every `set`, so the dead entries were paid for on each persist. Callers pass
+ * the live session ids; an empty set is treated as no-information and prunes
+ * nothing (see `planWorkstreamStatePrune`).
+ */
+export function pruneWorkstreamStates(
+  liveSessionIds: ReadonlySet<string>
+): { workspacesTouched: number; entriesRemoved: number } {
+  let workspacesTouched = 0;
+  let entriesRemoved = 0;
+
+  for (const [key, state] of Object.entries(readWorkspaceStore())) {
+    const plan = planWorkstreamStatePrune(
+      state?.workstreamStates as Record<string, unknown> | undefined,
+      liveSessionIds
+    );
+    if (plan.remove.length === 0) continue;
+
+    const next = cloneWorkspaceState(state);
+    for (const id of plan.remove) delete (next.workstreamStates ?? {})[id];
+    writeWorkspaceEntry(key, next);
+
+    workspacesTouched++;
+    entriesRemoved += plan.remove.length;
+  }
+
+  return { workspacesTouched, entriesRemoved };
 }
 
 const DEFAULT_TAB_MANAGER_STATE: TabManagerState = {
