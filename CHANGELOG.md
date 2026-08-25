@@ -17,10 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Changes to existing functionality go here -->
 - Mockups and data models embedded in a document now render as the live editor instead of a saved screenshot, and existing embeds convert on open.
 - Editing many tracker rows at once — pasting a range, or changing status or priority on a multi-row selection — now applies as a single update instead of one per row.
+- Quick open now finds a tracker by its issue key or number and puts it at the top, instead of only ever ranking trackers by meaning.
 
 ### Fixed
 <!-- Bug fixes go here -->
 - A tracker type now shows the same colour and icon everywhere it appears; decisions and features were drawn differently in the AI transcript than in the tracker itself.
+- Searching quick open's trackers no longer closes the whole dialog with an error when any tracker item has no title.
 - The inbox now names who sent each message instead of showing your teammates as "Unknown member".
 - Saved views shared with your team no longer go missing from the tracker sidebar on startup.
 - Sending a queued prompt while a background sub-agent is running no longer leaves the session stuck on "Thinking..." or later claims a sub-agent was interrupted when none was.
