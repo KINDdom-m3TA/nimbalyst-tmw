@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tracker items that were stuck and never reached your team now sync, including in a project that isn't the one you're focused on, and items belonging to a tracker that is no longer shared stop being retried on every reconnect.
 - Settings can now edit a built-in tracker type you have already customised; the edit button silently did nothing for those types.
 - On a large database, the startup backup no longer stalls everything you do for about a minute, flooding the app with timeout errors and then reporting the backup as failed when it had actually succeeded.
-- Nimbalyst no longer freezes for seconds at a time during startup, or while opening shared documents, switching projects, loading sessions, or resizing panes.
+- Nimbalyst no longer freezes for seconds at a time during startup, while an AI session edits files, or while opening shared documents, switching projects, loading sessions, or resizing panes.
 
 ### Removed
 <!-- Removed features go here -->
