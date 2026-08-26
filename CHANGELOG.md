@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Open anything in the web console with Cmd+K, right-click a tracker row for its actions, and pick from the full set of Nimbalyst themes.
 - A tracker now shows who else is viewing it.
 - Ask a teammate to pick between mockups and they see the designs themselves: every option shows a live preview, and clicking one opens it full size to read, step between options and vote without leaving the request.
+- A session that orchestrates other sessions can now interrupt one to deliver an instruction immediately, the same way the send-now button does, instead of waiting for whatever it is doing to finish.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
