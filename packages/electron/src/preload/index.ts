@@ -603,6 +603,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAIModels: () => ipcRenderer.invoke('ai:getModels'),
   // Aliases for consistency with component naming
   aiGetSettings: () => ipcRenderer.invoke('ai:getSettings'),
+  aiGetHeadlessAgentAvailability: () => ipcRenderer.invoke('ai:getHeadlessAgentAvailability'),
   aiSaveSettings: (settings: any) => ipcRenderer.invoke('ai:saveSettings', settings),
   aiTestConnection: (provider: string, workspacePath?: string) =>
     ipcRenderer.invoke('ai:testConnection', provider, workspacePath),
@@ -635,6 +636,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // CLI management
   cliCheckInstallation: (tool: string) => ipcRenderer.invoke('cli:checkInstallation', tool),
+  cliGetInstallStrategy: (tool: string) => ipcRenderer.invoke('cli:getInstallStrategy', tool),
   cliInstall: (tool: string, options: any) => ipcRenderer.invoke('cli:install', tool, options),
   cliUninstall: (tool: string) => ipcRenderer.invoke('cli:uninstall', tool),
   cliUpgrade: (tool: string) => ipcRenderer.invoke('cli:upgrade', tool),

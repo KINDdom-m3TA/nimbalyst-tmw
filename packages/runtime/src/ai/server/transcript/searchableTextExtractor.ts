@@ -322,6 +322,34 @@ function extractGenericInput(content: string, metadata?: Record<string, unknown>
 // Public API
 // ---------------------------------------------------------------------------
 
+/**
+ * Agent providers whose *input* rows are the plain prompt text plus metadata,
+ * rather than the JSON envelope a chat provider writes.
+ */
+const AGENT_SOURCES = new Set([
+  'claude-code',
+  'openai-codex',
+  'openai-codex-acp',
+  'opencode',
+  'copilot-cli',
+  'grok-build',
+  'cursor-agent',
+]);
+
+/**
+ * Agent providers whose turn-final assistant row uses the Codex
+ * `item.completed` envelope. A provider missing from here falls through to the
+ * generic extractor, and its sessions become unsearchable by their replies.
+ */
+const CODEX_SHAPED_OUTPUT_SOURCES = new Set([
+  'openai-codex',
+  'openai-codex-acp',
+  'opencode',
+  'copilot-cli',
+  'grok-build',
+  'cursor-agent',
+]);
+
 export function extractSearchable(input: ExtractorInput): ExtractedSearchable {
   if (input.hidden) {
     return { searchableText: null, messageKind: 'meta' };
@@ -332,7 +360,7 @@ export function extractSearchable(input: ExtractorInput): ExtractedSearchable {
   // Treat all "agent provider" output payloads through their SDK-shaped extractors;
   // chat providers write plainer rows and use the generic extractor.
   if (direction === 'input') {
-    if (source === 'claude-code' || source === 'openai-codex' || source === 'openai-codex-acp' || source === 'opencode' || source === 'copilot-cli') {
+    if (AGENT_SOURCES.has(source)) {
       const parsed = safeJsonParse(content);
       const result = extractClaudeCodeInput(parsed, content, metadata);
       return { searchableText: capLen(result.searchableText), messageKind: result.messageKind };
@@ -347,7 +375,7 @@ export function extractSearchable(input: ExtractorInput): ExtractedSearchable {
     const result = extractClaudeCodeOutput(parsed, content);
     return { searchableText: capLen(result.searchableText), messageKind: result.messageKind };
   }
-  if (source === 'openai-codex' || source === 'openai-codex-acp' || source === 'opencode' || source === 'copilot-cli') {
+  if (CODEX_SHAPED_OUTPUT_SOURCES.has(source)) {
     const parsed = safeJsonParse(content);
     const result = extractCodexOutput(parsed, content);
     return { searchableText: capLen(result.searchableText), messageKind: result.messageKind };

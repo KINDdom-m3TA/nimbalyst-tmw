@@ -27,6 +27,11 @@ import { agentCapabilitiesForProviderType } from '@nimbalyst/runtime/ai/server/a
 import { CLAUDE_CODE_SAFE_FALLBACK_MODEL } from '@nimbalyst/runtime/ai/modelConstants';
 import { reconcileClaudeCodeModels } from './claudeCodeModelReconcile';
 import { isModelEnabled, resolveProviderEnabled } from './modelEnablementFilter';
+import {
+  getCachedHeadlessAgentAvailability,
+  refreshHeadlessAgentAvailability,
+  type HeadlessAgentId,
+} from './headlessAgentAvailability';
 import { getSessionStateManager } from '@nimbalyst/runtime/ai/server/SessionStateManager';
 import { parseContextUsageMessage } from '@nimbalyst/runtime/ai/server/utils/contextUsage';
 import { isBedrockToolSearchError } from '@nimbalyst/runtime/ai/server/utils/errorDetection';
@@ -1752,7 +1757,7 @@ export class AIService {
     // instance on this session; the first one that exists tells us the type.
     const providerCandidates = request.provider
       ? [request.provider]
-      : ['claude-code', 'openai-codex', 'openai-codex-acp', 'opencode'];
+      : ['claude-code', 'openai-codex', 'openai-codex-acp', 'opencode', 'grok-build', 'cursor-agent'];
 
     let instance: AIProvider | undefined;
     let resolvedType: string | null = request.provider ?? null;
@@ -2041,6 +2046,12 @@ export class AIService {
             break;
           case 'copilot-cli':
             // Copilot uses its own CLI auth (copilot auth login), no API key needed
+            break;
+          case 'grok-build':
+          case 'cursor-agent':
+            // Both authenticate through their own CLI login (`grok login`,
+            // `cursor-agent login`). No API key, and deliberately no env-var
+            // fallback -- see the standing rule in CLAUDE.md.
             break;
           case 'lmstudio':
             // LMStudio doesn't need an API key, just the base URL
@@ -3196,6 +3207,38 @@ export class AIService {
       this.interruptCurrentTurn(sessionId)
     );
 
+    /**
+     * Effective on/off state for the two agents whose default is decided by
+     * detection rather than a constant.
+     *
+     * The renderer needs this at hydration: its own default table cannot tell
+     * "user turned it off" from "never touched", so without this the settings
+     * toggle would render OFF while the model picker showed the provider ON.
+     * Awaits any in-flight probe so the answer is deterministic rather than
+     * whatever the cache happened to hold.
+     */
+    safeHandle('ai:getHeadlessAgentAvailability', async () => {
+      await refreshHeadlessAgentAvailability();
+      const providerSettings = this.getNormalizedProviderSettings() as Record<string, any>;
+      const agents: HeadlessAgentId[] = ['grok-build', 'cursor-agent'];
+      const result: Record<string, {
+        installed: boolean;
+        signedIn: boolean;
+        defaultEnabled: boolean;
+        effectiveEnabled: boolean;
+      }> = {};
+      for (const agent of agents) {
+        const availability = getCachedHeadlessAgentAvailability(agent);
+        result[agent] = {
+          installed: availability.installed,
+          signedIn: availability.signedIn,
+          defaultEnabled: availability.installed && availability.signedIn,
+          effectiveEnabled: resolveProviderEnabled(agent, providerSettings[agent]),
+        };
+      }
+      return result;
+    });
+
     // Settings handlers
     safeHandle('ai:getSettings', async () => {
       const apiKeys = this.getSettingsStore().get('apiKeys', {}) as Record<string, string>;
@@ -3401,6 +3444,11 @@ export class AIService {
             break;
           case 'copilot-cli':
             // Copilot uses its own CLI auth, no API key needed
+            apiKey = 'not-required';
+            break;
+          case 'grok-build':
+          case 'cursor-agent':
+            // CLI login only; no API key to test.
             apiKey = 'not-required';
             break;
           case 'lmstudio':
@@ -3610,6 +3658,12 @@ export class AIService {
       if (providerSettings['openai']?.enabled === true && !!apiKeys['openai']) enabledSet.add('openai');
       if (providerSettings['openai-codex']?.enabled === true) enabledSet.add('openai-codex');
       if (providerSettings['opencode']?.enabled === true) enabledSet.add('opencode');
+      // Without these the model picker stays empty for an enabled provider:
+      // the catalog is only fetched for ids in this set. Both default to
+      // "on if their CLI is installed and signed in", so they must go through
+      // resolveProviderEnabled rather than reading the flag directly.
+      if (resolveProviderEnabled('grok-build', providerSettings['grok-build'])) enabledSet.add('grok-build');
+      if (resolveProviderEnabled('cursor-agent', providerSettings['cursor-agent'])) enabledSet.add('cursor-agent');
       if (providerSettings['lmstudio']?.enabled === true) enabledSet.add('lmstudio');
 
       const modelsConfig = {
@@ -3868,6 +3922,16 @@ export class AIService {
           enabled: providerSettings['copilot-cli']?.enabled === true,
           models: providerSettings['copilot-cli']?.models,
           hiddenModels: providerSettings['copilot-cli']?.hiddenModels
+        },
+        'grok-build': {
+          enabled: resolveProviderEnabled('grok-build', providerSettings['grok-build']),
+          models: providerSettings['grok-build']?.models,
+          hiddenModels: providerSettings['grok-build']?.hiddenModels
+        },
+        'cursor-agent': {
+          enabled: resolveProviderEnabled('cursor-agent', providerSettings['cursor-agent']),
+          models: providerSettings['cursor-agent']?.models,
+          hiddenModels: providerSettings['cursor-agent']?.hiddenModels
         },
         'lmstudio': {
           enabled: providerSettings['lmstudio']?.enabled === true,

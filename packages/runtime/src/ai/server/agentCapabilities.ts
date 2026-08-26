@@ -155,6 +155,28 @@ export const BUILTIN_AGENT_CAPABILITIES: Readonly<Record<AIProviderType, AgentCa
     compaction: 'unsupported',
     contextReporting: 'none',
   },
+
+  // Grok headless emits `usage` events and a final `end` with cumulative
+  // input/output/cache token counts and cost — but no context-window size, so
+  // there is no honest percentage to draw. Its `/`-commands live in the TUI;
+  // the `available_commands` event names built-in *tools*, not commands a
+  // headless prompt can invoke, so offering them would be a no-op (#1252).
+  'grok-build': {
+    slashCommands: false,
+    skills: false,
+    compaction: 'unsupported',
+    contextReporting: 'token-counts',
+  },
+
+  // Cursor's stream-json `result` carries inputTokens/outputTokens/
+  // cacheReadTokens, again with no denominator. Headless `--print` exposes no
+  // command catalog and no compaction call.
+  'cursor-agent': {
+    slashCommands: false,
+    skills: false,
+    compaction: 'unsupported',
+    contextReporting: 'token-counts',
+  },
 });
 
 /**

@@ -54,7 +54,9 @@ export type PayloadSlotKind =
   /** `update.rawOutput.<stdout | stderr | ...>` on the ACP transport. */
   | 'acpRawOutput'
   /** Top-level `result` on Nimbalyst's own tool-result envelope. */
-  | 'nimbalystToolResult';
+  | 'nimbalystToolResult'
+  /** Whole-file or command output on a headless-agent tool result. */
+  | 'headlessAgentToolResult';
 
 export interface PayloadSlot {
   /** Stable dotted path, for diagnostics and test assertions. */
@@ -227,6 +229,61 @@ function collectNimbalystSlots(chunk: Record<string, unknown>, out: PayloadSlot[
   // `nimbalyst_tool_use` is a tool CALL -- name and arguments. Never a slot.
 }
 
+/**
+ * Heavy payloads on a headless-agent record.
+ *
+ * These are the fields that carry whole files: Cursor's edit results embed the
+ * complete before and after contents of the file it changed (and a deleted
+ * file's entire previous contents), and Grok's `rawOutput` carries a read
+ * file's text plus a shell command's stdout as a byte array. Left unwalked,
+ * one large-file edit can push a single row past the row budget.
+ *
+ * Trimming these is safe for file tracking: the pre-edit baseline is captured
+ * into a history tag while the turn streams, not read back out of the raw row
+ * afterwards. What the raw row still owes is the transcript rendering, and a
+ * clamped tool result renders the same as Codex's does.
+ */
+function collectHeadlessAgentSlots(chunk: Record<string, unknown>, out: PayloadSlot[]): void {
+  // Grok: {type:'tool_call_update', rawOutput:{...}}
+  const rawOutput = chunk.rawOutput;
+  if (isPlainObject(rawOutput)) {
+    for (const key of ['content', 'content_concise', 'raw_output', 'output', 'output_for_prompt'] as const) {
+      if (key in rawOutput) {
+        out.push(makeSlot('headlessAgentToolResult', `rawOutput.${key}`, rawOutput, key));
+      }
+    }
+    const fileContent = rawOutput.FileContent;
+    if (isPlainObject(fileContent)) {
+      for (const key of ['content', 'content_concise', 'raw_output'] as const) {
+        if (key in fileContent) {
+          out.push(makeSlot('headlessAgentToolResult', `rawOutput.FileContent.${key}`, fileContent, key));
+        }
+      }
+    }
+  }
+
+  // Cursor: {type:'tool_call', tool_call:{<name>ToolCall:{result:{success:{...}}}}}
+  const toolCall = chunk.tool_call;
+  if (!isPlainObject(toolCall)) return;
+  for (const [callKey, callValue] of Object.entries(toolCall)) {
+    if (!callKey.endsWith('ToolCall') || !isPlainObject(callValue)) continue;
+    const result = callValue.result;
+    if (!isPlainObject(result)) continue;
+    const success = result.success;
+    if (!isPlainObject(success)) continue;
+    for (const key of ['content', 'beforeFullFileContent', 'afterFullFileContent', 'prevContent'] as const) {
+      if (key in success) {
+        out.push(makeSlot(
+          'headlessAgentToolResult',
+          `tool_call.${callKey}.result.success.${key}`,
+          success,
+          key,
+        ));
+      }
+    }
+  }
+}
+
 function isCodexSource(source: string): boolean {
   return source.startsWith('openai-codex')
     || source.startsWith('copilot-cli')
@@ -250,6 +307,11 @@ export function providerPayloadSlots(chunk: unknown, source: string): PayloadSlo
     collectClaudeSlots(chunk, out);
   } else if (isCodexSource(source)) {
     collectCodexSlots(chunk, out);
+  } else if (source.startsWith('grok-build') || source.startsWith('cursor-agent')) {
+    // The turn-final assistant row uses Codex's `item.completed` shape, so it
+    // walks with the Codex collector; everything else is these agents' own.
+    collectCodexSlots(chunk, out);
+    collectHeadlessAgentSlots(chunk, out);
   }
 
   return out;

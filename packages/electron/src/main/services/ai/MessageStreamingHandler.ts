@@ -139,19 +139,44 @@ import type Store from 'electron-store';
 import type { AIService } from './AIService';
 import type { HooklessAgentFileWatcher } from './HooklessAgentFileWatcher';
 import type { WorkspaceFileAttributionMode } from '../WorkspaceFileAttributionPolicy';
+import {
+  attributionModeForFileChangeFidelity,
+  fileChangeFidelityForProviderType,
+  isProviderEditTool,
+  type FileChangeFidelity,
+} from '@nimbalyst/runtime/ai/server/providerFileTracking';
 
+/**
+ * Ask the provider how well it reports its own file changes, and derive the
+ * watcher's attribution mode from that.
+ *
+ * A live instance is authoritative because fidelity can depend on the active
+ * transport. When there is none yet — the policy is set before the provider is
+ * constructed — fall back to the provider type's declaration, with one
+ * exception noted below.
+ */
 function resolveWorkspaceFileAttributionMode(
   providerName: string,
   provider: AIProvider | null | undefined,
 ): WorkspaceFileAttributionMode {
-  if (providerName !== 'openai-codex') return 'fuzzy';
-
-  const codexProvider = provider as (AIProvider & {
-    getTransport?: () => 'sdk' | 'app-server';
+  const liveProvider = provider as (AIProvider & {
+    getFileChangeFidelity?: () => FileChangeFidelity;
   }) | null | undefined;
-  const activeTransport = codexProvider?.getTransport?.();
-  const configuredTransport = getAppSetting<{ transport?: 'sdk' | 'app-server' }>('openaiCodex')?.transport;
-  return (activeTransport ?? configuredTransport) === 'sdk' ? 'fuzzy' : 'disabled';
+  const live = liveProvider?.getFileChangeFidelity?.();
+  if (live) return attributionModeForFileChangeFidelity(live);
+
+  // Codex is the only provider whose fidelity is a user-selected setting: the
+  // legacy SDK transport has no `fileChange` item. Without a live instance to
+  // ask, read the setting rather than crediting it with the app-server's
+  // structured changes.
+  if (
+    providerName === 'openai-codex'
+    && getAppSetting<{ transport?: 'sdk' | 'app-server' }>('openaiCodex')?.transport === 'sdk'
+  ) {
+    return 'fuzzy';
+  }
+
+  return attributionModeForFileChangeFidelity(fileChangeFidelityForProviderType(providerName));
 }
 
 export type SendMessageHandler = (
@@ -1881,18 +1906,17 @@ export class MessageStreamingHandler {
                     window  // Pass window to enable file watcher attachment for edited files
                   );
 
-                  // Create pre-edit tags for OpenCode file-editing tools.
-                  // OpenCode emits tool_call with status='running' BEFORE the file is modified,
-                  // so we can snapshot the current disk content as the before-state.
-                  // Tool names: edit, write, create (with filePath in arguments)
-                  // Codex ACP emits the same shape via writeTextFile pre-edit hooks plus
-                  // session/tool_call events for Edit/Write tools. The tool name list is
-                  // kept separate per provider to avoid cross-talk if vocabularies diverge.
-                  const OPENCODE_EDIT_TOOLS = ['edit', 'write', 'create'];
-                  const CODEX_ACP_EDIT_TOOLS = ['Edit', 'Write', 'ApplyPatch', 'edit', 'write', 'apply_patch'];
-                  const isOpenCodeEdit = OPENCODE_EDIT_TOOLS.includes(trackToolName) && session.provider === 'opencode';
-                  const isCodexAcpEdit = CODEX_ACP_EDIT_TOOLS.includes(trackToolName) && session.provider === 'openai-codex-acp';
-                  if (isOpenCodeEdit || isCodexAcpEdit) {
+                  // Create pre-edit tags for providers whose file-editing tools
+                  // are announced before the write lands. OpenCode emits
+                  // tool_call with status='running' BEFORE the file is
+                  // modified, so we can snapshot the current disk content as
+                  // the before-state; Codex ACP emits the same shape via
+                  // writeTextFile pre-edit hooks plus session/tool_call events.
+                  // Tool vocabularies are per-provider (see
+                  // PROVIDER_EDIT_TOOL_NAMES) so they cannot cross-talk.
+                  const isProviderEdit = isProviderEditTool(session.provider, trackToolName);
+                  const isCodexAcpEdit = isProviderEdit && session.provider === 'openai-codex-acp';
+                  if (isProviderEdit) {
                     const editFilePath = extractFilePath(trackArgs);
                     const watcherEntry = this.svc.hooklessWatcher.getEntry(session.id);
                     // Only create the pre-edit tag for paths inside the workspace —

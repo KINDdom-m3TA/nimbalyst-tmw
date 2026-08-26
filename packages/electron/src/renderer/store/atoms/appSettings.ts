@@ -1219,6 +1219,8 @@ const defaultProviders: Record<string, ProviderConfig> = {
   'openai-codex-acp': { enabled: false, testStatus: 'idle', installStatus: 'not-installed' },
   opencode: { enabled: false, testStatus: 'idle', installStatus: 'not-installed' },
   'copilot-cli': { enabled: false, testStatus: 'idle', installStatus: 'not-installed' },
+  'grok-build': { enabled: false, testStatus: 'idle', installStatus: 'not-installed' },
+  'cursor-agent': { enabled: false, testStatus: 'idle', installStatus: 'not-installed' },
   lmstudio: { enabled: false, baseUrl: 'http://127.0.0.1:8234', testStatus: 'idle' },
 };
 
@@ -1589,6 +1591,26 @@ export async function initAIProviderSettings(): Promise<AIProviderSettings> {
         providers[key] = { enabled: false, testStatus: 'idle', ...value };
       }
     });
+  }
+
+  // Grok and Cursor default to on when their CLI is installed and signed in.
+  // That default lives in the main process (it needs to spawn the CLI), and the
+  // table above cannot tell "user turned it off" from "never touched" -- so
+  // seed the untouched ones from main. Without this the settings toggle renders
+  // OFF while the model picker shows the provider ON.
+  try {
+    const availability = await window.electronAPI.aiGetHeadlessAgentAvailability?.();
+    if (availability) {
+      for (const [id, state] of Object.entries(availability)) {
+        const persisted = settings?.providerSettings?.[id] as { enabled?: boolean } | undefined;
+        if (providers[id] && persisted?.enabled === undefined) {
+          providers[id] = { ...providers[id], enabled: state.defaultEnabled };
+        }
+      }
+    }
+  } catch {
+    // Detection unavailable -- fall back to the off default rather than
+    // blocking settings hydration on a subprocess probe.
   }
 
   const sanitizedProviders = sanitizeProvidersForPersistence(providers);

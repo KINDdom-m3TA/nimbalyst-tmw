@@ -500,6 +500,12 @@ interface ElectronAPI {
   testAIConnection: (provider: 'claude' | 'claude-code' | 'openai' | 'lmstudio') => Promise<any>;
   getAIModels: () => Promise<{ success: boolean; models: any[]; grouped: Record<string, any[]> }>;
   aiGetSettings: () => Promise<any>;
+  aiGetHeadlessAgentAvailability: () => Promise<Record<string, {
+    installed: boolean;
+    signedIn: boolean;
+    defaultEnabled: boolean;
+    effectiveEnabled: boolean;
+  }>>;
   aiSaveSettings: (settings: any) => Promise<void>;
   aiTestConnection: (provider: string, workspacePath?: string) => Promise<any>;
   aiGetModels: () => Promise<{ success: boolean; models: any[]; grouped: Record<string, any[]> }>;
@@ -537,6 +543,11 @@ interface ElectronAPI {
 
   // CLI management
   cliCheckInstallation: (tool: string) => Promise<{ installed: boolean; version?: string; path?: string }>;
+  cliGetInstallStrategy: (tool: string) => Promise<
+    | { kind: 'npm'; package: string }
+    | { kind: 'script'; command: string; docsUrl: string }
+    | null
+  >;
   cliInstall: (tool: string, options?: any) => Promise<{ success: boolean; error?: string }>;
   cliUninstall: (tool: string) => Promise<{ success: boolean; error?: string }>;
   cliUpgrade: (tool: string) => Promise<{ success: boolean; error?: string }>;

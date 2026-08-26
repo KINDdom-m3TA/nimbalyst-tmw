@@ -93,6 +93,14 @@ export class ModelRegistry {
           const { CopilotCLIProvider } = await import('./providers/CopilotCLIProvider');
           models = await CopilotCLIProvider.getModels();
           break;
+        case 'grok-build':
+          const { GrokBuildProvider } = await import('./providers/GrokBuildProvider');
+          models = await GrokBuildProvider.getModels();
+          break;
+        case 'cursor-agent':
+          const { CursorAgentProvider } = await import('./providers/CursorAgentProvider');
+          models = await CursorAgentProvider.getModels();
+          break;
         default:
           assertExhaustiveProvider(provider);
       }
@@ -188,6 +196,12 @@ export class ModelRegistry {
       case 'copilot-cli':
         const { CopilotCLIProvider: CLP } = await import('./providers/CopilotCLIProvider');
         return CLP.getDefaultModel();
+      case 'grok-build':
+        const { GrokBuildProvider: GBP } = await import('./providers/GrokBuildProvider');
+        return GBP.getDefaultModel();
+      case 'cursor-agent':
+        const { CursorAgentProvider: CAP } = await import('./providers/CursorAgentProvider');
+        return CAP.getDefaultModel();
       default:
         assertExhaustiveProvider(provider);
     }

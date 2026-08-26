@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- Grok Build and Cursor Agent join the coding agents you can run a session on, with their own settings panels, model pickers, edited-file tracking and diff review. Each turns itself on when you already have its command-line tool installed and signed in, and stays off otherwise; turning one off is remembered. Each panel says exactly how well that agent can track the files it changes.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
