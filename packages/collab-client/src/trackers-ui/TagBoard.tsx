@@ -1,67 +1,50 @@
 import React, { useMemo } from 'react';
-import { MaterialSymbol, TrackerUnreadDot } from '@nimbalyst/runtime';
+import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
-import { TrackerFavoriteStar, type TrackerItemType } from '@nimbalyst/runtime/plugins/TrackerPlugin';
-import { getRecordTitle, getRecordPriority, getFieldByRole } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerRecordAccessors';
-import { UserAvatar } from '@nimbalyst/runtime/plugins/TrackerPlugin/components/UserAvatar';
-import { groupTrackerItemsByTag } from './trackerTagFilterUtils';
 import {
-  NEUTRAL_SWATCH,
-  PRIORITY_COLORS,
-  TrackerSurfaceMessage,
-  TrackerSwatchBadge,
-  TYPE_COLORS,
-} from '@nimbalyst/collab-client/trackers-ui';
+  getRecordTitle,
+  getRecordPriority,
+  getFieldByRole,
+} from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerRecordAccessors';
+import { UserAvatar } from '@nimbalyst/runtime/plugins/TrackerPlugin/components/UserAvatar';
+import { groupTrackerItemsByTag } from '@nimbalyst/collab-client/trackers';
+import { TrackerSurfaceMessage } from './primitives/TrackerSurfaceMessage';
+import { TrackerSwatchBadge } from './primitives/TrackerSwatchBadge';
+import { NEUTRAL_SWATCH, PRIORITY_COLORS, TYPE_COLORS } from './board/trackerBoardTokens';
 
-interface TagBoardProps {
-  filterType: TrackerItemType | 'all';
-  searchQuery?: string;
-  /** Items to display (already filtered upstream by TrackerMainView). */
-  overrideItems?: TrackerRecord[];
+export interface TagBoardProps {
+  /** Items already composed through the active saved view. */
+  items: TrackerRecord[];
   /** Callback when user clicks a card to open the detail panel. */
   onItemSelect?: (itemId: string) => void;
   /** Currently selected item ID for card highlighting. */
   selectedItemId?: string | null;
   /** Open a card's item as a document (double-click). */
   onOpenDocument?: (itemId: string) => void;
-  favoriteItemIds?: ReadonlySet<string>;
-  onToggleFavorite?: (itemId: string) => void;
+  /** Personal lane, desktop only. Omitted by a host with team auth only. */
+  renderUnreadSlot?: (itemId: string) => React.ReactNode;
+  /** Personal lane, desktop only. Omitted by a host with team auth only. */
+  renderFavoriteSlot?: (itemId: string) => React.ReactNode;
 }
 
 /**
- * Tag board view (NIM-774). Columns are driven by the schema `tags` role —
+ * Tag board view. Columns are driven by the schema `tags` role —
  * one column per distinct tag plus a trailing "Untagged" bucket. An item with
  * multiple tags shows up in every matching column. Read + click-to-select; the
  * kanban board remains the place for drag-driven status changes.
  */
 export const TagBoard: React.FC<TagBoardProps> = ({
-  searchQuery,
-  overrideItems,
+  items,
   onItemSelect,
   selectedItemId,
   onOpenDocument,
-  favoriteItemIds = new Set<string>(),
-  onToggleFavorite,
+  renderUnreadSlot,
+  renderFavoriteSlot,
 }) => {
-  const allItems = useMemo(() => {
-    const source = overrideItems ?? [];
-    if (!searchQuery) return source;
-    const q = searchQuery.toLowerCase();
-    return source.filter(
-      (record) =>
-        record.issueKey?.toLowerCase().includes(q) ||
-        String(record.issueNumber ?? '').includes(q) ||
-        getRecordTitle(record).toLowerCase().includes(q) ||
-        record.system.documentPath?.toLowerCase().includes(q)
-    );
-  }, [searchQuery, overrideItems]);
+  const columns = useMemo(() => groupTrackerItemsByTag(items), [items]);
 
-  const columns = useMemo(() => groupTrackerItemsByTag(allItems), [allItems]);
-
-  if (allItems.length === 0) {
-    return (
-      <TrackerSurfaceMessage icon="sell" message="No items to display" />
-    );
+  if (items.length === 0) {
+    return <TrackerSurfaceMessage icon="sell" message="No items to display" />;
   }
 
   if (columns.length === 0) {
@@ -96,9 +79,7 @@ export const TagBoard: React.FC<TagBoardProps> = ({
                 <span className="text-xs font-semibold text-nim truncate">
                   {col.tag === null ? 'Untagged' : `#${col.label}`}
                 </span>
-                <span className="text-[10px] font-semibold text-nim-faint ml-auto">
-                  {col.items.length}
-                </span>
+                <span className="text-[10px] font-semibold text-nim-faint ml-auto">{col.items.length}</span>
               </div>
 
               {/* Column cards */}
@@ -111,9 +92,7 @@ export const TagBoard: React.FC<TagBoardProps> = ({
                     role="button"
                     tabIndex={0}
                     className={`w-full text-left p-2.5 rounded-md bg-nim hover:bg-nim-tertiary border transition-colors cursor-pointer mb-1.5 ${
-                      selectedItemId && item.id === selectedItemId
-                        ? 'border-[var(--nim-primary)]'
-                        : 'border-nim'
+                      item.id === selectedItemId ? 'border-[var(--nim-primary)]' : 'border-nim'
                     }`}
                     onClick={() => onItemSelect?.(item.id)}
                     onDoubleClick={() => onOpenDocument?.(item.id)}
@@ -127,19 +106,19 @@ export const TagBoard: React.FC<TagBoardProps> = ({
                     <div className="flex items-start gap-2">
                       <span
                         className="w-2 h-2 rounded-full mt-1.5 shrink-0"
-                        style={{ backgroundColor: PRIORITY_COLORS[getRecordPriority(item) || 'medium'] || NEUTRAL_SWATCH }}
+                        style={{
+                          backgroundColor: PRIORITY_COLORS[getRecordPriority(item) || 'medium'] || NEUTRAL_SWATCH,
+                        }}
                       />
-                      <TrackerUnreadDot itemId={item.id} className="mt-1" />
-                      <TrackerFavoriteStar itemId={item.id} isFavorite={favoriteItemIds.has(item.id)} onToggle={onToggleFavorite} />
+                      {renderUnreadSlot?.(item.id)}
+                      {renderFavoriteSlot?.(item.id)}
                       <div className="flex-1 min-w-0">
                         {item.issueKey && (
                           <div className="text-[10px] font-mono font-medium uppercase tracking-[0.08em] text-nim-faint mb-0.5">
                             {item.issueKey}
                           </div>
                         )}
-                        <div className="text-sm text-nim leading-snug line-clamp-2">
-                          {getRecordTitle(item)}
-                        </div>
+                        <div className="text-sm text-nim leading-snug line-clamp-2">{getRecordTitle(item)}</div>
                         <div className="flex items-center gap-1.5 mt-1.5">
                           <TrackerSwatchBadge
                             label={item.primaryType}

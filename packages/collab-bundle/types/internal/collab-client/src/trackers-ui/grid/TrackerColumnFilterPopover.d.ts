@@ -8,7 +8,7 @@
 import type { JSX } from 'react';
 import type { FieldDefinition } from '../../../../runtime/src/plugins/TrackerPlugin/models/index';
 import { type TrackerFieldFilter } from '../../../../runtime/src/plugins/TrackerPlugin/models/index';
-interface TrackerColumnFilterPopoverProps {
+export interface TrackerColumnFilterPopoverProps {
     /** Column being filtered. */
     columnId: string;
     columnLabel: string;
@@ -24,4 +24,3 @@ interface TrackerColumnFilterPopoverProps {
     onClose: () => void;
 }
 export declare function TrackerColumnFilterPopover({ columnId, columnLabel, field, clauses, combinator: initialCombinator, anchorRect, onApply, onClose, }: TrackerColumnFilterPopoverProps): JSX.Element;
-export {};

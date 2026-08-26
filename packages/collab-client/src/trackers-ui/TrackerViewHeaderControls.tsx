@@ -1,12 +1,10 @@
 import type { JSX } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useAtomValue, useSetAtom } from 'jotai';
 import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
-import {
-  DisplayOptionsPanel,
-  type TrackerColumnDef,
-  type TypeColumnConfig,
-} from '@nimbalyst/runtime/plugins/TrackerPlugin';
+import type {
+  TrackerColumnDef,
+  TypeColumnConfig,
+} from '@nimbalyst/runtime/plugins/TrackerPlugin/components/trackerColumns';
 import {
   clausesForField,
   isClauseComplete,
@@ -16,24 +14,47 @@ import {
   type TrackerFieldFilter,
   type TrackerFilterOp,
   type TrackerFilterSet,
+  type TrackerGroupBy,
+  type TrackerOrdering,
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
 import {
-  setTrackerModeLayoutAtom,
-  trackerModeGroupByAtom,
-  trackerModeOrderingAtom,
-  trackerModeViewModeAtom,
+  TRACKER_VIEW_MODE_OPTIONS,
+  normalizeTrackerViewMode,
+  type TrackerViewMode,
+  type TrackerViewModeOption,
   type TrackerStatusScope,
-} from '../../store/atoms/trackers';
-import { TrackerAdvancedFilterBuilder } from './TrackerAdvancedFilterBuilder';
-import { TrackerFilterValueMenu } from './TrackerFilterValueMenu';
-import { TRACKER_VIEW_MODE_OPTIONS, normalizeTrackerViewMode } from './trackerViewModes';
+} from '../trackers';
+import type { TrackerFilterField } from './trackerFilterFields';
+import {
+  LazyDisplayOptionsPanel,
+  preloadDisplayOptionsPanel,
+} from './LazyDisplayOptionsPanel';
+import {
+  LazyTrackerAdvancedFilterBuilder,
+  preloadTrackerAdvancedFilterBuilder,
+} from './LazyTrackerAdvancedFilterBuilder';
+import {
+  LazyTrackerFilterValueMenu,
+  preloadTrackerFilterValueMenu,
+} from './LazyTrackerFilterValueMenu';
+import { preloadTagBoard } from './LazyTagBoard';
+import { preloadTrackerTimelineView } from './LazyTrackerTimelineView';
 
-import type { TrackerFilterField } from '@nimbalyst/collab-client/trackers-ui';
+export type {
+  TrackerFilterField,
+  TrackerFilterFieldOption,
+} from './trackerFilterFields';
 
-export type { TrackerFilterField, TrackerFilterFieldOption } from '@nimbalyst/collab-client/trackers-ui';
+export interface TrackerViewLayoutUpdate {
+  viewMode?: TrackerViewMode;
+  groupBy?: TrackerGroupBy;
+  ordering?: TrackerOrdering;
+}
 
-interface TrackerViewHeaderControlsProps {
+export interface TrackerViewHeaderControlsProps {
   itemCount: number;
+  /** Count with lifecycle scope removed but all other predicates retained. */
+  unscopedItemCount?: number;
   availableColumns: TrackerColumnDef[];
   columnConfig: TypeColumnConfig;
   onColumnConfigChange: (config: TypeColumnConfig) => void;
@@ -49,6 +70,12 @@ interface TrackerViewHeaderControlsProps {
   openFiltersToken?: number;
   statusScope: TrackerStatusScope;
   onStatusScopeChange: (scope: TrackerStatusScope) => void;
+  viewMode: TrackerViewMode;
+  groupBy: TrackerGroupBy;
+  ordering: TrackerOrdering;
+  onLayoutChange: (updates: TrackerViewLayoutUpdate) => void;
+  /** Modes this host can honestly render. Desktop uses the full catalog. */
+  viewModeOptions?: readonly TrackerViewModeOption[];
 }
 
 const STATUS_SCOPE_OPTIONS: ReadonlyArray<{
@@ -58,7 +85,11 @@ const STATUS_SCOPE_OPTIONS: ReadonlyArray<{
 }> = [
   { scope: 'open', label: 'Open', title: 'Work that is still outstanding' },
   { scope: 'all', label: 'All', title: 'Every item, open and closed' },
-  { scope: 'closed', label: 'Closed', title: 'Work that was finished or abandoned' },
+  {
+    scope: 'closed',
+    label: 'Closed',
+    title: 'Work that was finished or abandoned',
+  },
 ];
 
 /**
@@ -82,7 +113,7 @@ function TrackerStatusScopeControl({
       aria-label="Status scope"
       data-testid="tracker-status-scope"
     >
-      {STATUS_SCOPE_OPTIONS.map(option => (
+      {STATUS_SCOPE_OPTIONS.map((option) => (
         <button
           key={option.scope}
           type="button"
@@ -108,10 +139,25 @@ function iconForField(field: TrackerFilterField): string {
   if (key.includes('favorite') || key.includes('starred')) return 'star';
   if (key.includes('status')) return 'progress_activity';
   if (key.includes('priority')) return 'signal_cellular_alt';
-  if (key.includes('assignee') || key.includes('owner') || field.type === 'user') return 'person';
+  if (
+    key.includes('assignee') ||
+    key.includes('owner') ||
+    field.type === 'user'
+  )
+    return 'person';
   if (key.includes('tag') || key.includes('label')) return 'sell';
-  if (key.includes('relation') || field.type === 'relationship' || field.type === 'reference') return 'account_tree';
-  if (key.includes('date') || key.includes('created') || key.includes('updated')) return 'calendar_today';
+  if (
+    key.includes('relation') ||
+    field.type === 'relationship' ||
+    field.type === 'reference'
+  )
+    return 'account_tree';
+  if (
+    key.includes('date') ||
+    key.includes('created') ||
+    key.includes('updated')
+  )
+    return 'calendar_today';
   if (key.includes('type')) return 'category';
   if (key.includes('source') || key.includes('module')) return 'deployed_code';
   if (field.type === 'boolean') return 'toggle_on';
@@ -123,15 +169,19 @@ function iconForField(field: TrackerFilterField): string {
 function filterValueLabel(
   value: unknown,
   op?: TrackerFilterOp,
-  field?: TrackerFilterField,
+  field?: TrackerFilterField
 ): string {
   if (value === undefined) return '';
   // Show what the field calls the value ("Yes", "To do"), not its stored form.
   const label = (item: unknown): string => {
     const text = String(item);
-    return field?.options?.find(option => option.value === text)?.label ?? text;
+    return (
+      field?.options?.find((option) => option.value === text)?.label ?? text
+    );
   };
-  const text = Array.isArray(value) ? value.map(label).join(', ') : label(value);
+  const text = Array.isArray(value)
+    ? value.map(label).join(', ')
+    : label(value);
   return op === 'in-last' || op === 'not-in-last' ? `${text} days` : text;
 }
 
@@ -139,6 +189,7 @@ type FilterMenuMode = 'fields' | 'field' | 'advanced';
 
 export function TrackerViewHeaderControls({
   itemCount,
+  unscopedItemCount,
   availableColumns,
   columnConfig,
   onColumnConfigChange,
@@ -149,6 +200,11 @@ export function TrackerViewHeaderControls({
   openFiltersToken = 0,
   statusScope,
   onStatusScopeChange,
+  viewMode,
+  groupBy,
+  ordering,
+  onLayoutChange,
+  viewModeOptions = TRACKER_VIEW_MODE_OPTIONS,
 }: TrackerViewHeaderControlsProps): JSX.Element {
   const [showFilters, setShowFilters] = useState(false);
   const [showDisplayOptions, setShowDisplayOptions] = useState(false);
@@ -156,35 +212,31 @@ export function TrackerViewHeaderControls({
   const [query, setQuery] = useState('');
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const [selectedFieldId, setSelectedFieldId] = useState<string | null>(null);
-  const [selectedFieldRect, setSelectedFieldRect] = useState<DOMRect | null>(null);
+  const [selectedFieldRect, setSelectedFieldRect] = useState<DOMRect | null>(
+    null
+  );
   const [quickOp, setQuickOp] = useState<TrackerFilterOp>('=');
   const [quickValue, setQuickValue] = useState<unknown>('');
   const filterRootRef = useRef<HTMLDivElement>(null);
   const submenuRef = useRef<HTMLDivElement>(null);
   const displayOptionsButtonRef = useRef<HTMLButtonElement>(null);
 
-  // View mode, grouping, and ordering are saved-view state, not local
-  // presentation: Display Settings writes the same layout the view definition
-  // captures, so a chosen axis is saved and restored with the view.
-  const viewMode = useAtomValue(trackerModeViewModeAtom);
-  const groupBy = useAtomValue(trackerModeGroupByAtom);
-  const ordering = useAtomValue(trackerModeOrderingAtom);
-  const setModeLayout = useSetAtom(setTrackerModeLayoutAtom);
-
   const activeFilterCount = useMemo(
     () => (filters?.clauses ?? []).filter(isClauseComplete).length,
-    [filters],
+    [filters]
   );
   const selectedField = useMemo(
-    () => filterFields.find(field => field.id === selectedFieldId),
-    [filterFields, selectedFieldId],
+    () => filterFields.find((field) => field.id === selectedFieldId),
+    [filterFields, selectedFieldId]
   );
   const matchingFields = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     if (!normalizedQuery) return filterFields;
-    return filterFields.filter(field =>
-      field.label.toLowerCase().includes(normalizedQuery)
-      || field.id.toLowerCase().includes(normalizedQuery));
+    return filterFields.filter(
+      (field) =>
+        field.label.toLowerCase().includes(normalizedQuery) ||
+        field.id.toLowerCase().includes(normalizedQuery)
+    );
   }, [filterFields, query]);
 
   const resetFilterMenu = (): void => {
@@ -210,8 +262,8 @@ export function TrackerViewHeaderControls({
     const closeOnOutsideClick = (event: MouseEvent): void => {
       const target = event.target as Node;
       if (
-        !filterRootRef.current?.contains(target)
-        && !submenuRef.current?.contains(target)
+        !filterRootRef.current?.contains(target) &&
+        !submenuRef.current?.contains(target)
       ) {
         setShowFilters(false);
       }
@@ -230,7 +282,7 @@ export function TrackerViewHeaderControls({
 
   const applyQuickFilter = (
     value: unknown = quickValue,
-    opOverride?: TrackerFilterOp,
+    opOverride?: TrackerFilterOp
   ): void => {
     if (!selectedField) return;
     const effectiveOp = opOverride ?? quickOp;
@@ -240,7 +292,10 @@ export function TrackerViewHeaderControls({
     } else if (effectiveOp === 'in' || effectiveOp === 'not-in') {
       const values = Array.isArray(value)
         ? value
-        : String(value).split(',').map(item => item.trim()).filter(Boolean);
+        : String(value)
+            .split(',')
+            .map((item) => item.trim())
+            .filter(Boolean);
       clause = { field: selectedField.id, op: effectiveOp, value: values };
     } else if (effectiveOp === 'between') {
       clause = {
@@ -253,17 +308,18 @@ export function TrackerViewHeaderControls({
     }
     if (!isClauseComplete(clause)) return;
     const existingClauses = (filters?.clauses ?? []).filter(isClauseComplete);
-    const shouldReplaceField = Array.isArray(value)
-      && (
-        selectedField.type === 'array'
-        || selectedField.type === 'multiselect'
-        || selectedField.multiValue === true
-      );
+    const shouldReplaceField =
+      Array.isArray(value) &&
+      (selectedField.type === 'array' ||
+        selectedField.type === 'multiselect' ||
+        selectedField.multiValue === true);
     onFiltersChange({
       combinator: filters?.combinator ?? 'and',
       clauses: [
-        ...existingClauses.filter(existing =>
-          !shouldReplaceField || existing.field !== selectedField.id),
+        ...existingClauses.filter(
+          (existing) =>
+            !shouldReplaceField || existing.field !== selectedField.id
+        ),
         clause,
       ],
     });
@@ -277,7 +333,9 @@ export function TrackerViewHeaderControls({
   const removeActiveFilter = (index: number): void => {
     onFiltersChange({
       combinator: filters?.combinator ?? 'and',
-      clauses: (filters?.clauses ?? []).filter((_, clauseIndex) => clauseIndex !== index),
+      clauses: (filters?.clauses ?? []).filter(
+        (_, clauseIndex) => clauseIndex !== index
+      ),
     });
   };
 
@@ -290,10 +348,17 @@ export function TrackerViewHeaderControls({
         className="min-w-8 text-right text-[11px] tabular-nums text-nim-faint"
         data-testid="tracker-view-item-count"
       >
-        {itemCount} item{itemCount === 1 ? '' : 's'}
+        {unscopedItemCount === undefined
+          ? `${itemCount} item${itemCount === 1 ? '' : 's'}`
+          : statusScope === 'all'
+          ? `${itemCount} total`
+          : `${itemCount} ${statusScope} of ${unscopedItemCount}`}
       </span>
 
-      <TrackerStatusScopeControl scope={statusScope} onScopeChange={onStatusScopeChange} />
+      <TrackerStatusScopeControl
+        scope={statusScope}
+        onScopeChange={onStatusScopeChange}
+      />
 
       <div className="relative" ref={filterRootRef}>
         <button
@@ -346,25 +411,27 @@ export function TrackerViewHeaderControls({
                     className="h-9 w-full rounded-md border border-transparent bg-transparent pl-8 pr-10 text-[15px] text-nim outline-none placeholder:text-nim-faint focus:border-nim-focus"
                     placeholder="Add filter…"
                     value={query}
-                    onChange={event => {
+                    onChange={(event) => {
                       setQuery(event.target.value);
                       setHighlightedIndex(0);
                     }}
-                    onKeyDown={event => {
+                    onKeyDown={(event) => {
                       const itemCount = matchingFields.length + 1;
                       if (event.key === 'ArrowDown') {
                         event.preventDefault();
-                        setHighlightedIndex(index => Math.min(index + 1, itemCount - 1));
+                        setHighlightedIndex((index) =>
+                          Math.min(index + 1, itemCount - 1)
+                        );
                       } else if (event.key === 'ArrowUp') {
                         event.preventDefault();
-                        setHighlightedIndex(index => Math.max(index - 1, 0));
+                        setHighlightedIndex((index) => Math.max(index - 1, 0));
                       } else if (event.key === 'Enter') {
                         event.preventDefault();
                         if (highlightedIndex === 0) setMenuMode('advanced');
                         else if (matchingFields[highlightedIndex - 1]) {
                           const field = matchingFields[highlightedIndex - 1];
                           const row = filterRootRef.current?.querySelector(
-                            `[data-testid="tracker-filter-field-${field.id}"]`,
+                            `[data-testid="tracker-filter-field-${field.id}"]`
                           );
                           openField(field, row?.getBoundingClientRect());
                         }
@@ -380,32 +447,47 @@ export function TrackerViewHeaderControls({
                 </div>
 
                 {activeFilterCount > 0 && (
-                  <div className="border-b border-nim px-2 py-2" data-testid="tracker-filter-active-list">
+                  <div
+                    className="border-b border-nim px-2 py-2"
+                    data-testid="tracker-filter-active-list"
+                  >
                     <div className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-nim-faint">
                       Active filters
                     </div>
                     {(filters?.clauses ?? []).map((clause, index) => {
                       if (!isClauseComplete(clause)) return null;
-                      const field = filterFields.find(candidate => candidate.id === clause.field);
+                      const field = filterFields.find(
+                        (candidate) => candidate.id === clause.field
+                      );
                       return (
                         <div
                           key={`${clause.field}-${index}`}
                           className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[12px] text-nim"
                         >
-                          <MaterialSymbol icon={iconForField(field ?? {
-                            id: clause.field,
-                            label: clause.field,
-                          })} size={15} className="text-nim-faint" />
+                          <MaterialSymbol
+                            icon={iconForField(
+                              field ?? {
+                                id: clause.field,
+                                label: clause.field,
+                              }
+                            )}
+                            size={15}
+                            className="text-nim-faint"
+                          />
                           <span className="min-w-0 flex-1 truncate">
                             {field?.label ?? clause.field}{' '}
-                            <span className="text-nim-muted">{OP_LABELS[clause.op]}</span>{' '}
+                            <span className="text-nim-muted">
+                              {OP_LABELS[clause.op]}
+                            </span>{' '}
                             {filterValueLabel(clause.value, clause.op, field)}
                           </span>
                           <button
                             type="button"
                             className="rounded p-0.5 text-nim-faint hover:bg-nim-tertiary hover:text-nim"
                             onClick={() => removeActiveFilter(index)}
-                            aria-label={`Remove ${field?.label ?? clause.field} filter`}
+                            aria-label={`Remove ${
+                              field?.label ?? clause.field
+                            } filter`}
                           >
                             <MaterialSymbol icon="close" size={13} />
                           </button>
@@ -418,15 +500,19 @@ export function TrackerViewHeaderControls({
                 <div className="border-b border-nim p-2">
                   <button
                     type="button"
-                    className={highlightedIndex === 0
-                      ? 'flex w-full items-center gap-3 rounded-md bg-nim-tertiary px-3 py-2 text-left text-[14px] text-nim'
-                      : 'flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-[14px] text-nim hover:bg-nim-tertiary'}
+                    className={
+                      highlightedIndex === 0
+                        ? 'flex w-full items-center gap-3 rounded-md bg-nim-tertiary px-3 py-2 text-left text-[14px] text-nim'
+                        : 'flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-[14px] text-nim hover:bg-nim-tertiary'
+                    }
                     onMouseEnter={() => {
+                      preloadTrackerAdvancedFilterBuilder();
                       setHighlightedIndex(0);
                       setMenuMode('fields');
                       setSelectedFieldId(null);
                       setSelectedFieldRect(null);
                     }}
+                    onFocus={preloadTrackerAdvancedFilterBuilder}
                     onClick={() => {
                       setMenuMode('advanced');
                       setSelectedFieldId(null);
@@ -434,36 +520,67 @@ export function TrackerViewHeaderControls({
                     }}
                     data-testid="tracker-filter-advanced"
                   >
-                    <MaterialSymbol icon="filter_alt" size={19} className="text-nim-muted" />
+                    <MaterialSymbol
+                      icon="filter_alt"
+                      size={19}
+                      className="text-nim-muted"
+                    />
                     <span className="flex-1">Advanced filter</span>
                   </button>
                 </div>
 
                 <div className="max-h-[430px] overflow-y-auto p-2">
                   {matchingFields.map((field, index) => {
-                    const startsGroup = index > 0
-                      && (field.group ?? 'common') !== (matchingFields[index - 1].group ?? 'common');
+                    const startsGroup =
+                      index > 0 &&
+                      (field.group ?? 'common') !==
+                        (matchingFields[index - 1].group ?? 'common');
                     const commandIndex = index + 1;
                     return (
                       <div
                         key={field.id}
-                        className={startsGroup ? 'mt-2 border-t border-nim pt-2' : ''}
+                        className={
+                          startsGroup ? 'mt-2 border-t border-nim pt-2' : ''
+                        }
                       >
                         <button
                           type="button"
-                          className={selectedFieldId === field.id || highlightedIndex === commandIndex
-                            ? 'flex w-full items-center gap-3 rounded-md bg-nim-tertiary px-3 py-2 text-left text-[14px] text-nim'
-                            : 'flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-[14px] text-nim hover:bg-nim-tertiary'}
-                          onMouseEnter={event => {
+                          className={
+                            selectedFieldId === field.id ||
+                            highlightedIndex === commandIndex
+                              ? 'flex w-full items-center gap-3 rounded-md bg-nim-tertiary px-3 py-2 text-left text-[14px] text-nim'
+                              : 'flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-[14px] text-nim hover:bg-nim-tertiary'
+                          }
+                          onMouseEnter={(event) => {
+                            preloadTrackerFilterValueMenu();
                             setHighlightedIndex(commandIndex);
-                            openField(field, event.currentTarget.getBoundingClientRect());
+                            openField(
+                              field,
+                              event.currentTarget.getBoundingClientRect()
+                            );
                           }}
-                          onClick={event => openField(field, event.currentTarget.getBoundingClientRect())}
+                          onFocus={preloadTrackerFilterValueMenu}
+                          onClick={(event) =>
+                            openField(
+                              field,
+                              event.currentTarget.getBoundingClientRect()
+                            )
+                          }
                           data-testid={`tracker-filter-field-${field.id}`}
                         >
-                          <MaterialSymbol icon={iconForField(field)} size={19} className="text-nim-muted" />
-                          <span className="min-w-0 flex-1 truncate">{field.label}</span>
-                          <MaterialSymbol icon="chevron_right" size={16} className="text-nim-faint" />
+                          <MaterialSymbol
+                            icon={iconForField(field)}
+                            size={19}
+                            className="text-nim-muted"
+                          />
+                          <span className="min-w-0 flex-1 truncate">
+                            {field.label}
+                          </span>
+                          <MaterialSymbol
+                            icon="chevron_right"
+                            size={16}
+                            className="text-nim-faint"
+                          />
                         </button>
                       </div>
                     );
@@ -478,7 +595,7 @@ export function TrackerViewHeaderControls({
             )}
 
             {menuMode === 'advanced' && (
-              <TrackerAdvancedFilterBuilder
+              <LazyTrackerAdvancedFilterBuilder
                 filterFields={filterFields}
                 filters={filters}
                 onFiltersChange={onFiltersChange}
@@ -490,33 +607,42 @@ export function TrackerViewHeaderControls({
         )}
 
         {showFilters && menuMode === 'field' && selectedField && (
-          <TrackerFilterValueMenu
+          <LazyTrackerFilterValueMenu
             key={`${selectedField.id}:${JSON.stringify(
-              clausesForField(filters, selectedField.id).map(clause => clause.value),
+              clausesForField(filters, selectedField.id).map(
+                (clause) => clause.value
+              )
             )}`}
             field={selectedField}
             anchorRect={selectedFieldRect}
             placement="left"
-            selectedValues={new Set(
-              clausesForField(filters, selectedField.id).flatMap(clause =>
-                Array.isArray(clause.value)
-                  ? clause.value.map(String)
-                  : clause.value === undefined ? [] : [String(clause.value)]),
-            )}
+            selectedValues={
+              new Set(
+                clausesForField(filters, selectedField.id).flatMap((clause) =>
+                  Array.isArray(clause.value)
+                    ? clause.value.map(String)
+                    : clause.value === undefined
+                    ? []
+                    : [String(clause.value)]
+                )
+              )
+            }
             onSelect={applyQuickFilter}
-            onClear={clausesForField(filters, selectedField.id).length > 0
-              ? () => {
-                onFiltersChange({
-                  combinator: filters?.combinator ?? 'and',
-                  clauses: (filters?.clauses ?? []).filter(
-                    clause => clause.field !== selectedField.id,
-                  ),
-                });
-                setMenuMode('fields');
-                setSelectedFieldId(null);
-                setSelectedFieldRect(null);
-              }
-              : undefined}
+            onClear={
+              clausesForField(filters, selectedField.id).length > 0
+                ? () => {
+                    onFiltersChange({
+                      combinator: filters?.combinator ?? 'and',
+                      clauses: (filters?.clauses ?? []).filter(
+                        (clause) => clause.field !== selectedField.id
+                      ),
+                    });
+                    setMenuMode('fields');
+                    setSelectedFieldId(null);
+                    setSelectedFieldRect(null);
+                  }
+                : undefined
+            }
             onClose={() => {
               setMenuMode('fields');
               setSelectedFieldId(null);
@@ -539,7 +665,17 @@ export function TrackerViewHeaderControls({
           }`}
           onClick={() => {
             setShowFilters(false);
-            setShowDisplayOptions(open => !open);
+            setShowDisplayOptions((open) => !open);
+          }}
+          onPointerEnter={() => {
+            preloadDisplayOptionsPanel();
+            preloadTagBoard();
+            preloadTrackerTimelineView();
+          }}
+          onFocus={() => {
+            preloadDisplayOptionsPanel();
+            preloadTagBoard();
+            preloadTrackerTimelineView();
           }}
           title="Display settings — view, grouping, ordering & columns"
           aria-label="Display settings"
@@ -550,21 +686,27 @@ export function TrackerViewHeaderControls({
           Display
         </button>
         {showDisplayOptions && (
-          <DisplayOptionsPanel
+          <LazyDisplayOptionsPanel
             availableColumns={availableColumns}
             config={columnConfig}
             onConfigChange={onColumnConfigChange}
             onClose={() => setShowDisplayOptions(false)}
             anchorElement={displayOptionsButtonRef.current}
-            viewModes={TRACKER_VIEW_MODE_OPTIONS}
+            viewModes={viewModeOptions}
             viewMode={viewMode}
-            onViewModeChange={mode => setModeLayout({
-              viewMode: normalizeTrackerViewMode(mode, viewMode),
-            })}
+            onViewModeChange={(mode) =>
+              onLayoutChange({
+                viewMode: normalizeTrackerViewMode(mode, viewMode),
+              })
+            }
             groupBy={groupBy}
-            onGroupByChange={nextGroupBy => setModeLayout({ groupBy: nextGroupBy })}
+            onGroupByChange={(nextGroupBy) =>
+              onLayoutChange({ groupBy: nextGroupBy })
+            }
             ordering={ordering}
-            onOrderingChange={nextOrdering => setModeLayout({ ordering: nextOrdering })}
+            onOrderingChange={(nextOrdering) =>
+              onLayoutChange({ ordering: nextOrdering })
+            }
             showColumnProperties={showColumnControls}
           />
         )}

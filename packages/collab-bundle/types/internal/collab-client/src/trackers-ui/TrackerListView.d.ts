@@ -21,5 +21,10 @@ export interface TrackerListViewProps {
      * and the dot's module never enters that host's bundle graph.
      */
     renderUnreadSlot?: (itemId: string) => React.ReactNode;
+    /**
+     * Right-click on a row. Omit and the browser's own menu is left alone, which
+     * is what the desktop does -- it catches the gesture on its grid instead.
+     */
+    onRowContextMenu?: (itemId: string, event: React.MouseEvent) => void;
 }
-export declare function TrackerListView({ rows, groupBy, selectedItemId, onOpenItem, loaded, renderUnreadSlot, }: TrackerListViewProps): React.JSX.Element;
+export declare function TrackerListView({ rows, groupBy, selectedItemId, onOpenItem, loaded, renderUnreadSlot, onRowContextMenu, }: TrackerListViewProps): React.JSX.Element;

@@ -26,7 +26,11 @@
 import React, { createContext, useContext, useEffect, useMemo } from 'react';
 import { Provider as JotaiProvider } from 'jotai';
 import { store } from '@nimbalyst/runtime/store';
-import type { TrackerDataSource, TrackerIdentity } from '@nimbalyst/collab-client/trackers';
+import type {
+  TrackerDataSource,
+  TrackerIdentity,
+  TrackerViewMode,
+} from '@nimbalyst/collab-client/trackers';
 import { createTrackerDataStore, type TrackerDataStore } from './trackerDataStore';
 
 export interface TrackerUICapabilities {
@@ -35,12 +39,20 @@ export interface TrackerUICapabilities {
    * False in a browser tab, which holds team auth only.
    */
   personalState: boolean;
+  /** Saved-view modes this host can render without substituting another mode. */
+  renderableViewModes: ReadonlySet<TrackerViewMode>;
 }
 
 /** Opt-in. Only a host that actually holds a personal JWT may pass this. */
-export const DESKTOP_TRACKER_UI_CAPABILITIES: TrackerUICapabilities = { personalState: true };
+export const DESKTOP_TRACKER_UI_CAPABILITIES: TrackerUICapabilities = {
+  personalState: true,
+  renderableViewModes: new Set<TrackerViewMode>(['list', 'table', 'kanban', 'timeline', 'tag-board', 'inbox']),
+};
 /** The default, everywhere: no provider and no `capabilities` prop both land here. */
-export const BROWSER_TRACKER_UI_CAPABILITIES: TrackerUICapabilities = { personalState: false };
+export const BROWSER_TRACKER_UI_CAPABILITIES: TrackerUICapabilities = {
+  personalState: false,
+  renderableViewModes: new Set<TrackerViewMode>(['list', 'table', 'kanban', 'timeline', 'tag-board']),
+};
 
 export interface TrackersUIContextValue {
   /** Absent when a host renders a leaf component outside a tracker surface. */

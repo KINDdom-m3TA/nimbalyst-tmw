@@ -42,6 +42,27 @@ export interface TrackerGridSurfaceProps {
     selectedItemId?: string | null;
     /** Opens a row into the host's detail. See `handleCellFocus` for the gesture. */
     onOpenItem?: (itemId: string) => void;
+    /**
+     * Right-click on a row, and the click on its overflow button.
+     *
+     * Supplying this is what adds the pinned trailing overflow column: that cell
+     * dispatches a synthetic `contextmenu` for a host row menu to catch, so a
+     * host without a menu would get an inert button and a permanently empty
+     * column at the right edge of every row. It used to be a separate
+     * `rowActions` boolean and the two could disagree -- the column shipped
+     * switched off precisely because nothing was listening. Now the listener *is*
+     * the switch.
+     *
+     * `itemIds` is the right-clicked row, or the whole selected range when that
+     * row is inside one, so a host can offer an action over several items.
+     */
+    onRowContextMenu?: (payload: {
+        itemIds: string[];
+        point: {
+            x: number;
+            y: number;
+        };
+    }) => void;
     /** False until the first snapshot resolves. */
     loaded: boolean;
 }
@@ -49,4 +70,4 @@ export interface TrackerGridUpdateEntry {
     itemId: string;
     updates: Record<string, unknown>;
 }
-export declare function TrackerGridSurface({ rows, trackerType, columnConfig, sortBy, sortDirection, columnFilters, onColumnFiltersChange, resolveRelationshipLabel, isRowEditable, onItemsUpdate, selectedItemId, onOpenItem, loaded, }: TrackerGridSurfaceProps): React.JSX.Element;
+export declare function TrackerGridSurface({ rows, trackerType, columnConfig, sortBy, sortDirection, columnFilters, onColumnFiltersChange, resolveRelationshipLabel, isRowEditable, onItemsUpdate, selectedItemId, onOpenItem, onRowContextMenu, loaded, }: TrackerGridSurfaceProps): React.JSX.Element;

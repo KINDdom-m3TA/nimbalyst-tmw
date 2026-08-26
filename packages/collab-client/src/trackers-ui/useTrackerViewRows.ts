@@ -12,6 +12,7 @@ import { useMemo } from 'react';
 import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
 import type { Readiness } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerReadiness';
 import type { TrackerIdentity } from '@nimbalyst/runtime/core/DocumentService';
+import { filterTrackerRecords } from '@nimbalyst/runtime/plugins/TrackerPlugin/components/trackerRowData';
 import {
   filterTrackerItems,
   findPersonalViewClauses,
@@ -20,10 +21,17 @@ import {
   type PersonalViewClause,
   type SavedViewDefinition,
 } from '@nimbalyst/collab-client/trackers';
-import { useTrackerUICapabilities } from './TrackersUIProvider';
+import {
+  useTrackerUICapabilities,
+  type TrackerUICapabilities,
+} from './TrackersUIProvider';
 
 export interface TrackerViewRowsOptions {
   identity: TrackerIdentity | null;
+  /** Explicit host declaration for callers outside a TrackersUIProvider. */
+  capabilities?: TrackerUICapabilities;
+  /** Free-text search applied in the same row-selection pass as the saved view. */
+  searchTerm?: string;
   /** Dependency readiness, derived once from the whole corpus by the host. */
   readinessByItemId?: ReadonlyMap<string, Readiness>;
   /** Personal favorites; only ever populated where a personal lane exists. */
@@ -43,8 +51,17 @@ export function useTrackerViewRows(
   definition: SavedViewDefinition,
   options: TrackerViewRowsOptions,
 ): TrackerViewRows {
-  const { personalState } = useTrackerUICapabilities();
-  const { identity, readinessByItemId, favoriteItemIds, viewedAtByItemId, nowMs } = options;
+  const contextCapabilities = useTrackerUICapabilities();
+  const {
+    identity,
+    capabilities = contextCapabilities,
+    searchTerm = '',
+    readinessByItemId,
+    favoriteItemIds,
+    viewedAtByItemId,
+    nowMs,
+  } = options;
+  const { personalState } = capabilities;
 
   const personalClauses = useMemo(
     () => (personalState ? [] : findPersonalViewClauses(definition)),
@@ -57,15 +74,18 @@ export function useTrackerViewRows(
   );
 
   const rows = useMemo(() => sortBoardColumnItems(
-    filterTrackerItems(
-      effective.selectedType === 'all'
-        ? records
-        : records.filter((record) => record.typeTags.includes(effective.selectedType)),
-      effective,
-      { identity, readinessByItemId, favoriteItemIds, viewedAtByItemId, nowMs },
+    filterTrackerRecords(
+      filterTrackerItems(
+        effective.selectedType === 'all'
+          ? records
+          : records.filter((record) => record.typeTags.includes(effective.selectedType)),
+        effective,
+        { identity, readinessByItemId, favoriteItemIds, viewedAtByItemId, nowMs },
+      ),
+      { searchTerm, typeFilter: 'all' },
     ),
     effective.ordering,
-  ), [records, effective, identity, readinessByItemId, favoriteItemIds, viewedAtByItemId, nowMs]);
+  ), [records, effective, identity, searchTerm, readinessByItemId, favoriteItemIds, viewedAtByItemId, nowMs]);
 
   return { rows, personalClauses };
 }

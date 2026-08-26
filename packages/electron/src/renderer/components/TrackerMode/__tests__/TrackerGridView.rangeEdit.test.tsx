@@ -481,7 +481,7 @@ describe('TrackerGridView column layout', () => {
       });
     });
 
-    screen.getByTestId('tracker-column-filter-value-submenu');
+    await screen.findByTestId('tracker-column-filter-value-submenu');
     screen.getByText('1 issue');
     screen.getByText('1 option not matching any issues');
     fireEvent.click(screen.getByTestId('tracker-column-filter-option-to-do'));

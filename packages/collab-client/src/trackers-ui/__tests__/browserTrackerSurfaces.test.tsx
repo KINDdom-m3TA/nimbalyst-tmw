@@ -20,25 +20,51 @@ import {
   BROWSER_TRACKER_UI_CAPABILITIES,
   DESKTOP_TRACKER_UI_CAPABILITIES,
   PersonalClauseNotice,
+  resolveViewMode,
   TrackerNavigation,
   TrackersUIProvider,
   useTrackerViewRows,
   type TrackerUICapabilities,
 } from '../index';
 
-function record(id: string): TrackerRecord {
+function record(
+  id: string,
+  fields: Record<string, unknown> = { title: id },
+): TrackerRecord {
   return {
     id,
     primaryType: 'bug',
     typeTags: ['bug'],
     issueKey: id.toUpperCase(),
-    fields: { title: id },
+    fields,
     system: {
       workspace: '/w',
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
     },
   } as unknown as TrackerRecord;
+}
+
+function SearchCompositionProbe() {
+  const definition: SavedViewDefinition = {
+    ...createDefaultViewDefinition(),
+    statusScope: 'open',
+    columnFilters: {
+      combinator: 'and',
+      clauses: [{ field: 'priority', op: '=', value: 'high' }],
+    },
+  };
+  const { rows } = useTrackerViewRows(
+    [
+      record('matching', { title: 'Release blocker', status: 'to-do', priority: 'high' }),
+      record('closed', { title: 'Release complete', status: 'done', priority: 'high' }),
+      record('wrong-view', { title: 'Release polish', status: 'to-do', priority: 'low' }),
+      record('wrong-search', { title: 'Documentation blocker', status: 'to-do', priority: 'high' }),
+    ],
+    definition,
+    { identity: null, searchTerm: 'release' },
+  );
+  return <span data-testid="composed-row-ids">{rows.map(row => row.id).join(',')}</span>;
 }
 
 /** A team-shared view built on the author's own star list. */
@@ -84,6 +110,40 @@ describe('a shared view built on a personal-lane clause', () => {
     // rows -- and no marker, because nothing was dropped.
     expect(screen.getByTestId('row-count').textContent).toBe('0');
     expect(screen.queryByTestId('tracker-personal-clause-notice')).toBeNull();
+  });
+});
+
+describe('shared view row composition', () => {
+  it('applies search, saved-view filters, and lifecycle scope in one row selection', () => {
+    render(
+      <TrackersUIProvider identity={null} capabilities={BROWSER_TRACKER_UI_CAPABILITIES}>
+        <SearchCompositionProbe />
+      </TrackersUIProvider>,
+    );
+    expect(screen.getByTestId('composed-row-ids').textContent).toBe('matching');
+  });
+});
+
+describe('resolveViewMode', () => {
+  // Timeline and tag board were extracted so a browser host could draw them;
+  // the triage inbox stays out because its snooze suppression is personal
+  // state. Both facts are one table row here rather than a rendered surface --
+  // the decision is what regresses, and every host reads it from this function.
+  it.each([
+    ['list', 'list', false],
+    ['table', 'table', false],
+    ['kanban', 'kanban', false],
+    ['timeline', 'timeline', false],
+    ['tag-board', 'tag-board', false],
+    ['inbox', 'list', true],
+  ] as const)('resolves %s to %s on a browser host', (requested, mode, substituted) => {
+    expect(resolveViewMode(requested, BROWSER_TRACKER_UI_CAPABILITIES))
+      .toEqual({ mode, substituted });
+  });
+
+  it('draws every mode, substituting none, on a host that has the personal lane', () => {
+    expect(resolveViewMode('inbox', DESKTOP_TRACKER_UI_CAPABILITIES))
+      .toEqual({ mode: 'inbox', substituted: false });
   });
 });
 

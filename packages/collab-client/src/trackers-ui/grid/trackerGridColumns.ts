@@ -13,6 +13,7 @@ import {
   getPriorityColor,
   getStatusColor,
   getTypeColor,
+  getTypeIcon,
   resolveColumnFieldName,
   type TrackerColumnDef,
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/components/trackerColumns';
@@ -119,6 +120,33 @@ function formatValue(
       if (typeof value === 'boolean') return value ? 'Yes' : 'No';
       return String(value);
   }
+}
+
+/**
+ * The Type cell: the schema's icon in the schema's hue, with the type name on
+ * hover.
+ *
+ * The column registry declares Type as `width: 64, minWidth: 64,
+ * render: 'type-icon'` because 64px is an icon, which is how desktop's
+ * `TrackerTable` draws it. This template had no `type-icon` branch, so the
+ * column fell through to the text badge below and every value clipped mid-word
+ * -- `githu`, `decis`, `comp`. The name stays reachable as the cell's title
+ * rather than being widened into the row.
+ */
+function typeIconNode(
+  createElement: HyperFunc<VNode>,
+  type: string,
+  label: string,
+): VNode {
+  return createElement(
+    'span',
+    {
+      class: 'tracker-grid-cell-type-icon',
+      style: { color: getTypeColor(type) },
+      title: label,
+    },
+    createElement('span', { class: 'material-symbols-outlined' }, getTypeIcon(type)),
+  );
 }
 
 /** Favorite affordance for the title cell, matching the list view's star. */
@@ -228,7 +256,11 @@ function buildCellTemplate(
 
     if (!text) return textNode(createElement, '');
 
-    if (col.render === 'badge' || col.render === 'type-icon') {
+    if (col.render === 'type-icon') {
+      return typeIconNode(createElement, String(value), text);
+    }
+
+    if (col.render === 'badge') {
       const color = col.role === 'workflowStatus'
         ? getStatusColor(String(value), rowType)
         : col.role === 'priority'

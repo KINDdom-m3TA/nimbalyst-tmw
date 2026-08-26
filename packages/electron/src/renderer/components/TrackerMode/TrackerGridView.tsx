@@ -73,12 +73,10 @@ import {
   buildGridSource,
   ROW_ACTIONS,
   ROW_ITEM_ID,
-  type RelationshipCandidate,
-} from '@nimbalyst/collab-client/trackers-ui';
-import {
   TrackerFilterValueMenu,
-} from './TrackerFilterValueMenu';
-import type { TrackerFilterField } from './TrackerViewHeaderControls';
+  type RelationshipCandidate,
+  type TrackerFilterField,
+} from '@nimbalyst/collab-client/trackers-ui';
 import { errorNotificationService } from '../../services/ErrorNotificationService';
 import '@nimbalyst/collab-client/trackers-ui/grid.css';
 

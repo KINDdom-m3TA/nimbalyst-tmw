@@ -28,11 +28,21 @@ export type {
   TrackerUICapabilities,
 } from './TrackersUIProvider';
 
-export { useTrackerCommand, useTrackerData, useTrackerDataSelector } from './useTrackerData';
+export {
+  useTrackerCommand,
+  useTrackerData,
+  useTrackerDataSelector,
+} from './useTrackerData';
 export type { TrackerDataState } from './useTrackerData';
 
 export { useTrackerViewRows } from './useTrackerViewRows';
-export type { TrackerViewRows, TrackerViewRowsOptions } from './useTrackerViewRows';
+export type {
+  TrackerViewRows,
+  TrackerViewRowsOptions,
+} from './useTrackerViewRows';
+
+export { resolveViewMode, VIEW_MODE_FALLBACK } from './resolveViewMode';
+export type { ResolvedViewMode, ViewModeCapabilities } from './resolveViewMode';
 
 export { PersonalClauseNotice } from './PersonalClauseNotice';
 export type { PersonalClauseNoticeProps } from './PersonalClauseNotice';
@@ -42,7 +52,49 @@ export {
 } from './TrackerMutationRejectionNotice';
 export type { TrackerMutationRejectionNoticeProps } from './TrackerMutationRejectionNotice';
 
-export type { TrackerFilterField, TrackerFilterFieldOption } from './trackerFilterFields';
+export type {
+  TrackerFilterField,
+  TrackerFilterFieldOption,
+} from './trackerFilterFields';
+export { buildHeaderFilterFields } from './trackerHeaderFilterFields';
+export {
+  createTrackerFilterFields,
+  getTrackerHeaderFilterValue,
+} from './createTrackerFilterFields';
+
+export {
+  dispatchTrackerFocusSearch,
+  TRACKER_FOCUS_SEARCH_EVENT,
+  TrackerFilterOmnibox,
+} from './TrackerFilterOmnibox';
+export type { TrackerFilterOmniboxProps } from './TrackerFilterOmnibox';
+export {
+  LazyTrackerAdvancedFilterBuilder as TrackerAdvancedFilterBuilder,
+  preloadTrackerAdvancedFilterBuilder,
+} from './LazyTrackerAdvancedFilterBuilder';
+export type { TrackerAdvancedFilterBuilderProps } from './TrackerAdvancedFilterBuilder';
+export {
+  LazyTrackerFilterValueMenu as TrackerFilterValueMenu,
+  preloadTrackerFilterValueMenu,
+} from './LazyTrackerFilterValueMenu';
+export type { TrackerFilterValueMenuProps } from './TrackerFilterValueMenu';
+export {
+  LazyDisplayOptionsPanel as DisplayOptionsPanel,
+  preloadDisplayOptionsPanel,
+} from './LazyDisplayOptionsPanel';
+export type { LazyDisplayOptionsPanelProps as DisplayOptionsPanelProps } from './LazyDisplayOptionsPanel';
+export { TrackerViewHeaderControls } from './TrackerViewHeaderControls';
+export type {
+  TrackerViewHeaderControlsProps,
+  TrackerViewLayoutUpdate,
+} from './TrackerViewHeaderControls';
+export {
+  LazyTrackerTimelineView as TrackerTimelineView,
+  preloadTrackerTimelineView,
+} from './LazyTrackerTimelineView';
+export type { TrackerTimelineViewProps } from './TrackerTimelineView';
+export { LazyTagBoard as TagBoard, preloadTagBoard } from './LazyTagBoard';
+export type { TagBoardProps } from './TagBoard';
 
 export { TrackerActiveFilterPills } from './TrackerActiveFilterPills';
 export { TrackerViewTitle } from './TrackerViewTitle';
@@ -65,8 +117,14 @@ export type { TrackerSwatchBadgeProps } from './primitives/TrackerSwatchBadge';
 export { TrackerNavigation } from './navigation/TrackerNavigation';
 export type { TrackerNavigationProps } from './navigation/TrackerNavigation';
 
-export { ALL_TRACKERS_NAV_MODEL, TrackerNavTypeRow } from './navigation/TrackerNavTypeRow';
-export type { TrackerNavTypeModel, TrackerNavTypeRowProps } from './navigation/TrackerNavTypeRow';
+export {
+  ALL_TRACKERS_NAV_MODEL,
+  TrackerNavTypeRow,
+} from './navigation/TrackerNavTypeRow';
+export type {
+  TrackerNavTypeModel,
+  TrackerNavTypeRowProps,
+} from './navigation/TrackerNavTypeRow';
 
 export { TrackerBoardCard } from './board/TrackerBoardCard';
 export type { TrackerBoardCardProps } from './board/TrackerBoardCard';
@@ -112,9 +170,28 @@ export type {
   RelationshipCandidate,
   TrackerEditorContext,
 } from './grid/trackerGridEditors';
-export { TrackerColumnFilterPopover } from './grid/TrackerColumnFilterPopover';
+export { LazyTrackerColumnFilterPopover as TrackerColumnFilterPopover } from './grid/LazyTrackerColumnFilterPopover';
+export type { TrackerColumnFilterPopoverProps } from './grid/TrackerColumnFilterPopover';
 export { TrackerGridSurface } from './grid/TrackerGridSurface';
-export type { TrackerGridSurfaceProps, TrackerGridUpdateEntry } from './grid/TrackerGridSurface';
+export type {
+  TrackerGridSurfaceProps,
+  TrackerGridUpdateEntry,
+} from './grid/TrackerGridSurface';
 
 export { TrackerItemDetailPanel } from './detail/TrackerItemDetailPanel';
 export type { TrackerItemDetailPanelProps } from './detail/TrackerItemDetailPanel';
+export { CopyLinkButton } from './detail/CopyLinkButton';
+export type { CopyLinkButtonProps } from './detail/CopyLinkButton';
+export { copyTextToClipboard } from './detail/copyTextToClipboard';
+export { TrackerItemActionsMenu } from './detail/TrackerItemActionsMenu';
+export type { TrackerItemActionsMenuProps } from './detail/TrackerItemActionsMenu';
+export { TrackerActionList } from './detail/TrackerActionList';
+export type {
+  TrackerItemAction,
+  TrackerActionListProps,
+} from './detail/TrackerActionList';
+export { TrackerContextMenu } from './detail/TrackerContextMenu';
+export type {
+  TrackerContextMenuPoint,
+  TrackerContextMenuProps,
+} from './detail/TrackerContextMenu';

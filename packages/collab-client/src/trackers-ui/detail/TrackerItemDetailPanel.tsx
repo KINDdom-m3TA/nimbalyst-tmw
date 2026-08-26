@@ -13,6 +13,21 @@
  * integration here would be a second cold-paint contract to get wrong: the
  * binding only paints Y.Doc events observed *after* it mounts (NIM-1764), and
  * that is a property of the mount, not of this panel.
+ *
+ * ## Two ordering rules, both load-bearing
+ *
+ * **Fields come before the body.** They used to come after it, so opening an
+ * item showed the editor's "Opening this document..." placeholder exactly where
+ * Status, Priority and Owner belong and pushed every field below the fold until
+ * the room answered. The facts a reader opens an item for must not wait on a
+ * socket. Desktop has always drawn them in this order.
+ *
+ * **`bodySlot` stays at one static JSX position.** Every child of the scroll
+ * column below is written literally, so React reconciles the slot by a position
+ * that cannot move between renders. A layout that chose its wrapper at runtime
+ * -- a rail above some width, a stack below it -- would remount the binding on
+ * a resize and leave the reader a silently blank editor. Width-dependent layout
+ * is therefore CSS (`trackerItemDetail.css`), never a branch.
  */
 
 import React from 'react';
@@ -36,6 +51,9 @@ import {
   TrackerCommentsSection,
   type TrackerCommentMutation,
 } from '../TrackerCommentsSection';
+import { CopyLinkButton } from './CopyLinkButton';
+import { TrackerItemActionsMenu, type TrackerItemAction } from './TrackerItemActionsMenu';
+import './trackerItemDetail.css';
 
 export interface TrackerItemDetailPanelProps {
   item: TrackerRecord;
@@ -47,6 +65,20 @@ export interface TrackerItemDetailPanelProps {
   teamMembers?: TeamMemberOption[];
   /** The item body, mounted by the host through the shared editor entry. */
   bodySlot?: React.ReactNode;
+  /**
+   * Connectivity and presence for the body, drawn on the header row.
+   *
+   * A slot rather than a rendered status, because the two hosts report from
+   * different places -- the browser publishes it up from the mounted editor
+   * through a context channel, the desktop reads its own document state. What
+   * matters here is only that it shares the header row instead of spending a
+   * full strip of its own on one handoff link.
+   */
+  headerStatus?: React.ReactNode;
+  /** Copied by the header's link button; omit to hide it. */
+  copyLinkHref?: string;
+  /** Extra header actions, behind the overflow menu. */
+  overflowActions?: readonly TrackerItemAction[];
   onClose?: () => void;
   mutationRejection?: TrackerMutationRejection | null;
 }
@@ -69,6 +101,9 @@ export function TrackerItemDetailPanel({
   formatTimestamp,
   teamMembers,
   bodySlot,
+  headerStatus,
+  copyLinkHref,
+  overflowActions,
   onClose,
   mutationRejection,
 }: TrackerItemDetailPanelProps) {
@@ -81,36 +116,40 @@ export function TrackerItemDetailPanel({
       data-testid="tracker-item-detail"
       data-item-id={item.id}
     >
-      <div className="flex items-start gap-2 border-b border-nim px-4 py-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <TrackerSwatchBadge label={item.primaryType} color={getTypeColor(item.primaryType)} />
-            {item.issueKey ? (
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-nim-faint">
-                {item.issueKey}
-              </span>
-            ) : null}
-          </div>
-          <h2 className="mt-1 truncate text-base font-semibold text-nim select-text">
-            {getRecordTitle(item)}
-          </h2>
+      <div className="tracker-item-detail-header border-b border-nim px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <TrackerSwatchBadge label={item.primaryType} color={getTypeColor(item.primaryType)} />
+          {item.issueKey ? (
+            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-nim-faint select-text">
+              {item.issueKey}
+            </span>
+          ) : null}
+          {/* Everything after this is right-aligned: identity on the left,
+              connectivity and actions on the right, one row. */}
+          <span className="ml-auto" />
+          {headerStatus}
+          {copyLinkHref ? (
+            <CopyLinkButton value={copyLinkHref} testId="tracker-copy-link" />
+          ) : null}
+          <TrackerItemActionsMenu actions={overflowActions ?? []} />
+          {onClose ? (
+            <button
+              type="button"
+              className="flex size-6 items-center justify-center rounded text-nim-faint hover:bg-nim-hover hover:text-nim"
+              aria-label="Close item"
+              onClick={onClose}
+            >
+              <MaterialSymbol icon="close" size={16} />
+            </button>
+          ) : null}
         </div>
-        {onClose ? (
-          <button
-            type="button"
-            className="text-nim-faint hover:text-nim"
-            aria-label="Close item"
-            onClick={onClose}
-          >
-            <MaterialSymbol icon="close" size={16} />
-          </button>
-        ) : null}
+        <h2 className="mt-1 truncate text-base font-semibold text-nim select-text">
+          {getRecordTitle(item)}
+        </h2>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {bodySlot ? <div className="tracker-item-detail-body border-b border-nim">{bodySlot}</div> : null}
-
-        <div className="tracker-item-detail-fields grid gap-3 px-4 py-3">
+      <div className="tracker-item-detail-scroll min-h-0 flex-1 overflow-y-auto">
+        <div className="tracker-item-detail-fields grid gap-3 border-b border-nim px-4 py-3">
           {fields.map((field) => (
             <TrackerFieldEditor
               key={field.name}
@@ -123,7 +162,9 @@ export function TrackerItemDetailPanel({
           ))}
         </div>
 
-        <div className="border-t border-nim px-4 py-3">
+        {bodySlot ? <div className="tracker-item-detail-body border-b border-nim">{bodySlot}</div> : null}
+
+        <div className="px-4 py-3">
           <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-nim-faint">
             Comments
           </div>

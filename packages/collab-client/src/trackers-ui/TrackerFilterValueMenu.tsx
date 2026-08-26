@@ -3,9 +3,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { FloatingPortal } from '@floating-ui/react';
 import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import type { TrackerFilterOp } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
-import type { TrackerFilterField } from './TrackerViewHeaderControls';
+import type { TrackerFilterField } from './trackerFilterFields';
 
-interface TrackerFilterValueMenuProps {
+export interface TrackerFilterValueMenuProps {
   field: TrackerFilterField;
   anchorRect: DOMRect | null;
   placement?: 'left' | 'below';

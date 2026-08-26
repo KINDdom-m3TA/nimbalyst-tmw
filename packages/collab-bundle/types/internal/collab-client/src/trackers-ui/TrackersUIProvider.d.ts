@@ -23,7 +23,7 @@
  * different one on desktop.
  */
 import React from 'react';
-import type { TrackerDataSource, TrackerIdentity } from '../trackers/index';
+import type { TrackerDataSource, TrackerIdentity, TrackerViewMode } from '../trackers/index';
 import { type TrackerDataStore } from './trackerDataStore';
 export interface TrackerUICapabilities {
     /**
@@ -31,6 +31,8 @@ export interface TrackerUICapabilities {
      * False in a browser tab, which holds team auth only.
      */
     personalState: boolean;
+    /** Saved-view modes this host can render without substituting another mode. */
+    renderableViewModes: ReadonlySet<TrackerViewMode>;
 }
 /** Opt-in. Only a host that actually holds a personal JWT may pass this. */
 export declare const DESKTOP_TRACKER_UI_CAPABILITIES: TrackerUICapabilities;

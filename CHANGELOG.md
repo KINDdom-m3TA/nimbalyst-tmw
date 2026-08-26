@@ -10,12 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
-- Work your team's shared trackers from the web console: browse saved views in grid and kanban, open an item and read its body live, edit fields, comment, create items, and drag cards between columns, all converging with the desktop app in real time.
+- Work your team's shared trackers from the web console: search and filter, sort and group, choose your columns, switch between list, table, board, timeline and tag board, open an item and read its body live, edit fields, comment, create items, and drag cards between columns, all converging with the desktop app in real time.
+- Invite people to your organization from the web console, see who has not accepted yet, and resend or revoke a pending invitation.
+- Open anything in the web console with Cmd+K, right-click a tracker row for its actions, and pick from the full set of Nimbalyst themes.
 - A tracker now shows who else is viewing it.
 - Ask a teammate to pick between mockups and they see the designs themselves: every option shows a live preview, and clicking one opens it full size to read, step between options and vote without leaving the request.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- The web console now reads as Nimbalyst rather than a separate admin tool: the same header, navigation and controls as the desktop app, and a layout that holds up on a phone when you follow a link to a request or a single tracker item.
+- The web console's Requests inbox now also carries mentions, replies, tracker comments and document discussions, filtered by what you are looking for, and each row says what it is about instead of repeating the sender's name.
 - Mockups and data models embedded in a document now render as the live editor instead of a saved screenshot, and existing embeds convert on open.
 - Editing many tracker rows at once — pasting a range, or changing status or priority on a multi-row selection — now applies as a single update instead of one per row.
 - Quick open now finds a tracker by its issue key or number and puts it at the top, instead of only ever ranking trackers by meaning.

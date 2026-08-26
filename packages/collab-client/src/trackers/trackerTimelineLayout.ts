@@ -1,5 +1,5 @@
 /**
- * Date derivation and time-axis layout for the tracker timeline.
+ * Shared date derivation and time-axis layout for the tracker timeline.
  *
  * Pure and React-free, because the two things most likely to be wrong here are
  * invisible on screen: which date an item is placed by, and whether a bucket is
@@ -74,11 +74,8 @@ function usableDate(value: unknown): Date | null {
   return parsed && parsed.getTime() > MIN_PLACEABLE_TIME ? parsed : null;
 }
 
-function firstNamedField(
-  item: TrackerRecord,
-  names: readonly string[],
-): { field: string; date: Date } | null {
-  const byLowerName = new Map(Object.keys(item.fields).map(key => [key.toLowerCase(), key]));
+function firstNamedField(item: TrackerRecord, names: readonly string[]): { field: string; date: Date } | null {
+  const byLowerName = new Map(Object.keys(item.fields).map((key) => [key.toLowerCase(), key]));
   for (const name of names) {
     const field = byLowerName.get(name);
     if (!field) continue;
@@ -162,9 +159,12 @@ export function startOfLocalMonth(date: Date): Date {
 /** The start of the bucket `date` falls in, at the given granularity. */
 export function timelineBucketStart(date: Date, granularity: TrackerTimelineGranularity): Date {
   switch (granularity) {
-    case 'day': return startOfLocalDay(date);
-    case 'week': return startOfLocalWeek(date);
-    case 'month': return startOfLocalMonth(date);
+    case 'day':
+      return startOfLocalDay(date);
+    case 'week':
+      return startOfLocalWeek(date);
+    case 'month':
+      return startOfLocalMonth(date);
   }
 }
 
@@ -173,9 +173,12 @@ function nextBucketStart(start: Date, granularity: TrackerTimelineGranularity): 
   const m = start.getMonth();
   const d = start.getDate();
   switch (granularity) {
-    case 'day': return new Date(y, m, d + 1);
-    case 'week': return new Date(y, m, d + 7);
-    case 'month': return new Date(y, m + 1, 1);
+    case 'day':
+      return new Date(y, m, d + 1);
+    case 'week':
+      return new Date(y, m, d + 7);
+    case 'month':
+      return new Date(y, m + 1, 1);
   }
 }
 
@@ -213,14 +216,9 @@ export interface TrackerTimelineBucket {
   end: Date;
 }
 
-function bucketLabel(
-  start: Date,
-  granularity: TrackerTimelineGranularity,
-  showYear: boolean,
-): string {
-  const options: Intl.DateTimeFormatOptions = granularity === 'month'
-    ? { month: 'short' }
-    : { month: 'short', day: 'numeric' };
+function bucketLabel(start: Date, granularity: TrackerTimelineGranularity, showYear: boolean): string {
+  const options: Intl.DateTimeFormatOptions =
+    granularity === 'month' ? { month: 'short' } : { month: 'short', day: 'numeric' };
   if (showYear) options.year = 'numeric';
   return start.toLocaleDateString(undefined, options);
 }
@@ -321,8 +319,8 @@ export function buildTrackerTimeline(
   let buckets: TrackerTimelineBucket[] = [];
 
   if (dated.length > 0) {
-    const earliest = Math.min(...dated.map(d => d.start.getTime()));
-    const latest = Math.max(...dated.map(d => (d.end ?? d.start).getTime()));
+    const earliest = Math.min(...dated.map((d) => d.start.getTime()));
+    const latest = Math.max(...dated.map((d) => (d.end ?? d.start).getTime()));
     granularity = resolveTimelineGranularity((latest - earliest) / DAY_MS);
     const start = timelineBucketStart(new Date(earliest), granularity);
     // The bucket containing the last date is included whole, so a bar never ends
@@ -332,7 +330,7 @@ export function buildTrackerTimeline(
     buckets = buildTimelineBuckets(range, granularity);
   }
 
-  const rows = groupTrackerRecordsByAxis(items, groupBy, resolveLabel).map(group => {
+  const rows = groupTrackerRecordsByAxis(items, groupBy, resolveLabel).map((group) => {
     const ordered = sortBoardColumnItems(group.items, ordering);
     const bars: TrackerTimelineBar[] = [];
     const undated: TrackerRecord[] = [];

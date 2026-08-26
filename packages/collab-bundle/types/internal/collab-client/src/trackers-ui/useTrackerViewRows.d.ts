@@ -11,8 +11,13 @@ import type { TrackerRecord } from '../../../runtime/src/core/TrackerRecord';
 import type { Readiness } from '../../../runtime/src/plugins/TrackerPlugin/models/trackerReadiness';
 import type { TrackerIdentity } from '../../../runtime/src/core/DocumentService';
 import { type PersonalViewClause, type SavedViewDefinition } from '../trackers/index';
+import { type TrackerUICapabilities } from './TrackersUIProvider';
 export interface TrackerViewRowsOptions {
     identity: TrackerIdentity | null;
+    /** Explicit host declaration for callers outside a TrackersUIProvider. */
+    capabilities?: TrackerUICapabilities;
+    /** Free-text search applied in the same row-selection pass as the saved view. */
+    searchTerm?: string;
     /** Dependency readiness, derived once from the whole corpus by the host. */
     readinessByItemId?: ReadonlyMap<string, Readiness>;
     /** Personal favorites; only ever populated where a personal lane exists. */

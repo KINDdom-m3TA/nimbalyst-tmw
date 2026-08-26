@@ -13,6 +13,10 @@
  */
 export * from './internal/collab-client/src/trackers/index';
 export * from './internal/collab-client/src/trackers-ui/index';
+export { TagBoard, TrackerTimelineView, } from './internal/collab-client/src/trackers-ui/index';
+export type { TagBoardProps, TrackerTimelineViewProps, } from './internal/collab-client/src/trackers-ui/index';
+export { resolveViewMode, VIEW_MODE_FALLBACK, } from './internal/collab-client/src/trackers-ui/index';
+export type { ResolvedViewMode, ViewModeCapabilities, } from './internal/collab-client/src/trackers-ui/index';
 /**
  * Host-facing pieces a browser tracker surface needs that are not part of
  * either shared subpath.
@@ -27,7 +31,9 @@ export * from './internal/collab-client/src/trackers-ui/index';
 export { parseBuiltinTrackers } from './internal/runtime/src/plugins/TrackerPlugin/models/ModelLoader';
 export { computeReadiness } from './internal/runtime/src/plugins/TrackerPlugin/models/trackerReadiness';
 export type { Readiness } from './internal/runtime/src/plugins/TrackerPlugin/models/trackerReadiness';
-export { getRecordStatus, getRecordTitle } from './internal/runtime/src/plugins/TrackerPlugin/trackerRecordAccessors';
+export { getRecordStatus, getRecordTitle, } from './internal/runtime/src/plugins/TrackerPlugin/trackerRecordAccessors';
+export { getCellValue, getDefaultColumnConfig, getFieldForColumn, resolveColumnsForType, } from './internal/runtime/src/plugins/TrackerPlugin/components/trackerColumns';
+export type { TrackerColumnDef, TypeColumnConfig, } from './internal/runtime/src/plugins/TrackerPlugin/components/trackerColumns';
 export type { TrackerFieldFilter, TrackerFilterSet, } from './internal/runtime/src/plugins/TrackerPlugin/models/trackerFilters';
 export type { TeamMemberOption } from './internal/runtime/src/plugins/TrackerPlugin/components/TrackerFieldEditor';
 export type { TrackerNavigationEntry, TrackerNavigationFolder, TrackerTypePlacement, } from './internal/runtime/src/sync/trackerNavigation';

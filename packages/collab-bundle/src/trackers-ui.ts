@@ -14,6 +14,22 @@
 
 export * from '@nimbalyst/collab-client/trackers';
 export * from '@nimbalyst/collab-client/trackers-ui';
+export {
+  TagBoard,
+  TrackerTimelineView,
+} from '@nimbalyst/collab-client/trackers-ui';
+export type {
+  TagBoardProps,
+  TrackerTimelineViewProps,
+} from '@nimbalyst/collab-client/trackers-ui';
+export {
+  resolveViewMode,
+  VIEW_MODE_FALLBACK,
+} from '@nimbalyst/collab-client/trackers-ui';
+export type {
+  ResolvedViewMode,
+  ViewModeCapabilities,
+} from '@nimbalyst/collab-client/trackers-ui';
 
 /**
  * Host-facing pieces a browser tracker surface needs that are not part of
@@ -29,7 +45,20 @@ export * from '@nimbalyst/collab-client/trackers-ui';
 export { parseBuiltinTrackers } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/ModelLoader';
 export { computeReadiness } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerReadiness';
 export type { Readiness } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerReadiness';
-export { getRecordStatus, getRecordTitle } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerRecordAccessors';
+export {
+  getRecordStatus,
+  getRecordTitle,
+} from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerRecordAccessors';
+export {
+  getCellValue,
+  getDefaultColumnConfig,
+  getFieldForColumn,
+  resolveColumnsForType,
+} from '@nimbalyst/runtime/plugins/TrackerPlugin/components/trackerColumns';
+export type {
+  TrackerColumnDef,
+  TypeColumnConfig,
+} from '@nimbalyst/runtime/plugins/TrackerPlugin/components/trackerColumns';
 export type {
   TrackerFieldFilter,
   TrackerFilterSet,

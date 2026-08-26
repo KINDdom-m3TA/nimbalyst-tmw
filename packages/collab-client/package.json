@@ -21,6 +21,10 @@
       "types": "./src/docs-ui/index.ts",
       "default": "./src/docs-ui/index.ts"
     },
+    "./docs-ui/EditorHeaderBar": {
+      "types": "./src/docs-ui/primitives/EditorHeaderBar.tsx",
+      "default": "./src/docs-ui/primitives/EditorHeaderBar.tsx"
+    },
     "./feedback": {
       "types": "./src/feedback/index.ts",
       "default": "./src/feedback/index.ts"
@@ -28,6 +32,10 @@
     "./trackers": {
       "types": "./src/trackers/index.ts",
       "default": "./src/trackers/index.ts"
+    },
+    "./quick-open": {
+      "types": "./src/quick-open/index.ts",
+      "default": "./src/quick-open/index.ts"
     },
     "./feedback-ui": {
       "types": "./src/feedback-ui/index.ts",

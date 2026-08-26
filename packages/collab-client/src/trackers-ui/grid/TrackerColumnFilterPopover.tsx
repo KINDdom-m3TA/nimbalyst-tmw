@@ -28,7 +28,7 @@ import {
   type TrackerFilterOp,
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
 
-interface TrackerColumnFilterPopoverProps {
+export interface TrackerColumnFilterPopoverProps {
   /** Column being filtered. */
   columnId: string;
   columnLabel: string;
@@ -46,7 +46,10 @@ interface TrackerColumnFilterPopoverProps {
 
 /** Split a comma-separated entry into the list operand `in` / `not-in` expect. */
 function parseListValue(text: string): string[] {
-  return text.split(',').map(v => v.trim()).filter(Boolean);
+  return text
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
 }
 
 interface DraftClause {
@@ -56,14 +59,21 @@ interface DraftClause {
 
 function valueText(clause: TrackerFieldFilter | undefined): string {
   if (clause?.value === undefined) return '';
-  return Array.isArray(clause.value) ? clause.value.join(', ') : String(clause.value);
+  return Array.isArray(clause.value)
+    ? clause.value.join(', ')
+    : String(clause.value);
 }
 
-function completeClause(columnId: string, draft: DraftClause): TrackerFieldFilter | null {
+function completeClause(
+  columnId: string,
+  draft: DraftClause
+): TrackerFieldFilter | null {
   if (UNARY_OPS.has(draft.op)) return { field: columnId, op: draft.op };
   if (draft.op === 'in' || draft.op === 'not-in') {
     const values = parseListValue(draft.text);
-    return values.length > 0 ? { field: columnId, op: draft.op, value: values } : null;
+    return values.length > 0
+      ? { field: columnId, op: draft.op, value: values }
+      : null;
   }
   if (draft.op === 'between') {
     const [low, high] = parseListValue(draft.text);
@@ -90,15 +100,22 @@ export function TrackerColumnFilterPopover({
   const [combinator, setCombinator] = useState<'and' | 'or'>(initialCombinator);
   const [drafts, setDrafts] = useState<DraftClause[]>(() =>
     clauses.length > 0
-      ? clauses.map(clause => ({ op: clause.op, text: valueText(clause) }))
-      : [{ op: ops[0], text: '' }],
+      ? clauses.map((clause) => ({ op: clause.op, text: valueText(clause) }))
+      : [{ op: ops[0], text: '' }]
   );
 
   const { refs, floatingStyles, context } = useFloating({
     open: true,
-    onOpenChange: open => { if (!open) onClose(); },
+    onOpenChange: (open) => {
+      if (!open) onClose();
+    },
     placement: 'bottom-start',
-    middleware: [offset(4), flip({ padding: 8 }), shift({ padding: 8 }), windowControlsClearance()],
+    middleware: [
+      offset(4),
+      flip({ padding: 8 }),
+      shift({ padding: 8 }),
+      windowControlsClearance(),
+    ],
   });
 
   // Virtual anchor pinned to the header cell that was clicked.
@@ -114,9 +131,9 @@ export function TrackerColumnFilterPopover({
   const apply = (): void => {
     onApply(
       drafts
-        .map(draft => completeClause(columnId, draft))
+        .map((draft) => completeClause(columnId, draft))
         .filter((clause): clause is TrackerFieldFilter => clause !== null),
-      combinator,
+      combinator
     );
     onClose();
   };
@@ -127,7 +144,11 @@ export function TrackerColumnFilterPopover({
   };
 
   const updateDraft = (index: number, updates: Partial<DraftClause>): void => {
-    setDrafts(current => current.map((draft, i) => i === index ? { ...draft, ...updates } : draft));
+    setDrafts((current) =>
+      current.map((draft, i) =>
+        i === index ? { ...draft, ...updates } : draft
+      )
+    );
   };
 
   return (
@@ -139,14 +160,16 @@ export function TrackerColumnFilterPopover({
         className="tracker-column-filter-popover z-50 w-72 rounded-md border border-nim bg-nim-secondary p-2 shadow-lg text-[13px]"
         data-testid="tracker-column-filter-popover"
       >
-        <div className="mb-2 text-[11px] font-medium text-nim-muted">Filter: {columnLabel}</div>
+        <div className="mb-2 text-[11px] font-medium text-nim-muted">
+          Filter: {columnLabel}
+        </div>
 
         <label className="mb-1 flex items-center justify-between gap-2 text-[11px] text-nim-muted">
           Match
           <select
             className="rounded border border-nim bg-nim px-2 py-1 text-nim"
             value={combinator}
-            onChange={e => setCombinator(e.target.value as 'and' | 'or')}
+            onChange={(e) => setCombinator(e.target.value as 'and' | 'or')}
             data-testid="tracker-column-filter-combinator"
           >
             <option value="and">all conditions</option>
@@ -170,17 +193,27 @@ export function TrackerColumnFilterPopover({
                 <select
                   className="min-w-0 flex-1 rounded border border-nim bg-nim px-2 py-1 text-nim"
                   value={draft.op}
-                  onChange={e => updateDraft(index, { op: e.target.value as TrackerFilterOp })}
+                  onChange={(e) =>
+                    updateDraft(index, {
+                      op: e.target.value as TrackerFilterOp,
+                    })
+                  }
                   data-testid={`tracker-column-filter-op-${index}`}
                 >
-                  {ops.map(o => (
-                    <option key={o} value={o}>{OP_LABELS[o]}</option>
+                  {ops.map((o) => (
+                    <option key={o} value={o}>
+                      {OP_LABELS[o]}
+                    </option>
                   ))}
                 </select>
                 {drafts.length > 1 && (
                   <button
                     className="px-1 text-nim-muted hover:text-nim"
-                    onClick={() => setDrafts(current => current.filter((_, i) => i !== index))}
+                    onClick={() =>
+                      setDrafts((current) =>
+                        current.filter((_, i) => i !== index)
+                      )
+                    }
                     aria-label={`Remove condition ${index + 1}`}
                   >
                     ×
@@ -188,17 +221,21 @@ export function TrackerColumnFilterPopover({
                 )}
               </div>
 
-              {!isUnary && (
-                selectOptions.length > 0 && !isList && !isRange ? (
+              {!isUnary &&
+                (selectOptions.length > 0 && !isList && !isRange ? (
                   <select
                     className="mt-1.5 w-full rounded border border-nim bg-nim px-2 py-1 text-nim"
                     value={draft.text}
-                    onChange={e => updateDraft(index, { text: e.target.value })}
+                    onChange={(e) =>
+                      updateDraft(index, { text: e.target.value })
+                    }
                     data-testid={`tracker-column-filter-value-${index}`}
                   >
                     <option value="">Choose…</option>
-                    {selectOptions.map(o => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
+                    {selectOptions.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
                     ))}
                   </select>
                 ) : (
@@ -207,26 +244,31 @@ export function TrackerColumnFilterPopover({
                     value={draft.text}
                     autoFocus={index === 0}
                     placeholder={
-                      isRange ? 'from, to'
-                        : isList ? 'comma-separated values'
-                          : 'value'
+                      isRange
+                        ? 'from, to'
+                        : isList
+                        ? 'comma-separated values'
+                        : 'value'
                     }
-                    onChange={e => updateDraft(index, { text: e.target.value })}
-                    onKeyDown={e => {
+                    onChange={(e) =>
+                      updateDraft(index, { text: e.target.value })
+                    }
+                    onKeyDown={(e) => {
                       if (e.key === 'Enter') apply();
                       if (e.key === 'Escape') onClose();
                     }}
                     data-testid={`tracker-column-filter-value-${index}`}
                   />
-                )
-              )}
+                ))}
             </div>
           );
         })}
 
         <button
           className="mb-2 text-[11px] text-nim-muted hover:text-nim"
-          onClick={() => setDrafts(current => [...current, { op: ops[0], text: '' }])}
+          onClick={() =>
+            setDrafts((current) => [...current, { op: ops[0], text: '' }])
+          }
           data-testid="tracker-column-filter-add"
         >
           + Add condition

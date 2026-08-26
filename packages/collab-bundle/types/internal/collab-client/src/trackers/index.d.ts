@@ -11,5 +11,6 @@ export * from './trackerReadyQueue';
 export * from './trackerSidebarCollapse';
 export * from './trackerSavedViews';
 export * from './trackerTagFilterUtils';
+export * from './trackerTimelineLayout';
 export * from './trackerViewModes';
 export * from './browser';

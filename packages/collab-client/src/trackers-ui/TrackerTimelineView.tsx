@@ -12,22 +12,25 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { useAtomValue } from 'jotai';
 import { FloatingPortal, flip, offset, shift, useFloating, type VirtualElement } from '@floating-ui/react';
-import { MaterialSymbol } from '@nimbalyst/runtime';
+import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
-import { MANUAL_TRACKER_ORDERING, type TrackerGroupBy, type TrackerOrdering } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
+import {
+  MANUAL_TRACKER_ORDERING,
+  type TrackerGroupBy,
+  type TrackerOrdering,
+  type TrackerRelationshipLabelResolver,
+} from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
 import { getRecordStatus, getRecordTitle } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerRecordAccessors';
-import { trackerRelationshipLabelAtom } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerDataAtoms';
 import {
   buildTrackerTimeline,
   resolveTodayFraction,
   TIMELINE_CREATED_FIELD,
   type TrackerTimelineBar,
   type TrackerTimelineDates,
-} from './trackerTimelineLayout';
+} from '@nimbalyst/collab-client/trackers';
 
-interface TrackerTimelineViewProps {
+export interface TrackerTimelineViewProps {
   items: TrackerRecord[];
   /** Grouping axis from the saved view; one row per bucket. */
   groupBy?: TrackerGroupBy;
@@ -36,6 +39,8 @@ interface TrackerTimelineViewProps {
   onItemSelect?: (itemId: string) => void;
   onOpenDocument?: (itemId: string) => void;
   selectedItemId?: string | null;
+  /** Resolve live titles for relationship-grouped rows from the host's visible corpus. */
+  resolveRelationshipLabel?: TrackerRelationshipLabelResolver;
 }
 
 /** Left gutter holding the row's group label, sticky across horizontal scroll. */
@@ -58,7 +63,11 @@ function humanizeFieldName(field: string): string {
 }
 
 function formatDay(date: Date): string {
-  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  return date.toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
 }
 
 /** Bar fill by workflow status, so a row reads as progress and not just placement. */
@@ -84,11 +93,11 @@ export const TrackerTimelineView: React.FC<TrackerTimelineViewProps> = ({
   onItemSelect,
   onOpenDocument,
   selectedItemId,
+  resolveRelationshipLabel,
 }) => {
-  const relationshipLabel = useAtomValue(trackerRelationshipLabelAtom);
   const timeline = useMemo(
-    () => buildTrackerTimeline(items, groupBy, ordering, relationshipLabel),
-    [items, groupBy, ordering, relationshipLabel],
+    () => buildTrackerTimeline(items, groupBy, ordering, resolveRelationshipLabel),
+    [items, groupBy, ordering, resolveRelationshipLabel],
   );
 
   const [hovered, setHovered] = useState<HoveredBar | null>(null);
@@ -105,15 +114,16 @@ export const TrackerTimelineView: React.FC<TrackerTimelineViewProps> = ({
       refs.setPositionReference(null);
       return;
     }
-    const virtual: VirtualElement = { getBoundingClientRect: () => hovered.rect };
+    const virtual: VirtualElement = {
+      getBoundingClientRect: () => hovered.rect,
+    };
     refs.setPositionReference(virtual);
   }, [hovered, refs]);
 
   const range = timeline.range;
   const hasUndated = timeline.undatedCount > 0;
-  const contentMinWidth = LABEL_WIDTH
-    + (hasUndated ? UNDATED_WIDTH : 0)
-    + Math.max(timeline.buckets.length, 1) * MIN_BUCKET_WIDTH;
+  const contentMinWidth =
+    LABEL_WIDTH + (hasUndated ? UNDATED_WIDTH : 0) + Math.max(timeline.buckets.length, 1) * MIN_BUCKET_WIDTH;
 
   // `new Date()` only ever reaches the marker, never placement -- so what the
   // timeline draws does not change under the reader's clock.
@@ -140,18 +150,14 @@ export const TrackerTimelineView: React.FC<TrackerTimelineViewProps> = ({
       key={item.id}
       type="button"
       className={`tracker-timeline-undated-chip block w-full truncate rounded px-1.5 py-1 text-left text-[11px] transition-colors ${
-        selectedItemId === item.id
-          ? 'bg-[var(--nim-bg-selected)] text-nim'
-          : 'text-nim-muted hover:bg-nim-hover'
+        selectedItemId === item.id ? 'bg-[var(--nim-bg-selected)] text-nim' : 'text-nim-muted hover:bg-nim-hover'
       }`}
       onClick={(event) => handleSelect(event, item)}
       onDoubleClick={() => onOpenDocument?.(item.id)}
       title={getRecordTitle(item)}
     >
       {item.issueKey ? (
-        <span className="mr-1 font-mono text-[9px] uppercase tracking-[0.08em] text-nim-faint">
-          {item.issueKey}
-        </span>
+        <span className="mr-1 font-mono text-[9px] uppercase tracking-[0.08em] text-nim-faint">{item.issueKey}</span>
       ) : null}
       {getRecordTitle(item)}
     </button>
@@ -183,21 +189,17 @@ export const TrackerTimelineView: React.FC<TrackerTimelineViewProps> = ({
               handleSelect(event, bar.item);
             }
           }}
-          onMouseEnter={(event) => setHovered({
-            item: bar.item,
-            dates: bar.dates,
-            rect: event.currentTarget.getBoundingClientRect(),
-          })}
-          onMouseLeave={() => setHovered(current => current?.item.id === bar.item.id ? null : current)}
+          onMouseEnter={(event) =>
+            setHovered({
+              item: bar.item,
+              dates: bar.dates,
+              rect: event.currentTarget.getBoundingClientRect(),
+            })
+          }
+          onMouseLeave={() => setHovered((current) => (current?.item.id === bar.item.id ? null : current))}
         >
-          <span
-            className={`h-[12px] w-full min-w-[10px] shrink-0 rounded-full ${barToneClass(bar.item, selected)}`}
-          />
-          <span
-            className={`whitespace-nowrap text-[11px] leading-none ${
-              selected ? 'text-nim' : 'text-nim-muted'
-            }`}
-          >
+          <span className={`h-[12px] w-full min-w-[10px] shrink-0 rounded-full ${barToneClass(bar.item, selected)}`} />
+          <span className={`whitespace-nowrap text-[11px] leading-none ${selected ? 'text-nim' : 'text-nim-muted'}`}>
             {getRecordTitle(bar.item)}
           </span>
         </div>
@@ -242,37 +244,39 @@ export const TrackerTimelineView: React.FC<TrackerTimelineViewProps> = ({
               </div>
             ) : null}
             <div className="relative min-w-0 flex-1 border-l border-nim">
-              {range ? timeline.buckets.map((bucket, index) => {
-                const left = (bucket.start.getTime() - range.start.getTime())
-                  / (range.end.getTime() - range.start.getTime());
-                return (
-                  <div
-                    key={bucket.key}
-                    className={`absolute inset-y-0 px-1 py-1 text-[10px] text-nim-faint ${
-                      index === 0 ? '' : 'border-l border-nim'
-                    }`}
-                    style={{ left: `${left * 100}%` }}
-                  >
-                    {bucket.label}
-                  </div>
-                );
-              }) : (
+              {range ? (
+                timeline.buckets.map((bucket, index) => {
+                  const left =
+                    (bucket.start.getTime() - range.start.getTime()) / (range.end.getTime() - range.start.getTime());
+                  return (
+                    <div
+                      key={bucket.key}
+                      className={`absolute inset-y-0 px-1 py-1 text-[10px] text-nim-faint ${
+                        index === 0 ? '' : 'border-l border-nim'
+                      }`}
+                      style={{ left: `${left * 100}%` }}
+                    >
+                      {bucket.label}
+                    </div>
+                  );
+                })
+              ) : (
                 <div className="px-2 py-1 text-[10px] text-nim-faint">No dated items</div>
               )}
             </div>
           </div>
 
           {/* Rows */}
-          {timeline.rows.map(row => (
+          {timeline.rows.map((row) => (
             <div key={row.key} className="tracker-timeline-row flex border-b border-nim">
               <div
                 className="sticky left-0 z-10 shrink-0 bg-nim px-3 py-2 text-xs font-medium text-nim"
                 style={{ width: `${LABEL_WIDTH}px` }}
               >
-                <span className="block truncate" title={row.label}>{row.label}</span>
-                <span className="text-[10px] font-normal text-nim-faint">
-                  {row.bars.length + row.undated.length}
+                <span className="block truncate" title={row.label}>
+                  {row.label}
                 </span>
+                <span className="text-[10px] font-normal text-nim-faint">{row.bars.length + row.undated.length}</span>
               </div>
 
               {hasUndated ? (
@@ -280,9 +284,11 @@ export const TrackerTimelineView: React.FC<TrackerTimelineViewProps> = ({
                   className="tracker-timeline-undated shrink-0 space-y-0.5 border-l border-dashed border-nim px-1.5 py-1.5"
                   style={{ width: `${UNDATED_WIDTH}px` }}
                 >
-                  {row.undated.length > 0
-                    ? row.undated.map(renderUndatedChip)
-                    : <span className="px-1.5 text-[11px] text-nim-faint">—</span>}
+                  {row.undated.length > 0 ? (
+                    row.undated.map(renderUndatedChip)
+                  ) : (
+                    <span className="px-1.5 text-[11px] text-nim-faint">—</span>
+                  )}
                 </div>
               ) : null}
 
@@ -293,9 +299,11 @@ export const TrackerTimelineView: React.FC<TrackerTimelineViewProps> = ({
                     style={{ left: `${todayFraction * 100}%` }}
                   />
                 ) : null}
-                {row.bars.length > 0
-                  ? row.bars.map(renderBar)
-                  : <div className="px-2 text-[11px] text-nim-faint">No dated items</div>}
+                {row.bars.length > 0 ? (
+                  row.bars.map(renderBar)
+                ) : (
+                  <div className="px-2 text-[11px] text-nim-faint">No dated items</div>
+                )}
               </div>
             </div>
           ))}

@@ -8,7 +8,7 @@
  */
 
 import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
-import type { TrackerFilterField } from './TrackerViewHeaderControls';
+import type { TrackerFilterField } from './trackerFilterFields';
 
 /** Field types whose options are derived from the rows rather than the schema. */
 const VALUE_DERIVED_TYPES = ['user', 'select', 'multiselect', 'array', 'relationship', 'reference'];

@@ -19,9 +19,9 @@ import {
   type TrackerFilterOp,
   type TrackerFilterSet,
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
-import type { TrackerFilterField } from './TrackerViewHeaderControls';
+import type { TrackerFilterField } from './trackerFilterFields';
 
-interface TrackerAdvancedFilterBuilderProps {
+export interface TrackerAdvancedFilterBuilderProps {
   filterFields: TrackerFilterField[];
   filters: TrackerFilterSet | null;
   onFiltersChange: (filters: TrackerFilterSet) => void;

@@ -16,6 +16,7 @@ import { $getRoot, $setSelection } from 'lexical';
 import * as Y from 'yjs';
 import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
 import {
+  copyTextToClipboard,
   NEUTRAL_SWATCH,
   PRIORITY_COLORS,
   STATUS_COLORS,
@@ -283,7 +284,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
     if (!item || !teamOrgId) return;
     const url = buildTrackerDeepLink(item.id, teamOrgId);
     try {
-      await navigator.clipboard.writeText(url);
+      await copyTextToClipboard(url);
       errorNotificationService.showInfo(
         'Link copied',
         'Paste it anywhere to open this tracker in Nimbalyst.',

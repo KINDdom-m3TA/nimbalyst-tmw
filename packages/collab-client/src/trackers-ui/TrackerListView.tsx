@@ -36,6 +36,11 @@ export interface TrackerListViewProps {
    * and the dot's module never enters that host's bundle graph.
    */
   renderUnreadSlot?: (itemId: string) => React.ReactNode;
+  /**
+   * Right-click on a row. Omit and the browser's own menu is left alone, which
+   * is what the desktop does -- it catches the gesture on its grid instead.
+   */
+  onRowContextMenu?: (itemId: string, event: React.MouseEvent) => void;
 }
 
 function TrackerListRow({
@@ -43,11 +48,13 @@ function TrackerListRow({
   selected,
   unreadSlot,
   onOpen,
+  onContextMenu,
 }: {
   item: TrackerRecord;
   selected: boolean;
   unreadSlot: React.ReactNode;
   onOpen: () => void;
+  onContextMenu?: (event: React.MouseEvent) => void;
 }) {
   const status = getRecordStatus(item);
   const priority = getRecordPriority(item);
@@ -61,6 +68,7 @@ function TrackerListRow({
         selected ? 'bg-nim-active' : 'hover:bg-nim-tertiary'
       }`}
       onClick={onOpen}
+      onContextMenu={onContextMenu}
     >
       <span
         className="w-2 h-2 rounded-full shrink-0"
@@ -102,6 +110,7 @@ export function TrackerListView({
   onOpenItem,
   loaded,
   renderUnreadSlot,
+  onRowContextMenu,
 }: TrackerListViewProps) {
   const groups = useMemo(() => groupTrackerItems(rows, groupBy), [rows, groupBy]);
 
@@ -144,6 +153,9 @@ export function TrackerListView({
               selected={selectedItemId === item.id}
               unreadSlot={renderUnreadSlot?.(item.id)}
               onOpen={() => onOpenItem(item.id)}
+              onContextMenu={onRowContextMenu
+                ? (event) => onRowContextMenu(item.id, event)
+                : undefined}
             />
           ))}
         </div>
