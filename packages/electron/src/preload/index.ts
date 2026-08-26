@@ -1666,6 +1666,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   analytics: {
     allowedToSendAnalytics: () => ipcRenderer.invoke('analytics:allowed'),
     getDistinctId: () => ipcRenderer.invoke('analytics:get-distinct-id'),
+    getReleaseAttribution: () => ipcRenderer.invoke('analytics:get-release-attribution'),
     optIn: () => ipcRenderer.invoke('analytics:opt-in'),
     optOut: () => ipcRenderer.invoke('analytics:opt-out'),
     setSessionId: (sessionId: string) => ipcRenderer.invoke('analytics:set-session-id', sessionId),

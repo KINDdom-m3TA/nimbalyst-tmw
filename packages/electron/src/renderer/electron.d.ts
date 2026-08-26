@@ -771,6 +771,7 @@ interface ElectronAPI {
   analytics: {
     allowedToSendAnalytics: () => Promise<boolean>;
     getDistinctId: () => Promise<string>;
+    getReleaseAttribution: () => Promise<{ release_channel: string; build_type: string }>;
     optIn: () => Promise<void>;
     optOut: () => Promise<void>;
     setSessionId: (sessionId: string) => Promise<void>;
