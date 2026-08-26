@@ -33,6 +33,10 @@
       "types": "./src/feedback-ui/index.ts",
       "default": "./src/feedback-ui/index.ts"
     },
+    "./feedback-ui/FeedbackArtifactDetailPopover": {
+      "types": "./src/feedback-ui/FeedbackArtifactDetailPopover.tsx",
+      "default": "./src/feedback-ui/FeedbackArtifactDetailPopover.tsx"
+    },
     "./trackers-ui": {
       "types": "./src/trackers-ui/index.ts",
       "default": "./src/trackers-ui/index.ts"

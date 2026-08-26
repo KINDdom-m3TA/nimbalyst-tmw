@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- New features go here -->
 - Work your team's shared trackers from the web console: browse saved views in grid and kanban, open an item and read its body live, edit fields, comment, create items, and drag cards between columns, all converging with the desktop app in real time.
 - A tracker now shows who else is viewing it.
+- Ask a teammate to pick between mockups and they see the designs themselves: every option shows a live preview, and clicking one opens it full size to read, step between options and vote without leaving the request.
 
 ### Changed
 <!-- Changes to existing functionality go here -->

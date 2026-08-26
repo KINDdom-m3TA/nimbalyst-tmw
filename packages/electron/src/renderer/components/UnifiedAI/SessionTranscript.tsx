@@ -32,6 +32,8 @@ import { PromptQueueList } from './PromptQueueList';
 import { TranscriptEmbeddedFileCard } from './TranscriptEmbeddedFileCard';
 import { getDiffPeekSizeForInteractiveWidgetHost } from './interactiveWidgetHostProxy';
 import { createFeedbackComposeHost } from '../FeedbackRequest/createFeedbackComposeHost';
+import { renderComposeArtifactPreview } from '../FeedbackRequest/lazyFeedbackOptionPreview';
+import { renderComposeArtifactPopover } from '../FeedbackRequest/composeArtifactPopover';
 import { customEditorRegistry } from '../CustomEditors/registry';
 import { useDialog } from '../../contexts/DialogContext';
 import { FileGutter } from '../AIChat/FileGutter';
@@ -1913,6 +1915,15 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
           sessionId,
         }).cancel(draftId),
 
+      // Lets the author see the mockups they are about to send. A draft's
+      // artifacts are always unpublished `file` refs -- nothing leaves the
+      // machine before approval -- so this is the local-file path, not the
+      // collaborative one.
+      renderFeedbackArtifactPreview: (entry, artifact) =>
+        renderComposeArtifactPreview(entry, artifact, workspacePath || null),
+      renderFeedbackArtifactPopover: (popoverProps) =>
+        renderComposeArtifactPopover(popoverProps, workspacePath || null),
+
       // Auto-commit
       autoCommitEnabled,
       setAutoCommitEnabled: (enabled: boolean) => {
@@ -2174,6 +2185,8 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
       toolPermissionCancel: (...args) => liveHostRef.current!.toolPermissionCancel(...args),
       feedbackRequestSend: (...args) => liveHostRef.current!.feedbackRequestSend!(...args),
       feedbackRequestCancel: (...args) => liveHostRef.current!.feedbackRequestCancel!(...args),
+      renderFeedbackArtifactPreview: (...args) => liveHostRef.current!.renderFeedbackArtifactPreview!(...args),
+      renderFeedbackArtifactPopover: (...args) => liveHostRef.current!.renderFeedbackArtifactPopover!(...args),
       setAutoCommitEnabled: (...args) => liveHostRef.current!.setAutoCommitEnabled(...args),
       gitCommit: (...args) => liveHostRef.current!.gitCommit(...args),
       gitCommitCancel: (...args) => liveHostRef.current!.gitCommitCancel(...args),
