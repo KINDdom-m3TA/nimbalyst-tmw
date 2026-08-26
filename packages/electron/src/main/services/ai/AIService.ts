@@ -26,7 +26,7 @@ import {
 import { agentCapabilitiesForProviderType } from '@nimbalyst/runtime/ai/server/agentCapabilities';
 import { CLAUDE_CODE_SAFE_FALLBACK_MODEL } from '@nimbalyst/runtime/ai/modelConstants';
 import { reconcileClaudeCodeModels } from './claudeCodeModelReconcile';
-import { isModelEnabled } from './modelEnablementFilter';
+import { isModelEnabled, resolveProviderEnabled } from './modelEnablementFilter';
 import { getSessionStateManager } from '@nimbalyst/runtime/ai/server/SessionStateManager';
 import { parseContextUsageMessage } from '@nimbalyst/runtime/ai/server/utils/contextUsage';
 import { isBedrockToolSearchError } from '@nimbalyst/runtime/ai/server/utils/errorDetection';
@@ -3597,9 +3597,9 @@ export class AIService {
       const enabledSet = new Set<AIProviderType>();
       if (providerSettings['claude']?.enabled === true && !!apiKeys['anthropic']) enabledSet.add('claude');
       if (providerSettings['claude-code']?.enabled !== false) enabledSet.add('claude-code');
-      // Include the subscription CLI (on by default) so its variants render as
-      // checkboxes in the settings panel even before the user touches the toggle.
-      if (providerSettings['claude-code-cli']?.enabled !== false) enabledSet.add('claude-code-cli');
+      // The terminal-CLI provider is off until the user opts in, so its variants
+      // only need fetching once the settings toggle is on.
+      if (resolveProviderEnabled('claude-code-cli', providerSettings['claude-code-cli'])) enabledSet.add('claude-code-cli');
       if (providerSettings['openai']?.enabled === true && !!apiKeys['openai']) enabledSet.add('openai');
       if (providerSettings['openai-codex']?.enabled === true) enabledSet.add('openai-codex');
       if (providerSettings['opencode']?.enabled === true) enabledSet.add('opencode');
@@ -3826,9 +3826,10 @@ export class AIService {
           hiddenModels: claudeCodeSettings.hiddenModels
         },
         'claude-code-cli': {
-          // Genuine `claude` CLI on the user's subscription. On by default (like
-          // `claude-code`); no API key required — the CLI uses its own login.
-          enabled: providerSettings['claude-code-cli']?.enabled !== false,
+          // Genuine `claude` CLI in a terminal. Off by default — it's a workflow
+          // preference, not the way to use a Claude subscription. No API key
+          // required; the CLI uses its own login.
+          enabled: resolveProviderEnabled('claude-code-cli', providerSettings['claude-code-cli']),
           models: providerSettings['claude-code-cli']?.models,
           hiddenModels: providerSettings['claude-code-cli']?.hiddenModels
         },
