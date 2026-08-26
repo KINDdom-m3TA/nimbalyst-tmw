@@ -194,8 +194,18 @@ interface AppStoreSchema {
     // path retained as an escape hatch.
     transport?: 'sdk' | 'app-server';
   };
-  /** Live provider.list catalog, keyed by OpenCode binary + auth identity. */
+  /**
+   * Legacy single-slot catalog from before per-workspace storage (#1382). Read
+   * once for the workspace it belongs to, never written; new writes go to
+   * openCodeModelCatalogCaches.
+   */
   openCodeModelCatalogCache?: OpenCodeModelCatalogCache;
+  /**
+   * Live provider.list catalog per workspace, each keyed by OpenCode binary +
+   * auth identity. OpenCode resolves providers from project config, so one
+   * project's discovery is not an answer for another.
+   */
+  openCodeModelCatalogCaches?: Record<string, OpenCodeModelCatalogCache>;
   // Unified agent workflow registry source settings
   agentWorkflowSources?: {
     workspaceClaudeCompatibilityEnabled?: boolean;
@@ -1832,12 +1842,39 @@ export function setDefaultAIModel(model: string): void {
   getAppStore().set('defaultAIModel', model);
 }
 
-export function getOpenCodeModelCatalogCache(): OpenCodeModelCatalogCache | null {
-  return getAppStore().get('openCodeModelCatalogCache') ?? null;
+/**
+ * Keep a bounded number of workspaces' catalogs. Each entry is a full
+ * provider.list result, so an unbounded map would grow with every project the
+ * user ever discovers in; the least recently refreshed is evicted.
+ */
+const MAX_OPENCODE_MODEL_CATALOG_WORKSPACES = 20;
+
+export function getOpenCodeModelCatalogCache(
+  workspacePath: string
+): OpenCodeModelCatalogCache | null {
+  const byWorkspace = getAppStore().get('openCodeModelCatalogCaches') ?? {};
+  const stored = byWorkspace[workspacePath];
+  if (stored) return stored;
+
+  // Installs that discovered before per-workspace storage have one global slot.
+  // Honor it for the workspace it was actually recorded against (#1382).
+  const legacy = getAppStore().get('openCodeModelCatalogCache');
+  return legacy?.workspacePath === workspacePath ? legacy : null;
 }
 
 export function setOpenCodeModelCatalogCache(cache: OpenCodeModelCatalogCache): void {
-  getAppStore().set('openCodeModelCatalogCache', cache);
+  const byWorkspace = { ...(getAppStore().get('openCodeModelCatalogCaches') ?? {}) };
+  byWorkspace[cache.workspacePath] = cache;
+
+  const entries = Object.entries(byWorkspace);
+  if (entries.length > MAX_OPENCODE_MODEL_CATALOG_WORKSPACES) {
+    entries.sort(([, a], [, b]) => b.refreshedAt - a.refreshedAt);
+    for (const [staleWorkspacePath] of entries.slice(MAX_OPENCODE_MODEL_CATALOG_WORKSPACES)) {
+      delete byWorkspace[staleWorkspacePath];
+    }
+  }
+
+  getAppStore().set('openCodeModelCatalogCaches', byWorkspace);
 }
 
 // Default Effort Level Settings (Opus 4.6 adaptive reasoning)

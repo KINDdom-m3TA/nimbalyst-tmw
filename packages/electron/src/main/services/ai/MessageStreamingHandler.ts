@@ -802,7 +802,10 @@ export class MessageStreamingHandler {
     let selectedModelContextWindow: number | undefined;
     const sessionModelId = session.model || session.providerConfig?.model;
     if (sessionModelId) {
-      const models = await ModelRegistry.getModelsForProvider(session.provider as AIProviderType);
+      const models = await ModelRegistry.getModelsForProvider(
+        session.provider as AIProviderType,
+        effectiveWorkspacePath,
+      );
       selectedModelContextWindow = models.find(m => m.id === sessionModelId)?.contextWindow;
     }
 
