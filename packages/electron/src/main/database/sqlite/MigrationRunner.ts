@@ -221,6 +221,11 @@ export function getMigrations(schemaDir: string): Migration[] {
       name: 'history_file_timestamp_index',
       sqlFile: path.join(schemaDir, '0036_history_file_timestamp_index.sql'),
     },
+    {
+      version: 37,
+      name: 'drop_unused_message_index',
+      sqlFile: path.join(schemaDir, '0037_drop_unused_message_index.sql'),
+    },
   ];
 }
 

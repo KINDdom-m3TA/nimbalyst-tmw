@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mockups and data models embedded in a document now render as the live editor instead of a saved screenshot, and existing embeds convert on open.
 - Editing many tracker rows at once — pasting a range, or changing status or priority on a multi-row selection — now applies as a single update instead of one per row.
 - Quick open now finds a tracker by its issue key or number and puts it at the top, instead of only ever ranking trackers by meaning.
+- AI sessions take less disk: Nimbalyst stops recording progress counters and duplicate screenshots it never displays, and clearing old tool output now also removes that history from sessions you already have — about 1 GB of a 5.6 GB database on one measured install.
 
 ### Fixed
 <!-- Bug fixes go here -->

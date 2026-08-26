@@ -62,8 +62,12 @@ import { assertWithinResponseLimit, ResponseTooLargeError } from './responseSize
 import {
   createToolOutputEstimateWork,
   createToolOutputRetentionWork,
+  createRawMessagePruneWork,
+  createInitDedupWork,
   type ReclaimEstimate,
   type RetentionResult,
+  type PruneResult,
+  type InitDedupResult,
 } from '../../toolOutputRetentionPass';
 import type { PGLiteHandle } from '../PGLiteToSQLiteMigrator';
 
@@ -467,6 +471,28 @@ async function handle(req: RequestEnvelope): Promise<unknown> {
         }),
       );
       return result;
+    }
+
+    case 'rawMessagePruneRun': {
+      // Same background-lane discipline as toolRetentionRun, and for the same
+      // reason: this walks ai_agent_messages and writes to it. Runs the prune
+      // first and the init dedup second -- prune shrinks the row set the dedup
+      // then has to group over.
+      const { retentionDays, maxRows, ignoreAge } = req.payload as ToolRetentionPayload;
+      const inst = ensureInitialized();
+      let prune: PruneResult | null = null;
+      let initDedup: InitDedupResult | null = null;
+      await inst.runBackground(
+        createRawMessagePruneWork({ retentionDays, maxRows, ignoreAge, log: workerLogger }, (r) => {
+          prune = r;
+        }),
+      );
+      await inst.runBackground(
+        createInitDedupWork({ log: workerLogger }, (r) => {
+          initDedup = r;
+        }),
+      );
+      return { prune, initDedup };
     }
 
     // ----- Migration --------------------------------------------------------

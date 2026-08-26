@@ -383,6 +383,19 @@ export class SQLiteDatabaseProxy {
     return this.send('toolRetentionRun', { retentionDays, maxRows });
   }
 
+  /**
+   * Delete raw rows that render nothing, and collapse duplicate session/init
+   * frames. Separate from `toolRetentionRun` because it removes rows rather
+   * than rewriting payloads; see `createRawMessagePruneWork`.
+   */
+  async rawMessagePruneRun(
+    retentionDays: number,
+    maxRows?: number,
+    ignoreAge?: boolean,
+  ): Promise<unknown> {
+    return this.send('rawMessagePruneRun', { retentionDays, maxRows, ignoreAge });
+  }
+
   // --------------------------------------------------------------------------
   // Migration surface — drives MigrationOrchestrator / MigrationDryRunner /
   // MigrationAdopter inside the worker. Progress events are fanned out to

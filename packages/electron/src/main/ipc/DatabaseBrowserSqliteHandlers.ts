@@ -284,6 +284,25 @@ export function registerDatabaseBrowserSqliteHandlers(deps: SqliteBrowserHandler
     }
   });
 
+  // Delete rows the transcript has no branch for, then collapse duplicate
+  // session/init frames. Destructive and irreversible, so user-triggered only,
+  // same as the retention pass. Runs on the worker's background lane.
+  safeHandle('database:rawMessagePrune:run', async (
+    _event,
+    opts?: { retentionDays?: number; maxRows?: number; ignoreAge?: boolean },
+  ) => {
+    try {
+      const result = await proxy.rawMessagePruneRun(
+        opts?.retentionDays ?? 30,
+        opts?.maxRows,
+        opts?.ignoreAge,
+      );
+      return { success: true, result };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  });
+
   /**
    * Return free pages to the filesystem.
    *
