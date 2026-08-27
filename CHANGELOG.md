@@ -10,12 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- Author step-based technical animations in `.anim.json` files with a live stage, boundary-scrubbable timeline, retiming, playback, and agent-aware part selection.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
 
 ### Fixed
 <!-- Bug fixes go here -->
+- iOS: tapping a notification now opens the session it was about, including on iPad and when the session has not finished syncing to the device yet.
 
 ### Removed
 <!-- Removed features go here -->
