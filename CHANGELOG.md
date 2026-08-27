@@ -45,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Nimbalyst no longer freezes for seconds at a time during startup, while an AI session edits files, or while opening shared documents, switching projects, loading sessions, or resizing panes.
 - OpenCode models you discover now show up in the session model picker and stay in Settings, instead of both falling back to a fixed handful of built-in models; each project keeps its own discovered list.
 - Hiding a model in Settings now takes effect in the session model picker for OpenCode, Codex and Copilot, which previously ignored the setting.
-- The web console no longer says you have read-only access to a shared document you are allowed to comment on; commenting no longer requires editing the document first.
+- The web console no longer says you have read-only access to a shared document you are allowed to comment on, and no longer lets you type into one you may only view before rejecting what you wrote; it now asks the server what you may do instead of inferring it from your first edit.
 
 ### Removed
 <!-- Removed features go here -->

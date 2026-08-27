@@ -210,8 +210,12 @@ class FakeRoomSocket {
     this.emit('open', {});
   }
 
-  /** The server's answer to `docSyncRequest`: a document, and no write verdict. */
-  deliverSyncResponse(): void {
+  /**
+   * The server's answer to `docSyncRequest`. `canWrite` is omitted to stand in
+   * for a server that predates the verdict, which is how the client's fallback
+   * to its own host answer stays covered.
+   */
+  deliverSyncResponse(canWrite?: boolean): void {
     this.emit('message', {
       data: JSON.stringify({
         type: 'docSyncResponse',
@@ -220,6 +224,7 @@ class FakeRoomSocket {
         cursor: 0,
         serverHead: 0,
         serverHasState: true,
+        ...(canWrite === undefined ? {} : { canWrite }),
       }),
     });
   }
@@ -250,6 +255,7 @@ describe('comment authoring on a document that has not been written to', () => {
   async function openTeamDocument(
     documentId: string,
     canComment: () => boolean,
+    serverCanWrite?: boolean,
   ): Promise<{ handle: CollabEditorHandle; documentUri: string }> {
     FakeRoomSocket.opened.length = 0;
     const element = document.createElement('div');
@@ -290,7 +296,7 @@ describe('comment authoring on a document that has not been written to', () => {
     if (!socket) throw new Error('the editor never opened a room socket');
     await act(async () => {
       socket.open();
-      socket.deliverSyncResponse();
+      socket.deliverSyncResponse(serverCanWrite);
     });
     await settle();
     return { handle, documentUri };
@@ -329,6 +335,25 @@ describe('comment authoring on a document that has not been written to', () => {
       userId: 'member-reader',
       displayName: 'Reader',
     })).rejects.toMatchObject({ code: 'ANCHOR_NOT_FOUND' });
+  });
+
+  it('takes the sync response write verdict without waiting for a write', async () => {
+    // A server that reports access on connect settles this before the user
+    // touches anything, so a downgraded member is never offered an affordance
+    // that would bounce.
+    const writer = await openTeamDocument('doc-verdict-writer', () => true, true);
+    expect(writer.handle.getState()).toMatchObject({
+      serverAccess: 'writable',
+      readOnly: false,
+    });
+    expect(commentCapability(writer.documentUri)).toBe(true);
+
+    const downgraded = await openTeamDocument('doc-verdict-reader', () => true, false);
+    expect(downgraded.handle.getState()).toMatchObject({
+      serverAccess: 'read-only',
+      readOnly: true,
+    });
+    expect(commentCapability(downgraded.documentUri)).toBe(false);
   });
 
   it('refuses a host that says no, and withdraws on a server write refusal', async () => {
