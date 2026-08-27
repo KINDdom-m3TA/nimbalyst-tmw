@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A mockup already shared with your team now reaches the recipient of a feedback request as the shared document, rather than as a file path from the sender's machine that arrived as a label with nothing behind it.
 - Sending a feedback request now happens once: the card stays sent when you scroll away and back, and pressing send again no longer creates a second request.
 - A document link pasted into a team message or a shared document now becomes the document it names, showing its title and type, instead of staying a raw URL. Links sent before this stay as text; paste them again to convert them.
+- Working out which organization your projects belong to no longer runs a git command for every project in your recent list each time it is checked, which could block the app for a second or more once that list grew long.
 
 ### Removed
 <!-- Removed features go here -->
