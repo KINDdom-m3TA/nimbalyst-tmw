@@ -1530,6 +1530,9 @@ export const convertToWorkstreamAtom = atom(
           },
         },
         workspaceId: workspacePath,
+        // The app manufactures this root to hold sessions the user already
+        // made; nobody asked for a new session, so it must not read as one.
+        launchSource: 'workstream_convert',
       });
 
       if (!createResult.success || !createResult.id) {
