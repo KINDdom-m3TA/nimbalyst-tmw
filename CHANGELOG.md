@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
-- Author step-based technical animations in `.anim.json` files with a live stage, boundary-scrubbable timeline, retiming, playback, and agent-aware part selection.
+- Author step-based technical animations in `.anim.json` files with a live stage, boundary-scrubbable timeline, retiming, playback, and agent-aware part selection, then export them as MP4 for posting or GIF for anywhere that cannot play video.
 
 ### Changed
 <!-- Changes to existing functionality go here -->

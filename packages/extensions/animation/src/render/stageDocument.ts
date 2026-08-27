@@ -1,0 +1,123 @@
+/**
+ * Assembling and driving the stage iframe.
+ *
+ * The stage renders inside a script-disabled, same-origin sandboxed iframe, written with
+ * `open()/write()/close()` the way the mockup editor does. Same-origin is what
+ * lets the host set `data-state` directly on the scene's elements instead of
+ * shuttling messages across a boundary -- the animation is a few attribute
+ * writes per step, and a postMessage protocol for that would be pure ceremony.
+ */
+
+import type { AnimDocument, ResolvedPartState } from "../core/types";
+import { renderScene } from "./scene";
+import { buildStageCss, type ThemeTokens } from "./stageCss";
+
+export function buildStageDocument(
+  doc: AnimDocument,
+  tokens: ThemeTokens
+): string {
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>${buildStageCss(
+    tokens,
+    doc.stage.background
+  )}</style></head>
+<body>${renderScene(doc)}</body></html>`;
+}
+
+/** Write a fresh scene into the frame. Replaces whatever was there. */
+export function writeStageDocument(
+  frame: HTMLIFrameElement,
+  doc: AnimDocument,
+  tokens: ThemeTokens
+): void {
+  const frameDoc = frame.contentDocument;
+  if (!frameDoc) return;
+  frameDoc.open();
+  frameDoc.write(buildStageDocument(doc, tokens));
+  frameDoc.close();
+}
+
+/**
+ * Push resolved states onto the scene.
+ *
+ * `immediate` suppresses transitions for one frame, which is what makes
+ * scrubbing feel like scrubbing: dragging the playhead across several steps
+ * should show each destination directly rather than queue a tween per step.
+ * The class has to be removed on a later frame, after layout has observed the
+ * new values, or the browser coalesces both changes and animates anyway.
+ */
+export function applyStates(
+  frameDoc: Document,
+  states: Map<string, ResolvedPartState>,
+  options: { immediate?: boolean } = {}
+): void {
+  const root = frameDoc.documentElement;
+  if (!root) return;
+
+  if (options.immediate) {
+    root.classList.add("anim-no-transition", "anim-no-animation");
+  }
+
+  for (const [partId, state] of states) {
+    const el = frameDoc.querySelector(`[data-part="${CSS.escape(partId)}"]`);
+    if (!el) continue;
+    if (el.getAttribute("data-state") !== state.state) {
+      el.setAttribute("data-state", state.state);
+    }
+    if (el.getAttribute("data-tone") !== state.tone) {
+      el.setAttribute("data-tone", state.tone);
+    }
+  }
+
+  if (options.immediate) {
+    // Flush the animation:none state before restoring packet animations. This
+    // restarts their negative-delay cycle at every settled boundary seek, so a
+    // given boundary always renders the same frame.
+    void root.getBoundingClientRect();
+    root.classList.remove("anim-no-animation");
+    void root.getBoundingClientRect();
+
+    // Two frames: one for the attribute write to be flushed, one to re-enable
+    // transitions without the pending change being caught by them.
+    const win = frameDoc.defaultView;
+    const raf = win?.requestAnimationFrame?.bind(win);
+    if (raf) {
+      raf(() => raf(() => root.classList.remove("anim-no-transition")));
+    } else {
+      root.classList.remove("anim-no-transition");
+    }
+  }
+}
+
+/** Pause/resume every CSS transition and packet animation in the stage. */
+export function setStageAnimationsPaused(
+  frameDoc: Document,
+  paused: boolean
+): void {
+  const animations = frameDoc.getAnimations?.() ?? [];
+  for (const animation of animations) {
+    if (paused) animation.pause();
+    else animation.play();
+  }
+}
+
+/** Mark one part as selected, clearing any previous selection. */
+export function applySelection(
+  frameDoc: Document,
+  partId: string | null
+): void {
+  frameDoc.querySelectorAll(".anim-selected").forEach((el) => {
+    el.classList.remove("anim-selected");
+  });
+  if (!partId) return;
+  const el = frameDoc.querySelector(`[data-part="${CSS.escape(partId)}"]`);
+  el?.classList.add("anim-selected");
+}
+
+/** The part id under a click, or null when the click missed everything. */
+export function partIdFromEvent(event: Event): string | null {
+  const target = event.target as Element | null;
+  if (!target || typeof target.closest !== "function") return null;
+  const owner = target.closest("[data-part]");
+  return owner?.getAttribute("data-part") ?? null;
+}

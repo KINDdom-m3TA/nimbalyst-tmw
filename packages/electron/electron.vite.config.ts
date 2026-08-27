@@ -254,7 +254,11 @@ export default defineConfig({
       sourcemap: isDev,
       rollupOptions: {
         input: {
-          index: resolve(__dirname, 'src/preload/index.ts')
+          index: resolve(__dirname, 'src/preload/index.ts'),
+          // The hidden window that encodes an animation to H.264. A separate
+          // entry because it must not carry the main preload's surface into a
+          // window whose only job is to hold a VideoEncoder.
+          animationVideo: resolve(__dirname, 'src/preload/animationVideo.ts')
         }
       }
     }
