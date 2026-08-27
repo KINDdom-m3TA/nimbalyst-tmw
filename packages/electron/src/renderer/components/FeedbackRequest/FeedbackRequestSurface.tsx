@@ -35,8 +35,14 @@ import {
   startFeedbackRequestSync,
 } from './createFeedbackResultsHost';
 import { createFeedbackDiscussionAdapter } from './feedbackDiscussionAdapter';
-import { useFeedbackArtifactActionResolver } from './feedbackArtifactActions';
-import { renderLazyFeedbackOptionPreview } from './lazyFeedbackOptionPreview';
+import {
+  useFeedbackArtifactActionResolver,
+  useFeedbackAuthorSessionOpener,
+} from './feedbackArtifactActions';
+import {
+  renderLazyFeedbackOptionPreview,
+  renderLazyFeedbackSubjectPreview,
+} from './lazyFeedbackOptionPreview';
 import { renderFeedbackArtifactDetail } from './FeedbackArtifactDetail';
 import { feedbackRequestViewMode } from './feedbackRequestViewMode';
 
@@ -146,6 +152,7 @@ export function FeedbackRequestSurface({
   }, [target]);
 
   const resolveArtifactAction = useFeedbackArtifactActionResolver(workspacePath);
+  const openAuthorSession = useFeedbackAuthorSessionOpener(workspacePath);
 
   const mode = view === 'respond'
     ? 'respond'
@@ -190,6 +197,7 @@ export function FeedbackRequestSurface({
             host={respondHost}
             resolveArtifactAction={resolveArtifactAction}
             renderOptionPreview={renderLazyFeedbackOptionPreview}
+            renderSubjectPreview={renderLazyFeedbackSubjectPreview}
             renderArtifactDetail={renderFeedbackArtifactDetail}
             discussion={discussion}
           />
@@ -200,6 +208,8 @@ export function FeedbackRequestSurface({
               target={target}
               host={resultsHost}
               resolveArtifactAction={resolveArtifactAction}
+              onOpenAuthorSession={openAuthorSession}
+              renderSubjectPreview={renderLazyFeedbackSubjectPreview}
             />
             {/* The results card has no discussion slot of its own, so it is
                 stacked below rather than threaded through it. */}

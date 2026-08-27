@@ -134,6 +134,32 @@ describe('FeedbackRequestComposeWidget', () => {
     ]);
   });
 
+  it('stays sent after the transcript unmounts and remounts the row', async () => {
+    const toolCallId = 'tc-sent-remount';
+    clearFeedbackRequestComposeDraft(toolCallId);
+    const first = renderWidget(toolCallId);
+    const state = () => screen
+      .getByTestId('feedback-request-compose-widget')
+      .getAttribute('data-state');
+
+    fireEvent.click(screen.getByTestId('feedback-compose-send'));
+    await vi.waitFor(() => expect(state()).toBe('sent'));
+    expect(send).toHaveBeenCalledTimes(1);
+
+    /*
+     * The transcript's virtual scroller unmounts off-screen rows, which is the
+     * whole reason the draft lives in an atom family. Sent-ness has to live
+     * there too: re-seeding a fully sendable draft under a Send button the
+     * author already pressed is how one request becomes three.
+     */
+    first.unmount();
+    renderWidget(toolCallId);
+
+    expect(state()).toBe('sent');
+    expect(screen.queryByTestId('feedback-compose-send')).toBeNull();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the draft on screen when the send fails, so the author can retry', async () => {
     const toolCallId = 'tc-send-failed';
     clearFeedbackRequestComposeDraft(toolCallId);

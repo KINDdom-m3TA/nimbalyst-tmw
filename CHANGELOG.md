@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 <!-- New features go here -->
 - Author step-based technical animations in `.anim.json` files with a live stage, boundary-scrubbable timeline, retiming, playback, and agent-aware part selection, then export them as MP4 for posting or GIF for anywhere that cannot play video.
+- A feedback request now previews the mockups it is about, not only the ones bound to individual options, both for the recipient answering it and for the author reading the results.
+- The author of a feedback request can open the session that composed it from the request's results.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
@@ -21,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - iOS: tapping a notification now opens the session it was about, including on iPad and when the session has not finished syncing to the device yet.
 - A session no longer keeps showing "waiting for your response" once you have typed a new instruction instead of answering the question it asked.
 - Images attached to a Claude Code session reach the model again; since 0.75.1 every one was dropped without warning, so the model answered as though it had never seen the picture. If an attachment genuinely cannot be delivered, the model is now told so it can say so.
+- A mockup already shared with your team now reaches the recipient of a feedback request as the shared document, rather than as a file path from the sender's machine that arrived as a label with nothing behind it.
+- Sending a feedback request now happens once: the card stays sent when you scroll away and back, and pressing send again no longer creates a second request.
 
 ### Removed
 <!-- Removed features go here -->

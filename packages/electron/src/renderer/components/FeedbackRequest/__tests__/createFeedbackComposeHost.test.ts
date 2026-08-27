@@ -101,6 +101,31 @@ function harness(overrides: { invoke?: InvokeMock; prepareSubject?: PrepareMock 
 }
 
 describe('createFeedbackComposeHost', () => {
+  it('addresses one room per draft, so a repeated send replays instead of duplicating', async () => {
+    const draft = draftWithSubjects([]);
+    // The real id generator, not the harness stub: the derivation is the point.
+    const host = createFeedbackComposeHost({
+      workspacePath: '/tmp/workspace',
+      sessionId: 'session-7',
+      invoke: vi.fn<(channel: string, request: unknown) => Promise<unknown>>()
+        .mockResolvedValue({ status: 'connected' }),
+      prepareSubject: vi.fn(),
+      openResults: vi.fn(),
+      createMutationId: () => 'mutation-1',
+    });
+
+    const first = await host.send(readyPayload(draft));
+    const second = await host.send(readyPayload(draft));
+
+    /*
+     * `FeedbackRequestRoom.createRequest` already returns the existing request
+     * for the same author instead of overwriting it. A random id per send
+     * addressed a different empty room each time, so that guarantee never ran.
+     */
+    expect(first.requestId).toBe(second.requestId);
+    expect(first.requestId).toContain(draft.draftId);
+  });
+
   it('publishes only the confirmed subject, then creates the request and opens its results', async () => {
     const draft = confirmPublish(
       draftWithSubjects([trackerSubject('item-shared', true), trackerSubject('item-unshared', false)]),

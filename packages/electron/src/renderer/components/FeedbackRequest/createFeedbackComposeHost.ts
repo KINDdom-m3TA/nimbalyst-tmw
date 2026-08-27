@@ -63,7 +63,7 @@ export interface FeedbackComposeHostConfig {
   invoke?: Invoke;
   prepareSubject?: (ref: ResourceRef) => Promise<FeedbackPublishPlan>;
   openResults?: (ref: FeedbackRequestTabRef) => void;
-  createRequestId?: () => string;
+  createRequestId?: (draftId: string) => string;
   createMutationId?: () => string;
 }
 
@@ -75,6 +75,23 @@ export interface FeedbackComposeHost {
 function randomId(prefix: string): string {
   return globalThis.crypto?.randomUUID?.()
     ?? `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/**
+ * One draft sends one request, however many times Send is pressed.
+ *
+ * `FeedbackRequestRoom.createRequest` is already idempotent: it loads the room's
+ * existing request and, for the same author, acks with that request rather than
+ * overwriting it. That guarantee was unreachable, because a fresh random id per
+ * call addressed a fresh empty room every time -- so two sends were two rooms,
+ * not one replayed create.
+ *
+ * Deriving the id from the draft id (the provider's tool call id, unique per
+ * `RequestFeedback` call) is what connects the two. It is the only backstop that
+ * survives an app reload, which the widget's sent-state atom does not.
+ */
+function requestIdForDraft(draftId: string): string {
+  return draftId ? `feedback-request-${draftId}` : randomId('feedback-request');
 }
 
 function refKey(ref: ResourceRef): string {
@@ -102,7 +119,7 @@ export function createFeedbackComposeHost(
       prepareFeedbackSubjectPublish(ref, { workspacePath: config.workspacePath }));
   const openResults = config.openResults
     ?? ((ref: FeedbackRequestTabRef) => defaultOpenResults(config.workspacePath, ref));
-  const newRequestId = config.createRequestId ?? (() => randomId('feedback-request'));
+  const newRequestId = config.createRequestId ?? requestIdForDraft;
   const newMutationId = config.createMutationId ?? (() => randomId('feedback-compose'));
 
   return {
@@ -188,7 +205,7 @@ export function createFeedbackComposeHost(
           ? { ...ask, artifacts: ask.artifacts.map(republish) }
           : ask);
 
-      const requestId = newRequestId();
+      const requestId = newRequestId(payload.draftId);
       const target: FeedbackRequestServiceTarget = {
         workspacePath: config.workspacePath,
         orgId: payload.orgId,

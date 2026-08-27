@@ -30,6 +30,7 @@ import { feedbackRecipientDirectoryAtom } from '../../../../../store/atoms/feedb
 import {
   clearFeedbackRequestComposeDraft,
   feedbackRequestComposeDraftAtom,
+  feedbackRequestComposeSentAtom,
 } from '../../../../../store/atoms/feedbackRequestComposeDraft';
 import {
   InteractiveWidgetBody,
@@ -112,6 +113,7 @@ export const FeedbackRequestComposeWidget: React.FC<CustomToolWidgetProps> = ({
   const host = useAtomValue(interactiveWidgetHostAtom(sessionId));
   const directory = useAtomValue(feedbackRecipientDirectoryAtom);
   const [draft, setDraft] = useAtom(feedbackRequestComposeDraftAtom(draftId));
+  const [sent, setSent] = useAtom(feedbackRequestComposeSentAtom(draftId));
 
   const parsedArgs = useMemo(
     () => (toolCall && draftId ? parseFeedbackComposeArgs(toolCall.arguments, draftId) : null),
@@ -137,9 +139,9 @@ export const FeedbackRequestComposeWidget: React.FC<CustomToolWidgetProps> = ({
 
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
-  const [hasSent, setHasSent] = useState(false);
-  const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [publishPromptForced, setPublishPromptForced] = useState(false);
+  const hasSent = sent !== null;
+  const shareUrl = sent?.shareUrl ?? null;
   const [now] = useState(() => Date.now());
 
   const update = useCallback(
@@ -152,7 +154,9 @@ export const FeedbackRequestComposeWidget: React.FC<CustomToolWidgetProps> = ({
 
   const send = useCallback(
     async (refsToPublish: ResourceRef[]) => {
-      if (!draft || !host?.feedbackRequestSend) return;
+      // `hasSent` rather than `isSending`: the latter only guards a second click
+      // inside one mount, and the duplicate requests came from a remount.
+      if (!draft || hasSent || !host?.feedbackRequestSend) return;
       setIsSending(true);
       setSendError(null);
       try {
@@ -160,9 +164,14 @@ export const FeedbackRequestComposeWidget: React.FC<CustomToolWidgetProps> = ({
           feedbackComposeSendPayload(draft, refsToPublish),
         );
         if (result.success) {
-          setHasSent(true);
-          setShareUrl(result.shareUrl ?? null);
-          clearFeedbackRequestComposeDraft(draftId);
+          // The draft deliberately stays. Removing it empties the atom, which
+          // the seed effect above reads as "never composed" and refills from
+          // the agent's original arguments.
+          setSent({
+            sentAt: Date.now(),
+            ...(result.requestId ? { requestId: result.requestId } : {}),
+            ...(result.shareUrl ? { shareUrl: result.shareUrl } : {}),
+          });
         } else {
           setSendError(result.error ?? 'The request could not be sent.');
         }
@@ -173,12 +182,10 @@ export const FeedbackRequestComposeWidget: React.FC<CustomToolWidgetProps> = ({
         setIsSending(false);
       }
     },
-    [draft, host, draftId],
+    [draft, hasSent, host, setSent],
   );
 
   const handleCancel = useCallback(async () => {
-    setHasSent(false);
-    setShareUrl(null);
     try {
       await host?.feedbackRequestCancel?.(draftId);
     } catch (error) {
