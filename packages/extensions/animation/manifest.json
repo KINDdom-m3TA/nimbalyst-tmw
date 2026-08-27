@@ -14,7 +14,7 @@
     "categories": ["diagrams"],
     "tags": ["animation", "diagram", "explainer", "timeline", "svg", "motion"],
     "icon": "animation",
-    "featured": false,
+    "featured": true,
     "tagline": "Animate technical diagrams step by step",
     "longDescription": "Build animated explainer diagrams from a named scene and an ordered list of steps. Scrub the timeline, drag a step boundary to retime it, click any part of the scene to put it in chat context, and let an agent make the edits.",
     "highlights": [
@@ -22,7 +22,15 @@
       "Click any part to hand it to the agent with its state and time",
       "Plain JSON on disk, so any agent can edit it without special tools"
     ],
-    "fileTypes": [".anim.json"]
+    "fileTypes": [".anim.json"],
+    "screenshots": [
+      {
+        "alt": "Animation editor showing a cache-aside read path, with the step strip and timeline below the stage",
+        "src": "screenshots/com.nimbalyst.animation-0-dark.png",
+        "srcLight": "screenshots/com.nimbalyst.animation-0-light.png",
+        "fileToOpen": "samples/demo.anim.json"
+      }
+    ]
   },
   "contributions": {
     "aiTools": ["animation.export_html", "animation.export_gif", "animation.export_mp4"],

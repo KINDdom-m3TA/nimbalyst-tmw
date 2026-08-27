@@ -6,18 +6,25 @@
   "author": "Nimbalyst",
   "apiVersion": "1.0.0",
   "marketplace": {
-    "categories": ["ai-tools"],
-    "tags": ["canvas", "board", "diagram", "json-canvas", "layout"],
+    "categories": ["diagrams", "ai-tools"],
+    "tags": ["canvas", "board", "diagram", "json-canvas", "layout", "whiteboard"],
     "icon": "dashboard",
-    "featured": false,
-    "tagline": "Teaches AI sessions how to write .canvas boards",
-    "longDescription": "The Project Canvas editor is built into Nimbalyst. This extension adds the authoring guidance an AI session needs to write a board by hand: the JSON Canvas file format, the x-nimbalyst card references, layout conventions, and edges.",
+    "featured": true,
+    "tagline": "An infinite board whose cards are live editors on your real files",
+    "longDescription": "Project Canvas is an infinite board where a card is not a screenshot of a file but the file's actual editor, mounted live. A mockup card renders the mockup, a spreadsheet card renders the grid, a markdown card renders the document. Arrange screens, plans, data, and notes spatially and wire them with edges. The editor ships inside Nimbalyst; this extension adds the authoring guidance an AI session needs to build a board for you from a description.",
     "highlights": [
-      "AI sessions can create canvas boards from a description",
-      "Cards that reference real workspace files and shared documents",
-      "Layout that lands on the board's grid instead of needing a cleanup pass"
+      "Cards mount the real editor for the file they point at, not a preview",
+      "Ask an agent for a board and get one laid out on the grid, wired with edges",
+      "JSON Canvas 1.0 on disk, so a board written by another tool round-trips"
     ],
-    "fileTypes": [".canvas"]
+    "fileTypes": [".canvas"],
+    "screenshots": [
+      {
+        "alt": "Project Canvas board with live markdown, mockup, mindmap, and spreadsheet cards wired together inside a frame",
+        "src": "screenshots/com.nimbalyst.canvas-0-dark.png",
+        "srcLight": "screenshots/com.nimbalyst.canvas-0-light.png"
+      }
+    ]
   },
   "permissions": {
     "filesystem": true,

@@ -1550,10 +1550,15 @@ function CanvasSurfaceInner({
               />
             </Panel>
             <Controls showInteractive={false} />
+            {/* React Flow has no colorMode set, so it paints minimap nodes with
+                its light-mode defaults -- white swatches on a dark board. The
+                mask and background beside these are themed for the same reason. */}
             <MiniMap
               pannable
               zoomable
               maskColor="color-mix(in srgb, var(--nim-bg) 65%, transparent)"
+              nodeColor="var(--nim-bg-tertiary)"
+              nodeStrokeColor="var(--nim-border)"
               style={{ background: 'var(--nim-bg)' }}
             />
             {!readOnly && (
