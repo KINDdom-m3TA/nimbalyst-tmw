@@ -316,6 +316,10 @@ export function shouldSyncMessageForSessionRoom(
     return true;
   }
 
+  // Everything else, including Gemini. Gemini has no branch on purpose: it
+  // writes three row kinds (prompt, answer, tool) and its parser renders all
+  // three, so a filter here could only take something off mobile that desktop
+  // shows. `syncContentTruncator.test.ts` pins that.
   return true;
 }
 

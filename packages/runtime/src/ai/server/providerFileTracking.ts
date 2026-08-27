@@ -103,6 +103,18 @@ export const BUILTIN_FILE_CHANGE_FIDELITY: Readonly<Record<AIProviderType, FileC
     // pre-edit baseline, which is more than the snapshot cache can infer. A
     // typed `deleteToolCall` reports removals with the file's `prevContent`.
     'cursor-agent': 'structured',
+
+    // Nimbalyst performs Gemini's writes itself, so `GeminiAntigravityProvider`
+    // emits a pre-edit baseline read microseconds before the write — a better
+    // baseline than any `'structured'` provider's. It still declares
+    // `'tool-args'`, and the distinction matters: Gemini's toolset is
+    // `read_file`, `list_files`, `search_files`, `write_file`, `run_command`.
+    // There is no delete and no move, so every removal is an opaque `rm` inside
+    // `run_command`. `'structured'` would switch the watcher off and make those
+    // removals — and anything a build step touches — silently disappear from
+    // the sidebar. Identical reasoning to `grok-build` above; the snapshots are
+    // additive on top, not a substitute for the watcher.
+    'antigravity-gemini-agent': 'tool-args',
   });
 
 /**
@@ -141,6 +153,13 @@ export const PROVIDER_EDIT_TOOL_NAMES: Readonly<Record<AIProviderType, readonly 
     // Cursor drives its baseline from `beforeFullFileContent` in the tool
     // result, so it needs no disk-snapshot tag.
     'cursor-agent': Object.freeze([]),
+
+    // Empty on purpose despite `write_file` being a real edit tool. This table
+    // drives a disk-read snapshot taken when the tool call is *announced*;
+    // Gemini instead emits `pre_edit_snapshot` with `authoritative: true` from
+    // inside its write path, which is strictly better and would collide with a
+    // tag written from here for the same toolUseId.
+    'antigravity-gemini-agent': Object.freeze([]),
   });
 
 /**

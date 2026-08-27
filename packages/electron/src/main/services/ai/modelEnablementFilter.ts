@@ -45,7 +45,14 @@ const DEFAULT_ENABLED_PROVIDERS: ReadonlySet<string> = new Set(['claude-code']);
  * off — and because nothing is persisted, there is no first-boot decision to
  * get stuck on. See `headlessAgentAvailability.ts`.
  */
-const DETECTED_DEFAULT_PROVIDERS: ReadonlySet<string> = new Set(['grok-build', 'cursor-agent']);
+const DETECTED_DEFAULT_PROVIDERS: ReadonlySet<string> = new Set([
+  'grok-build',
+  'cursor-agent',
+  // Gemini detects on the presence of the Antigravity app rather than on a
+  // sign-in probe; `headlessAgentAvailability.ts` explains why sign-in cannot
+  // be asked for cheaply. The `??` above still means an explicit toggle wins.
+  'antigravity-gemini-agent',
+]);
 
 /**
  * Resolve a provider's enabled state, applying the default for an absent

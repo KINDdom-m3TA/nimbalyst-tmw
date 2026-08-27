@@ -17,16 +17,32 @@
  * "Usable" means installed AND logged in. Both CLIs are commonly present but
  * signed out, and enabling on mere presence puts an agent in the model picker
  * that fails on the user's first turn.
+ *
+ * Gemini is the exception, and deliberately so. Antigravity is a vendor app at
+ * a fixed path rather than a CLI on PATH, and its sign-in state is not on disk:
+ * the credential is in the macOS keychain (service `gemini`, account
+ * `antigravity`). Reading it would raise a keychain prompt, and the only other
+ * way to ask is to spawn the ~120MB language server — too heavy for an
+ * enablement gate that runs on every model-list read. So Gemini is detected on
+ * presence, and a signed-out user gets one clear error on their first turn
+ * instead (`GeminiAntigravityProvider.NOT_SIGNED_IN_MESSAGE`). Note this is
+ * only marginally weaker than the CLI probes, which also match sign-out
+ * negatively and answer "yes" to anything they do not recognize.
  */
 
 import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { AntigravityServerManager } from '@nimbalyst/runtime/ai/server/providers/geminiAntigravity/AntigravityServerManager';
 
-export type HeadlessAgentId = 'grok-build' | 'cursor-agent';
+export type HeadlessAgentId = 'grok-build' | 'cursor-agent' | 'antigravity-gemini-agent';
 
-interface AgentProbeSpec {
+/**
+ * A CLI on the user's PATH whose sign-in state can be asked for directly.
+ */
+interface CliProbeSpec {
+  kind: 'cli';
   executableName: string;
   homeRelativeInstallPaths: readonly string[];
   /** Argv for a cheap command that fails, or says so, when signed out. */
@@ -44,18 +60,36 @@ interface AgentProbeSpec {
   looksSignedOut: RegExp;
 }
 
+/**
+ * A vendor application at a fixed absolute path, with no probeable sign-in.
+ * Presence of the binary is the whole signal. See the module header.
+ */
+interface VendorAppProbeSpec {
+  kind: 'vendor-app';
+  /** Candidate absolute paths, resolved per platform at probe time. */
+  resolvePath: () => string;
+}
+
+type AgentProbeSpec = CliProbeSpec | VendorAppProbeSpec;
+
 const PROBE_SPECS: Readonly<Record<HeadlessAgentId, AgentProbeSpec>> = Object.freeze({
   'grok-build': {
+    kind: 'cli' as const,
     executableName: 'grok',
     homeRelativeInstallPaths: ['.grok/bin/grok', '.local/bin/grok'],
     authArgs: ['models'],
     looksSignedOut: /not authenticated|not logged in|please (?:sign|log) in/i,
   },
   'cursor-agent': {
+    kind: 'cli' as const,
     executableName: 'cursor-agent',
     homeRelativeInstallPaths: ['.local/bin/cursor-agent'],
     authArgs: ['status'],
     looksSignedOut: /not logged in|unauthorized|please (?:sign|log) in/i,
+  },
+  'antigravity-gemini-agent': {
+    kind: 'vendor-app' as const,
+    resolvePath: () => AntigravityServerManager.binaryPath(),
   },
 });
 
@@ -80,12 +114,19 @@ export function decideAvailability(
   if (!facts.executablePath) {
     return { installed: false, signedIn: false };
   }
+  const spec = PROBE_SPECS[agent];
+  if (spec.kind === 'vendor-app') {
+    // Presence is the only signal available without a keychain prompt or a
+    // server spawn. Reporting `signedIn: true` here is a statement about what
+    // can be known, not a claim to have checked.
+    return { installed: true, signedIn: true, executablePath: facts.executablePath };
+  }
   if (facts.authFailed) {
     // The CLI is there but would not run. Treat as unusable rather than
     // guessing; a provider that errors on first use is worse than one absent.
     return { installed: true, signedIn: false, executablePath: facts.executablePath };
   }
-  const signedOut = PROBE_SPECS[agent].looksSignedOut.test(facts.authOutput ?? '');
+  const signedOut = spec.looksSignedOut.test(facts.authOutput ?? '');
   return {
     installed: true,
     signedIn: !signedOut,
@@ -94,6 +135,14 @@ export function decideAvailability(
 }
 
 function findExecutable(spec: AgentProbeSpec, pathValue: string | undefined): string | undefined {
+  if (spec.kind === 'vendor-app') {
+    try {
+      const resolved = spec.resolvePath();
+      return fs.existsSync(resolved) ? resolved : undefined;
+    } catch {
+      return undefined;
+    }
+  }
   const home = os.homedir();
   const candidates: string[] = [];
   for (const relative of spec.homeRelativeInstallPaths) {
@@ -115,7 +164,7 @@ function findExecutable(spec: AgentProbeSpec, pathValue: string | undefined): st
 
 function runAuthProbe(
   executablePath: string,
-  spec: AgentProbeSpec,
+  spec: CliProbeSpec,
   env: NodeJS.ProcessEnv,
 ): Promise<{ authOutput?: string; authFailed?: boolean }> {
   return new Promise((resolve) => {
@@ -171,8 +220,8 @@ export function getCachedHeadlessAgentAvailability(agent: HeadlessAgentId): Head
 }
 
 export function isHeadlessAgentAvailable(agent: string): boolean {
-  if (agent !== 'grok-build' && agent !== 'cursor-agent') return false;
-  const availability = getCachedHeadlessAgentAvailability(agent);
+  if (!(agent in PROBE_SPECS)) return false;
+  const availability = getCachedHeadlessAgentAvailability(agent as HeadlessAgentId);
   return availability.installed && availability.signedIn;
 }
 
@@ -198,6 +247,10 @@ export function refreshHeadlessAgentAvailability(
       const executablePath = findExecutable(spec, enhancedPath || process.env.PATH);
       if (!executablePath) {
         next[agent] = decideAvailability(agent, {});
+        return;
+      }
+      if (spec.kind === 'vendor-app') {
+        next[agent] = decideAvailability(agent, { executablePath });
         return;
       }
       try {

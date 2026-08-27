@@ -17,6 +17,7 @@ export * from './providers/openCode/OpenCodeAgentCatalog';
 export * from './providers/CopilotCLIProvider';
 export * from './providers/GrokBuildProvider';
 export * from './providers/CursorAgentProvider';
+export * from './providers/GeminiAntigravityProvider';
 export * from './utils/errorDetection';
 export * from './preferredAgentLanguageConfig';
 export { McpConfigService } from './services/McpConfigService';

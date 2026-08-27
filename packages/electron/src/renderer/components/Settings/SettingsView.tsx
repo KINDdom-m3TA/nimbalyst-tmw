@@ -30,6 +30,7 @@ import { CopilotCLIPanel } from '../GlobalSettings/panels/CopilotCLIPanel';
 
 import { GrokBuildPanel } from '../GlobalSettings/panels/GrokBuildPanel';
 import { CursorAgentPanel } from '../GlobalSettings/panels/CursorAgentPanel';
+import { GeminiPanel } from '../GlobalSettings/panels/GeminiPanel';
 import { LMStudioPanel } from '../GlobalSettings/panels/LMStudioPanel';
 import { AdvancedPanel } from '../GlobalSettings/panels/AdvancedPanel';
 import { DatabasePanel } from '../GlobalSettings/panels/DatabasePanel';
@@ -924,6 +925,12 @@ export function SettingsView({
           'cursor-agent',
           'Cursor Agent',
           <CursorAgentPanel config={commonProps.config} onToggle={commonProps.onToggle} />,
+        );
+      case 'antigravity-gemini-agent':
+        return wrapWithOverride(
+          'antigravity-gemini-agent',
+          'Gemini',
+          <GeminiPanel config={commonProps.config} onToggle={commonProps.onToggle} />,
         );
       case 'lmstudio':
         return wrapWithOverride('lmstudio', 'LM Studio', <LMStudioPanel {...commonProps} />);

@@ -505,6 +505,7 @@ interface ElectronAPI {
     signedIn: boolean;
     defaultEnabled: boolean;
     effectiveEnabled: boolean;
+    executablePath?: string;
   }>>;
   aiSaveSettings: (settings: any) => Promise<void>;
   aiTestConnection: (provider: string, workspacePath?: string) => Promise<any>;

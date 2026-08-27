@@ -2,7 +2,41 @@
  * Registry of available AI models with dynamic fetching
  */
 
-import { AIModel, AIProviderType, ModelIdentifier, assertExhaustiveProvider } from './types';
+import {
+  AIModel,
+  AIProviderType,
+  AI_PROVIDER_TYPES,
+  ModelIdentifier,
+  assertExhaustiveProvider,
+} from './types';
+
+/**
+ * Which `apiKeys` entry (if any) a provider's catalog fetch needs.
+ *
+ * `null` means the provider authenticates through its own CLI or vendor app
+ * login and Nimbalyst holds no key for it — which is most agent providers, and
+ * is deliberate: reading a key from anywhere but explicit settings is the
+ * standing no-env-fallback rule.
+ *
+ * Exhaustive on purpose. This table is what makes `getAllModels` total.
+ */
+const PROVIDER_API_KEY_SOURCE: Readonly<Record<AIProviderType, string | null>> = Object.freeze({
+  claude: 'anthropic',
+  openai: 'openai',
+  'openai-codex': 'openai',
+  'openai-codex-acp': 'openai',
+
+  // Its base URL travels separately, as the fourth argument.
+  lmstudio: null,
+
+  'claude-code': null,
+  'claude-code-cli': null,
+  opencode: null,
+  'copilot-cli': null,
+  'grok-build': null,
+  'cursor-agent': null,
+  'antigravity-gemini-agent': null,
+});
 
 export class ModelRegistry {
   private static cachedModels: Map<AIProviderType, AIModel[]> = new Map();
@@ -101,6 +135,10 @@ export class ModelRegistry {
           const { CursorAgentProvider } = await import('./providers/CursorAgentProvider');
           models = await CursorAgentProvider.getModels();
           break;
+        case 'antigravity-gemini-agent':
+          const { GeminiAntigravityProvider } = await import('./providers/GeminiAntigravityProvider');
+          models = await GeminiAntigravityProvider.getModels();
+          break;
         default:
           assertExhaustiveProvider(provider);
       }
@@ -133,20 +171,24 @@ export class ModelRegistry {
   ): Promise<AIModel[]> {
     const allModels: AIModel[] = [];
 
-    const shouldFetch = (provider: AIProviderType) => !enabledProviders || enabledProviders.has(provider);
-
-    // Fetch from each enabled provider in parallel
-    const promises: Promise<AIModel[]>[] = [];
-
-    if (shouldFetch('claude')) promises.push(this.getModelsForProvider('claude', workspacePath, apiKeys['anthropic']));
-    if (shouldFetch('claude-code')) promises.push(this.getModelsForProvider('claude-code', workspacePath));
-    if (shouldFetch('claude-code-cli')) promises.push(this.getModelsForProvider('claude-code-cli', workspacePath));
-    if (shouldFetch('openai')) promises.push(this.getModelsForProvider('openai', workspacePath, apiKeys['openai']));
-    if (shouldFetch('openai-codex')) promises.push(this.getModelsForProvider('openai-codex', workspacePath, apiKeys['openai']));
-    if (shouldFetch('openai-codex-acp')) promises.push(this.getModelsForProvider('openai-codex-acp', workspacePath, apiKeys['openai']));
-    if (shouldFetch('opencode')) promises.push(this.getModelsForProvider('opencode', workspacePath));
-    if (shouldFetch('lmstudio')) promises.push(this.getModelsForProvider('lmstudio', workspacePath, undefined, apiKeys['lmstudio_url']));
-    if (shouldFetch('copilot-cli')) promises.push(this.getModelsForProvider('copilot-cli', workspacePath));
+    // Iterating AI_PROVIDER_TYPES against an exhaustive key table, rather than
+    // an if-per-provider list, because the list silently omitted providers.
+    // `grok-build` and `cursor-agent` were both missing: enabling either put it
+    // in Settings and in `enabledProviders` while its catalog was never
+    // fetched, so its models never reached the picker and nothing anywhere
+    // reported a problem. `Record<AIProviderType, ...>` makes the next addition
+    // a compile error instead.
+    const promises = AI_PROVIDER_TYPES
+      .filter((provider) => !enabledProviders || enabledProviders.has(provider))
+      .map((provider) => {
+        const key = PROVIDER_API_KEY_SOURCE[provider];
+        return this.getModelsForProvider(
+          provider,
+          workspacePath,
+          key ? apiKeys[key] : undefined,
+          provider === 'lmstudio' ? apiKeys['lmstudio_url'] : undefined,
+        );
+      });
 
     const results = await Promise.allSettled(promises);
 
@@ -202,9 +244,25 @@ export class ModelRegistry {
       case 'cursor-agent':
         const { CursorAgentProvider: CAP } = await import('./providers/CursorAgentProvider');
         return CAP.getDefaultModel();
+      case 'antigravity-gemini-agent':
+        const { GeminiAntigravityProvider: GAP } = await import('./providers/GeminiAntigravityProvider');
+        return GAP.getDefaultModel();
       default:
         assertExhaustiveProvider(provider);
     }
+  }
+
+  /**
+   * Already-fetched catalog for a provider, or undefined if nothing has been
+   * fetched yet.
+   *
+   * Read-only and synchronous on purpose: callers on a hot path (the per-turn
+   * system prompt wants a model's display name) must not trigger a network call
+   * or a CLI spawn just to prettify a string. An empty cache means "not known
+   * yet", and the caller degrades rather than waits.
+   */
+  static getCachedModels(provider: AIProviderType): AIModel[] | undefined {
+    return this.cachedModels.get(provider);
   }
 
   /**

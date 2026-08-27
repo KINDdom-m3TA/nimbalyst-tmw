@@ -280,6 +280,35 @@ function extractCodexOutput(parsed: unknown, content: string): ExtractedSearchab
   return { searchableText: null, messageKind: 'meta' };
 }
 
+/**
+ * Gemini's own source id. Rows written while it shipped as an extension carry
+ * `gemini-antigravity/antigravity-server` instead; those predate the search
+ * index caring about it and are handled by the generic path, which is correct
+ * for their text rows.
+ */
+const GEMINI_SOURCE = 'antigravity-gemini-agent';
+
+/**
+ * Gemini writes two output shapes, distinguished by `metadata.role` rather than
+ * by a type tag inside the content: plain assistant text, and a
+ * `{name,args,result}` tool row.
+ *
+ * The tool row must NOT be indexed. Its body is a whole file's contents for a
+ * write, or a directory listing for a read; indexing that would let a search
+ * for any word in the repository match every Gemini session that ever read it.
+ */
+function extractGeminiOutput(
+  content: string,
+  metadata?: Record<string, unknown> | null,
+): ExtractedSearchable {
+  if (metadata?.role === 'tool') {
+    return { searchableText: null, messageKind: 'tool' };
+  }
+  const trimmed = content.trim();
+  if (trimmed.length === 0) return { searchableText: null, messageKind: 'meta' };
+  return { searchableText: nonEmpty(content), messageKind: 'assistant' };
+}
+
 function extractGenericOutput(content: string): ExtractedSearchable {
   // Chat providers (claude, openai, lmstudio) write one row per semantic block.
   // The content is typically the assistant text directly (not provider-JSON).
@@ -334,6 +363,7 @@ const AGENT_SOURCES = new Set([
   'copilot-cli',
   'grok-build',
   'cursor-agent',
+  'antigravity-gemini-agent',
 ]);
 
 /**
@@ -370,6 +400,10 @@ export function extractSearchable(input: ExtractorInput): ExtractedSearchable {
   }
 
   // direction === 'output'
+  if (source === GEMINI_SOURCE) {
+    const result = extractGeminiOutput(content, metadata);
+    return { searchableText: capLen(result.searchableText), messageKind: result.messageKind };
+  }
   if (source === 'claude-code') {
     const parsed = safeJsonParse(content);
     const result = extractClaudeCodeOutput(parsed, content);

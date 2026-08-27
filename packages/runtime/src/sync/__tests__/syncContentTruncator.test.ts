@@ -212,6 +212,25 @@ describe('truncateContentForSync', () => {
     });
   });
 
+  describe('gemini (antigravity)', () => {
+    // The same parity contract, but Gemini's answer is "all of them". Its raw
+    // log is not a vendor event stream — the host writes exactly three row
+    // kinds and `GeminiAntigravityRawParser` renders every one, so any filter
+    // added here would take something off mobile that desktop shows. Rows
+    // written while Gemini shipped as an extension carry the older source and
+    // must keep syncing too.
+    const SOURCES = ['antigravity-gemini-agent', 'gemini-antigravity/antigravity-server'];
+
+    it('syncs every row kind, on both the built-in and the legacy source', () => {
+      for (const source of SOURCES) {
+        for (const role of ['user', 'assistant', 'tool']) {
+          expect(shouldSyncMessageForSessionRoom(source, { role })).toBe(true);
+        }
+        expect(shouldSyncMessageForSessionRoom(source, undefined)).toBe(true);
+      }
+    });
+  });
+
   it('skips transient Codex app-server delta events from session-room sync', () => {
     expect(
       shouldSyncMessageForSessionRoom('openai-codex', {

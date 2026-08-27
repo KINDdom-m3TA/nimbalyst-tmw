@@ -22,6 +22,7 @@ import {
   ClaudeCodeProvider,
   OpenAICodexProvider,
   OpenCodeProvider,
+  GeminiAntigravityProvider,
 } from '@nimbalyst/runtime/ai/server';
 import { agentCapabilitiesForProviderType } from '@nimbalyst/runtime/ai/server/agentCapabilities';
 import { CLAUDE_CODE_SAFE_FALLBACK_MODEL } from '@nimbalyst/runtime/ai/modelConstants';
@@ -879,6 +880,11 @@ export class AIService {
       case 'openai-codex':
         return globalApiKeys['openai-codex'];
       case 'lmstudio':
+        return 'not-required';
+      case 'antigravity-gemini-agent':
+        // Rides the user's existing Antigravity / ~/.gemini login. Nimbalyst
+        // holds no key for it, and deliberately reads no env var -- see the
+        // standing rule in CLAUDE.md.
         return 'not-required';
       default:
         return globalApiKeys[provider];
@@ -2053,6 +2059,10 @@ export class AIService {
             // `cursor-agent login`). No API key, and deliberately no env-var
             // fallback -- see the standing rule in CLAUDE.md.
             break;
+          case 'antigravity-gemini-agent':
+            // Signs in through the Antigravity app; the language server
+            // consumes that login. No API key, no env fallback.
+            break;
           case 'lmstudio':
             // LMStudio doesn't need an API key, just the base URL
             break;
@@ -3208,7 +3218,7 @@ export class AIService {
     );
 
     /**
-     * Effective on/off state for the two agents whose default is decided by
+     * Effective on/off state for the agents whose default is decided by
      * detection rather than a constant.
      *
      * The renderer needs this at hydration: its own default table cannot tell
@@ -3220,12 +3230,14 @@ export class AIService {
     safeHandle('ai:getHeadlessAgentAvailability', async () => {
       await refreshHeadlessAgentAvailability();
       const providerSettings = this.getNormalizedProviderSettings() as Record<string, any>;
-      const agents: HeadlessAgentId[] = ['grok-build', 'cursor-agent'];
+      const agents: HeadlessAgentId[] = ['grok-build', 'cursor-agent', 'antigravity-gemini-agent'];
       const result: Record<string, {
         installed: boolean;
         signedIn: boolean;
         defaultEnabled: boolean;
         effectiveEnabled: boolean;
+        /** Resolved binary, so a panel can show WHERE it found the tool. */
+        executablePath?: string;
       }> = {};
       for (const agent of agents) {
         const availability = getCachedHeadlessAgentAvailability(agent);
@@ -3234,6 +3246,7 @@ export class AIService {
           signedIn: availability.signedIn,
           defaultEnabled: availability.installed && availability.signedIn,
           effectiveEnabled: resolveProviderEnabled(agent, providerSettings[agent]),
+          executablePath: availability.executablePath,
         };
       }
       return result;
@@ -3451,6 +3464,10 @@ export class AIService {
             // CLI login only; no API key to test.
             apiKey = 'not-required';
             break;
+          case 'antigravity-gemini-agent':
+            // Antigravity app login only; no API key to test.
+            apiKey = 'not-required';
+            break;
           case 'lmstudio':
             // LMStudio doesn't need an API key, just test the connection
             apiKey = 'not-required';
@@ -3458,6 +3475,21 @@ export class AIService {
           default:
             return { success: false, error: `Unknown provider: ${provider}` };
         }
+      }
+
+      // Gemini's connectivity probe is the presence of the Antigravity install.
+      // Deliberately NOT a live turn: the alternative is spawning a ~120MB
+      // language server from a settings button, and a signed-out user would
+      // still pass an install check either way -- sign-in cannot be read
+      // without a keychain prompt (see headlessAgentAvailability.ts). So the
+      // check answers exactly what it can, and says so when it fails.
+      if (provider === 'antigravity-gemini-agent') {
+        return GeminiAntigravityProvider.isInstalled()
+          ? { success: true, provider }
+          : {
+            success: false,
+            error: GeminiAntigravityProvider.NOT_INSTALLED_MESSAGE,
+          };
       }
 
       // Extension-agent providers: skip the per-provider connectivity probes
@@ -3664,6 +3696,9 @@ export class AIService {
       // resolveProviderEnabled rather than reading the flag directly.
       if (resolveProviderEnabled('grok-build', providerSettings['grok-build'])) enabledSet.add('grok-build');
       if (resolveProviderEnabled('cursor-agent', providerSettings['cursor-agent'])) enabledSet.add('cursor-agent');
+      if (resolveProviderEnabled('antigravity-gemini-agent', providerSettings['antigravity-gemini-agent'])) {
+        enabledSet.add('antigravity-gemini-agent');
+      }
       if (providerSettings['lmstudio']?.enabled === true) enabledSet.add('lmstudio');
 
       const modelsConfig = {
@@ -3932,6 +3967,14 @@ export class AIService {
           enabled: resolveProviderEnabled('cursor-agent', providerSettings['cursor-agent']),
           models: providerSettings['cursor-agent']?.models,
           hiddenModels: providerSettings['cursor-agent']?.hiddenModels
+        },
+        'antigravity-gemini-agent': {
+          enabled: resolveProviderEnabled(
+            'antigravity-gemini-agent',
+            providerSettings['antigravity-gemini-agent'],
+          ),
+          models: providerSettings['antigravity-gemini-agent']?.models,
+          hiddenModels: providerSettings['antigravity-gemini-agent']?.hiddenModels
         },
         'lmstudio': {
           enabled: providerSettings['lmstudio']?.enabled === true,

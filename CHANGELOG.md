@@ -14,9 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- Gemini is now one of the built-in coding agents rather than an extension: it tracks the files it edits so you can review the diffs, its settings pane covers whether Antigravity is installed, how sign-in works and which models you can use instead of asking you to grant Nimbalyst permission to run itself, and its model list comes from your account rather than a fixed three that had gone stale. It turns itself on when Antigravity is installed and stays off otherwise; turning it off is remembered.
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Reopening a Gemini session now shows the tool calls it made; the transcript kept only the conversation and dropped every tool call on reload.
 
 ### Removed
 <!-- Removed features go here -->

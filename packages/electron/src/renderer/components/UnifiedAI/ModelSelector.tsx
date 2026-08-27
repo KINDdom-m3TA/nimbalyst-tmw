@@ -24,7 +24,7 @@ import { AlphaBadge } from '../common/AlphaBadge';
 import { HelpTooltip } from '../../help';
 import { isDirectChatProvider, isProviderVisible } from '../../utils/chatProviderVisibility';
 
-const ALPHA_PROVIDERS = new Set(['opencode', 'copilot-cli', 'grok-build', 'cursor-agent']);
+const ALPHA_PROVIDERS = new Set(['opencode', 'copilot-cli', 'grok-build', 'cursor-agent', 'antigravity-gemini-agent']);
 const TYPEAHEAD_RESET_MS = 700;
 
 interface Model {
@@ -263,6 +263,7 @@ export function ModelSelector({
       case 'copilot-cli':
       case 'grok-build':
       case 'cursor-agent':
+      case 'antigravity-gemini-agent':
       case 'lmstudio':
         return provider;
       case 'openai-codex-acp':
@@ -322,6 +323,7 @@ export function ModelSelector({
       case 'copilot-cli': return 'GitHub Copilot';
       case 'grok-build': return 'Grok Build';
       case 'cursor-agent': return 'Cursor Agent';
+      case 'antigravity-gemini-agent': return 'Gemini';
       case 'lmstudio': return 'LMStudio';
       default: {
         // Extension-contributed providers carry their contribution id here

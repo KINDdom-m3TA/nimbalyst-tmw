@@ -230,7 +230,7 @@ export async function processDescriptor(
 
 export function selectRawParser(
   provider: string,
-): 'codex' | 'codex-acp' | 'copilot' | 'claude-code' | 'opencode' | 'voice' | 'grok-build' | 'cursor-agent' {
+): 'codex' | 'codex-acp' | 'copilot' | 'claude-code' | 'opencode' | 'voice' | 'grok-build' | 'cursor-agent' | 'gemini-antigravity' {
   if (provider === 'copilot-cli') {
     return 'copilot';
   }
@@ -248,6 +248,9 @@ export function selectRawParser(
   }
   if (provider === 'cursor-agent') {
     return 'cursor-agent';
+  }
+  if (provider === 'antigravity-gemini-agent') {
+    return 'gemini-antigravity';
   }
   if (provider === 'openai-realtime') {
     return 'voice';

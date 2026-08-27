@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * The default on/off state for these two providers is decided by the machine.
+ * The default on/off state for these providers is decided by the machine.
  * The hazard that shape carries is well known here: persist the decision at
  * first boot and the app overrides a user who turned the provider off, with
  * the bug only appearing on launch two.
@@ -101,5 +101,40 @@ describe('resolveProviderEnabled for detected-default providers', () => {
     expect(resolveProviderEnabled('claude-code', undefined)).toBe(true);
     expect(resolveProviderEnabled('claude-code-cli', undefined)).toBe(false);
     expect(resolveProviderEnabled('opencode', undefined)).toBe(false);
+  });
+
+  describe('gemini, whose sign-in cannot be probed', () => {
+    const APP = '/Applications/Antigravity.app/Contents/Resources/bin/language_server';
+
+    it('reports signed in on presence alone', () => {
+      // Not an assumption that the user IS signed in — a statement about what
+      // is knowable. Antigravity's credential lives in the macOS keychain, so
+      // the alternatives are a keychain prompt or spawning a ~120MB language
+      // server on every model-list read. A signed-out user gets one clear
+      // error on their first turn instead.
+      expect(decideAvailability('antigravity-gemini-agent', { executablePath: APP }))
+        .toEqual({ installed: true, signedIn: true, executablePath: APP });
+    });
+
+    it('is unavailable when Antigravity is not installed', () => {
+      expect(decideAvailability('antigravity-gemini-agent', {}))
+        .toEqual({ installed: false, signedIn: false });
+    });
+
+    it('still lets an explicit choice win on every launch', () => {
+      // The same second-launch property as the CLI agents. Detection here is
+      // even more eager (presence alone), so it matters more that it can never
+      // overwrite a user who turned Gemini off.
+      __resetHeadlessAgentAvailabilityForTests({
+        'antigravity-gemini-agent': { installed: true, signedIn: true, executablePath: APP },
+      });
+      expect(resolveProviderEnabled('antigravity-gemini-agent', undefined)).toBe(true);
+      for (const launch of [1, 2, 3]) {
+        expect(
+          resolveProviderEnabled('antigravity-gemini-agent', { enabled: false }),
+          `launch ${launch}`,
+        ).toBe(false);
+      }
+    });
   });
 });

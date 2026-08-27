@@ -1427,7 +1427,7 @@ export function getAIProviderOverrides(workspacePath: string): AIProviderOverrid
  * `apiKeys`). Separate from the `app-settings` store exported as `store`.
  */
 let _aiSettingsStore: Store<Record<string, unknown>> | null = null;
-function getAiSettingsStore(): Store<Record<string, unknown>> {
+export function getAiSettingsStore(): Store<Record<string, unknown>> {
   if (!_aiSettingsStore) {
     _aiSettingsStore = new Store<Record<string, unknown>>({ name: 'ai-settings' });
   }

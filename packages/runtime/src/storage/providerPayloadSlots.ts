@@ -56,7 +56,9 @@ export type PayloadSlotKind =
   /** Top-level `result` on Nimbalyst's own tool-result envelope. */
   | 'nimbalystToolResult'
   /** Whole-file or command output on a headless-agent tool result. */
-  | 'headlessAgentToolResult';
+  | 'headlessAgentToolResult'
+  /** `result`, and the written body in `args.content`, on a Gemini tool row. */
+  | 'geminiToolRow';
 
 export interface PayloadSlot {
   /** Stable dotted path, for diagnostics and test assertions. */
@@ -243,6 +245,25 @@ function collectNimbalystSlots(chunk: Record<string, unknown>, out: PayloadSlot[
  * afterwards. What the raw row still owes is the transcript rendering, and a
  * clamped tool result renders the same as Codex's does.
  */
+/**
+ * Gemini's tool row: `{name, args, result}`.
+ *
+ * Two slots, and both matter. `result` is a whole file read or a directory
+ * listing; `args.content` is the entire body of a `write_file`, which is the
+ * larger of the two on any real edit. Without these the truncator has no
+ * shrinkable slot and has to elide the whole row, which costs mobile the tool
+ * card rather than just its payload.
+ */
+function collectGeminiSlots(chunk: Record<string, unknown>, out: PayloadSlot[]): void {
+  if ('result' in chunk) {
+    out.push(makeSlot('geminiToolRow', 'result', chunk, 'result'));
+  }
+  const args = chunk.args;
+  if (isPlainObject(args) && 'content' in args) {
+    out.push(makeSlot('geminiToolRow', 'args.content', args, 'content'));
+  }
+}
+
 function collectHeadlessAgentSlots(chunk: Record<string, unknown>, out: PayloadSlot[]): void {
   // Grok: {type:'tool_call_update', rawOutput:{...}}
   const rawOutput = chunk.rawOutput;
@@ -312,6 +333,10 @@ export function providerPayloadSlots(chunk: unknown, source: string): PayloadSlo
     // walks with the Codex collector; everything else is these agents' own.
     collectCodexSlots(chunk, out);
     collectHeadlessAgentSlots(chunk, out);
+  } else if (source.startsWith('antigravity-gemini-agent') || source.startsWith('gemini-antigravity')) {
+    // Both spellings: the second is what rows written while Gemini shipped as
+    // an extension carry (`gemini-antigravity/antigravity-server`).
+    collectGeminiSlots(chunk, out);
   }
 
   return out;

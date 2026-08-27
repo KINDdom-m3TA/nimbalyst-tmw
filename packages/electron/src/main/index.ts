@@ -122,6 +122,7 @@ import {
     getClaudeCodeSettings,
     getAttachmentStagingConfig,
     getOpenCodeModelCatalogCache,
+    getAiSettingsStore,
     getProviderApiKeyFromSettings,
     isSettingsAgentToolsDisabled,
     isTrackersAgentToolsEnabled,
@@ -218,11 +219,13 @@ import {
   CopilotCLIProvider,
   GrokBuildProvider,
   CursorAgentProvider,
+  GeminiAntigravityProvider,
   configureOpenCodeModelCatalog,
 } from '@nimbalyst/runtime/ai/server';
 import { configureMcpServers } from '@nimbalyst/runtime/ai/server';
 import { matchesAllowPattern } from '@nimbalyst/runtime/ai/server/permissions/toolPermissionHelpers';
 import { resolveCodexPreEditHookScriptPath } from './services/ai/codexPreEditHookPath';
+import { executeGeminiTool } from './services/ai/geminiToolExecutor';
 import { sessionFileTracker } from './services/SessionFileTracker';
 import {
   refreshHeadlessAgentAvailability,
@@ -2434,11 +2437,36 @@ app.whenReady().then(async () => {
     GrokBuildProvider.setEnhancedPathLoader(() => getEnhancedPath());
     CursorAgentProvider.setEnhancedPathLoader(() => getEnhancedPath());
 
-    // Grok and Cursor default to on when their CLI is installed AND signed in.
-    // Deliberately fire-and-forget: two subprocess spawns must not sit on the
-    // startup path, and until this resolves both read as unavailable, so the
-    // providers appear a beat after launch rather than blocking it. Nothing is
-    // written to settings -- see headlessAgentAvailability.ts.
+    // Gemini executes its tools in this process. The provider ships in the
+    // runtime package, which cannot import from main, so the executor is
+    // injected rather than imported.
+    GeminiAntigravityProvider.setToolExecutor(executeGeminiTool);
+    // The Antigravity language server enforces a supported-build floor against
+    // --override_ide_version and rejects anything below it. Reading the value
+    // from settings means a user hit by a vendor-side bump can raise it without
+    // waiting for a Nimbalyst release; the baked-in default is what works today.
+    GeminiAntigravityProvider.setServerConfigLoader(() => {
+      const settings = (getAiSettingsStore().get('providerSettings', {}) as Record<string, {
+        overrideIdeVersion?: unknown;
+        spawnPortCandidates?: unknown;
+      }>)['antigravity-gemini-agent'] ?? {};
+      return {
+        overrideIdeVersion: typeof settings.overrideIdeVersion === 'string'
+          ? settings.overrideIdeVersion
+          : undefined,
+        spawnPortCandidates: Array.isArray(settings.spawnPortCandidates)
+          ? settings.spawnPortCandidates.filter(
+            (port): port is number => typeof port === 'number' && Number.isFinite(port) && port > 0,
+          )
+          : undefined,
+      };
+    });
+
+    // Grok, Cursor and Gemini default to on when their tool is present and
+    // usable. Deliberately fire-and-forget: subprocess spawns must not sit on
+    // the startup path, and until this resolves all three read as unavailable,
+    // so the providers appear a beat after launch rather than blocking it.
+    // Nothing is written to settings -- see headlessAgentAvailability.ts.
     setHeadlessAgentEnhancedPathLoader(() => getEnhancedPath());
     void refreshHeadlessAgentAvailability().catch((error) => {
       logger.ai.warn('[AI] Headless agent availability probe failed:', error);
