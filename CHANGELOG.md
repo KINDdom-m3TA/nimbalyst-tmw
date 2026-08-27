@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pressing Cmd+F while the find bar is already open now returns focus to the search field, instead of closing the bar and leaving your next keystrokes editing the document.
 - iOS: tapping a notification now opens the session it was about, including on iPad and when the session has not finished syncing to the device yet.
 - A session no longer keeps showing "waiting for your response" once you have typed a new instruction instead of answering the question it asked.
+- Images attached to a Claude Code session reach the model again; since 0.75.1 every one was dropped without warning, so the model answered as though it had never seen the picture. If an attachment genuinely cannot be delivered, the model is now told so it can say so.
 
 ### Removed
 <!-- Removed features go here -->
