@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A tracker now shows who else is viewing it.
 - A feedback request comparing mockups now shows the designs themselves: preview every option, open one full size, and vote without leaving the request.
 - A session that orchestrates other sessions can interrupt one to deliver an instruction immediately, instead of waiting for its current turn to finish.
-- Project Canvas: an infinite canvas where every card is the real editor (mockup, spreadsheet, drawing, mindmap) live and editable in place, with sticky notes, frames, arrows, snapping, team comments and presence, agent activity, and revision pinning to compare. Works in the desktop app and the web console, and saves as an open `.canvas` file that reviews as a diff.
+- Project Canvas: an infinite canvas where every card is the real editor (markdown, mockup, spreadsheet, drawing, mindmap) live and editable in place. Drag a file or shared document from the sidebar onto the board, with sticky notes, frames, arrows, snapping, team comments and presence, agent activity, and revision pinning to compare. Works in the desktop app and the web console, and saves as an open `.canvas` file that reviews as a diff.
 
 ### Changed
 <!-- Changes to existing functionality go here -->

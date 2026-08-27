@@ -113,6 +113,10 @@ const nodeOnly = [
   // `feedback-ui` is otherwise React components; only the pure scroll-carry
   // arithmetic is routed here, for the same reason as the diff model above.
   'packages/collab-client/src/feedback-ui/__tests__/artifactScrollCarry.test.ts',
+  // `EmbedFrame` is otherwise React components; the drop payload is pure
+  // string handling over a `getData` stub and needs no DOM.
+  'packages/electron/src/renderer/components/EmbedFrame/__tests__/canvasDropSource.test.ts',
+  'packages/electron/src/renderer/components/EmbedFrame/__tests__/resolveCollaborativeEmbedRequest.test.ts',
 ];
 
 // The node project's `include` and the jsdom project's `exclude` must describe
