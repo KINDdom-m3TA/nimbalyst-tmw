@@ -16,12 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A tracker now shows who else is viewing it.
 - Ask a teammate to pick between mockups and they see the designs themselves: every option shows a live preview, and clicking one opens it full size to read, step between options and vote without leaving the request.
 - A session that orchestrates other sessions can now interrupt one to deliver an instruction immediately, the same way the send-now button does, instead of waiting for whatever it is doing to finish.
+- Project Canvas: arrange your work on an infinite canvas where every card is the real editor — a mockup, a spreadsheet, a drawing, a mindmap — live and editable in place, with sticky notes, frames and arrows around them. Boards snap and align as you drag, share with your team with comments and presence, show which cards an agent is working on, and let you pin an earlier revision of a card beside the current one to compare. Works in the desktop app and the web console, and saves as an open `.canvas` file that reviews as a diff.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
 - The web console now reads as Nimbalyst rather than a separate admin tool: the same header, navigation and controls as the desktop app, and a layout that holds up on a phone when you follow a link to a request or a single tracker item.
 - The web console's Requests inbox now also carries mentions, replies, tracker comments and document discussions, filtered by what you are looking for, and each row says what it is about instead of repeating the sender's name.
 - Mockups and data models embedded in a document now render as the live editor instead of a saved screenshot, and existing embeds convert on open.
+- Mockup project files open as a read-only preview with a "Convert to canvas" action; converting writes a new `.canvas` file beside the original and leaves it untouched. A converted board holds the real MockupLM editor for each screen instead of a flat preview.
 - Editing many tracker rows at once — pasting a range, or changing status or priority on a multi-row selection — now applies as a single update instead of one per row.
 - Quick open now finds a tracker by its issue key or number and puts it at the top, instead of only ever ranking trackers by meaning.
 - AI sessions take less disk: Nimbalyst stops recording progress counters and duplicate screenshots it never displays, and clearing old tool output now also removes that history from sessions you already have — about 1 GB of a 5.6 GB database on one measured install.
