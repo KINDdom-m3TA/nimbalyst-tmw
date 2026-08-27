@@ -278,3 +278,113 @@ describe('createFeedbackComposeHost', () => {
     expect(openResults).not.toHaveBeenCalled();
   });
 });
+
+describe('createFeedbackComposeHost — publish destination', () => {
+  function fileSubject(sourceId: string, shared: boolean) {
+    return {
+      ref: { orgId: ORG_ID, kind: 'file' as const, sourceId },
+      label: sourceId,
+      shared,
+    };
+  }
+
+  function destinationHarness(overrides: {
+    prepareSubject?: PrepareMock;
+    resolved?: { folderId: string | null; folderPath: string; pendingFolder?: { name: string; parentFolderId: string | null } };
+  } = {}) {
+    const resolveDestination = vi.fn().mockResolvedValue(
+      overrides.resolved ?? {
+        folderId: null,
+        folderPath: '',
+        pendingFolder: { name: 'Feedback requests', parentFolderId: null },
+      },
+    );
+    const createPendingFolder = vi.fn().mockResolvedValue({
+      folderId: 'f-created',
+      folderPath: 'Feedback requests',
+    });
+    const persistLastSharedFolder = vi.fn();
+    const runsWith: Array<unknown> = [];
+    const prepareSubject: PrepareMock = overrides.prepareSubject
+      ?? vi.fn(async () => ({
+        status: 'ready' as const,
+        run: async (destination?: unknown) => {
+          runsWith.push(destination);
+          return { success: true as const };
+        },
+      }));
+    const host = createFeedbackComposeHost({
+      workspacePath: '/tmp/workspace',
+      sessionId: 'session-7',
+      invoke: vi.fn<(channel: string, request: unknown) => Promise<unknown>>()
+        .mockResolvedValue({ status: 'connected' }),
+      prepareSubject,
+      openResults: vi.fn(),
+      createRequestId: () => 'fr-generated',
+      createMutationId: () => 'mutation-1',
+      resolveDestination,
+      createPendingFolder,
+      persistLastSharedFolder,
+    });
+    return { host, resolveDestination, createPendingFolder, persistLastSharedFolder, runsWith, prepareSubject };
+  }
+
+  it('creates the named folder between the passes and publishes into it', async () => {
+    const h = destinationHarness();
+    const draft = confirmPublish(draftWithSubjects([fileSubject('a.mockup.html', false)]));
+
+    const result = await h.host.send(readyPayload(draft));
+
+    expect(result.success).toBe(true);
+    expect(h.createPendingFolder).toHaveBeenCalledTimes(1);
+    expect(h.runsWith).toEqual([{ folderId: 'f-created', folderPath: 'Feedback requests' }]);
+    // Recorded once for the request, not once per file.
+    expect(h.persistLastSharedFolder).toHaveBeenCalledTimes(1);
+    expect(h.persistLastSharedFolder).toHaveBeenCalledWith({
+      folderId: 'f-created',
+      folderPath: 'Feedback requests',
+    });
+  });
+
+  it('creates nothing when a later subject blocks the send', async () => {
+    // The author walks away from the second file's dialog. The first file's
+    // folder must not survive that as an empty folder on the team.
+    const prepareSubject = vi.fn()
+      .mockResolvedValueOnce({ status: 'ready', run: async () => ({ success: true }) })
+      .mockResolvedValueOnce({ status: 'blocked', error: 'Sharing b was cancelled.' }) as PrepareMock;
+    const h = destinationHarness({ prepareSubject });
+    const draft = confirmPublish(draftWithSubjects([
+      fileSubject('a.mockup.html', false),
+      fileSubject('b.mockup.html', false),
+    ]));
+
+    const result = await h.host.send(readyPayload(draft));
+
+    expect(result).toEqual({ success: false, error: 'Sharing b was cancelled.' });
+    expect(h.createPendingFolder).not.toHaveBeenCalled();
+    expect(h.persistLastSharedFolder).not.toHaveBeenCalled();
+  });
+
+  it('does not resolve a folder for a request that only publishes trackers', async () => {
+    const h = destinationHarness();
+    const draft = confirmPublish(draftWithSubjects([trackerSubject('item-9', false)]));
+
+    await h.host.send(readyPayload(draft));
+
+    // A tracker has no folder; resolving one could create a folder for nothing.
+    expect(h.resolveDestination).not.toHaveBeenCalled();
+    expect(h.createPendingFolder).not.toHaveBeenCalled();
+  });
+
+  it('skips folder creation when the destination already exists', async () => {
+    const h = destinationHarness({
+      resolved: { folderId: 'f-existing', folderPath: 'Feedback requests' },
+    });
+    const draft = confirmPublish(draftWithSubjects([fileSubject('a.mockup.html', false)]));
+
+    await h.host.send(readyPayload(draft));
+
+    expect(h.createPendingFolder).not.toHaveBeenCalled();
+    expect(h.runsWith).toEqual([{ folderId: 'f-existing', folderPath: 'Feedback requests' }]);
+  });
+});

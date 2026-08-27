@@ -45,6 +45,7 @@ import {
   addRecipient,
   confirmPublish,
   describeComposeDefaults,
+  destinationSubjects,
   FEEDBACK_COMPOSE_BLOCKED_MESSAGES,
   feedbackComposeSendPayload,
   feedbackComposeSubmitPlan,
@@ -54,6 +55,7 @@ import {
   removeRecipient,
   removeSubject,
   setDeadline,
+  setDestination,
   setQuorumMode,
   setSettingsExpanded,
   setVisibility,
@@ -184,6 +186,20 @@ export const FeedbackRequestComposeWidget: React.FC<CustomToolWidgetProps> = ({
     },
     [draft, hasSent, host, setSent],
   );
+
+  const handleChangeDestination = useCallback(async () => {
+    if (!host?.pickFeedbackDestination) return;
+    try {
+      const picked = await host.pickFeedbackDestination({
+        folderId: draft?.destination?.folderId ?? null,
+        subjectCount: draft ? destinationSubjects(draft).length : 0,
+      });
+      // Dismissing the picker is not a choice; leave the draft as it was.
+      if (picked) update((current) => setDestination(current, picked));
+    } catch (error) {
+      console.error('[FeedbackRequestComposeWidget] Failed to pick a destination:', error);
+    }
+  }, [host, draft, update]);
 
   const handleCancel = useCallback(async () => {
     try {
@@ -484,6 +500,11 @@ export const FeedbackRequestComposeWidget: React.FC<CustomToolWidgetProps> = ({
             forceExpanded={publishPromptForced}
             onConfirmAndSend={handleConfirmPublishAndSend}
             disabled={!canSend}
+            destinationSubjectCount={destinationSubjects(draft).length}
+            destination={draft.destination}
+            onChangeDestination={
+              host?.pickFeedbackDestination ? handleChangeDestination : undefined
+            }
           />
         )}
 
