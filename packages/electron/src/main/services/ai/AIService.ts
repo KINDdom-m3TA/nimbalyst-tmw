@@ -61,6 +61,7 @@ import { getSettingsService } from '../SettingsService';
 import { subscribeProviderSettingsInvalidation } from './providerSettingsCacheInvalidation';
 import { windowStates, findWindowByWorkspace, getWindowId, createWindow, isAppQuitting } from '../../window/WindowManager';
 import { getWindowIdForWindow, resolveActiveWorkspacePathForWindowId } from '../../window/windowState';
+import { resolveSenderWorkspacePath } from '../../window/captureWindowWorkspace';
 import { sessionFileTracker } from '../SessionFileTracker';
 import { extractFilePath } from './tools/extractFilePath';
 import { handleBackendTool } from '../../mcp/tools/backendToolHandler';
@@ -4163,12 +4164,17 @@ export class AIService {
       }
 
       // Resolve the workspace: explicit arg wins, else the window's active
-      // project (honors the project rail selection in Multi-Project mode).
+      // project (honors the project rail selection in Multi-Project mode), else
+      // the offscreen mount's workspace when the sender is the hidden screenshot
+      // capture window, which WindowManager never registers.
       let workspacePath = options?.workspacePath;
       if (!workspacePath) {
         const browserWindow = BrowserWindow.fromWebContents(event.sender);
         const windowId = browserWindow ? getWindowId(browserWindow) : null;
-        workspacePath = resolveActiveWorkspacePathForWindowId(windowId) ?? undefined;
+        workspacePath = resolveSenderWorkspacePath({
+          windowId,
+          webContentsId: event.sender?.id,
+        });
       }
       if (!workspacePath) {
         throw new Error('No workspace path available for backend tool call');
