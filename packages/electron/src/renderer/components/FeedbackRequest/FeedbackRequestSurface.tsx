@@ -45,6 +45,7 @@ import {
 } from './lazyFeedbackOptionPreview';
 import { renderFeedbackArtifactDetail } from './FeedbackArtifactDetail';
 import { feedbackRequestViewMode } from './feedbackRequestViewMode';
+import { useResourcePreviewResolver } from '../../hooks/useResourcePreviewResolver';
 
 export interface FeedbackRequestSurfaceProps {
   /** Workspace whose team JWT backs the request room. */
@@ -160,12 +161,14 @@ export function FeedbackRequestSurface({
   const resolvedState: FeedbackRequestServiceState | null = state.teamMemberId
     ? { ...state, teamMemberId: state.teamMemberId }
     : null;
+  const resourceResolver = useResourcePreviewResolver(orgId);
 
   const discussion = (
     <div className={`feedback-request-discussion-thread ${discussionClassName}`}>
       <CommentThread
         adapter={adapter}
         capabilities={capabilities}
+        resolver={resourceResolver}
         context={{
           conversationId: requestId,
           conversationTitle: title,
