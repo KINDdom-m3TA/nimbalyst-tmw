@@ -1,0 +1,34 @@
+{
+  "id": "com.nimbalyst.canvas",
+  "name": "Project Canvas",
+  "version": "1.0.0",
+  "description": "Authoring guidance for Project Canvas boards",
+  "author": "Nimbalyst",
+  "apiVersion": "1.0.0",
+  "marketplace": {
+    "categories": ["ai-tools"],
+    "tags": ["canvas", "board", "diagram", "json-canvas", "layout"],
+    "icon": "dashboard",
+    "featured": false,
+    "tagline": "Teaches AI sessions how to write .canvas boards",
+    "longDescription": "The Project Canvas editor is built into Nimbalyst. This extension adds the authoring guidance an AI session needs to write a board by hand: the JSON Canvas file format, the x-nimbalyst card references, layout conventions, and edges.",
+    "highlights": [
+      "AI sessions can create canvas boards from a description",
+      "Cards that reference real workspace files and shared documents",
+      "Layout that lands on the board's grid instead of needing a cleanup pass"
+    ],
+    "fileTypes": [".canvas"]
+  },
+  "permissions": {
+    "filesystem": true,
+    "ai": true
+  },
+  "contributions": {
+    "claudePlugin": {
+      "path": "claude-plugin",
+      "displayName": "Project Canvas",
+      "description": "How to author .canvas boards",
+      "enabledByDefault": true
+    }
+  }
+}
