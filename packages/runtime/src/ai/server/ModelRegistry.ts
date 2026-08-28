@@ -10,6 +10,18 @@ import {
   assertExhaustiveProvider,
 } from './types';
 
+interface ModelCatalogCacheEntry {
+  provider: AIProviderType;
+  apiKey: string | undefined;
+  models: AIModel[];
+  refreshedAt: number;
+}
+
+interface ModelCatalogRefresh {
+  apiKey: string | undefined;
+  promise: Promise<AIModel[]>;
+}
+
 /**
  * Which `apiKeys` entry (if any) a provider's catalog fetch needs.
  *
@@ -39,9 +51,14 @@ const PROVIDER_API_KEY_SOURCE: Readonly<Record<AIProviderType, string | null>> =
 });
 
 export class ModelRegistry {
+  /** Latest successful catalog by provider, for synchronous display-name reads. */
   private static cachedModels: Map<AIProviderType, AIModel[]> = new Map();
-  private static lastFetch: Map<AIProviderType, number> = new Map();
-  private static CACHE_DURATION = 60 * 60 * 1000; // 1 hour cache
+  /** Request-scoped catalogs. OpenCode varies by workspace; LM Studio by URL. */
+  private static catalogCache: Map<string, ModelCatalogCacheEntry> = new Map();
+  private static inFlightRefreshes: Map<string, ModelCatalogRefresh> = new Map();
+  private static latestRequestIds: Map<string, number> = new Map();
+  private static nextRequestId = 0;
+  private static readonly CACHE_DURATION = 60 * 60 * 1000;
 
   /**
    * Get models for a specific provider (with caching).
@@ -58,20 +75,90 @@ export class ModelRegistry {
     apiKey?: string,
     baseUrl?: string
   ): Promise<AIModel[]> {
-    // console.log('[ModelRegistry] getModelsForProvider called:', {
-    //   provider,
-    //   hasApiKey: !!apiKey,
-    //   baseUrl
-    // });
+    const cacheScope = this.getCacheScope(provider, workspacePath, baseUrl);
+    const cached = this.catalogCache.get(cacheScope);
+    const cacheMatchesRequest = cached?.apiKey === apiKey;
 
-    // SKIP CACHE FOR NOW - always fetch fresh
-    // const lastFetchTime = this.lastFetch.get(provider) || 0;
-    // const cached = this.cachedModels.get(provider);
+    if (cached && cacheMatchesRequest) {
+      if (Date.now() - cached.refreshedAt >= this.CACHE_DURATION) {
+        // Stale-while-revalidate: the picker gets a complete known-good catalog
+        // now, while one shared refresh updates the next read in the background.
+        void this.refreshModelsForProvider(
+          cacheScope,
+          provider,
+          workspacePath,
+          apiKey,
+          baseUrl,
+          cached.models,
+        );
+      }
+      return cached.models;
+    }
 
-    // if (cached && Date.now() - lastFetchTime < this.CACHE_DURATION) {
-    //   return cached;
-    // }
+    // A changed credential is not allowed to read the previous credential's
+    // catalog as stale. The first request for the new identity is a cold read.
+    return this.refreshModelsForProvider(
+      cacheScope,
+      provider,
+      workspacePath,
+      apiKey,
+      baseUrl,
+      undefined,
+    );
+  }
 
+  private static refreshModelsForProvider(
+    cacheScope: string,
+    provider: AIProviderType,
+    workspacePath: string | undefined,
+    apiKey: string | undefined,
+    baseUrl: string | undefined,
+    staleModels: AIModel[] | undefined,
+  ): Promise<AIModel[]> {
+    const inFlight = this.inFlightRefreshes.get(cacheScope);
+    if (inFlight && inFlight.apiKey === apiKey) {
+      return inFlight.promise;
+    }
+
+    const requestId = ++this.nextRequestId;
+    this.latestRequestIds.set(cacheScope, requestId);
+
+    let promise: Promise<AIModel[]>;
+    promise = this.fetchFreshModels(provider, workspacePath, apiKey, baseUrl)
+      .then((models) => {
+        // A settings change or explicit clear may supersede this refresh while
+        // the network/CLI request is in flight. Never let the old answer win.
+        if (this.latestRequestIds.get(cacheScope) === requestId) {
+          this.catalogCache.set(cacheScope, {
+            provider,
+            apiKey,
+            models,
+            refreshedAt: Date.now(),
+          });
+          this.cachedModels.set(provider, models);
+        }
+        return models;
+      })
+      .catch((error) => {
+        console.error(`Failed to fetch models for ${provider}:`, error);
+        return staleModels ?? [];
+      })
+      .finally(() => {
+        if (this.inFlightRefreshes.get(cacheScope)?.promise === promise) {
+          this.inFlightRefreshes.delete(cacheScope);
+        }
+      });
+
+    this.inFlightRefreshes.set(cacheScope, { apiKey, promise });
+    return promise;
+  }
+
+  private static async fetchFreshModels(
+    provider: AIProviderType,
+    workspacePath: string | undefined,
+    apiKey: string | undefined,
+    baseUrl: string | undefined,
+  ): Promise<AIModel[]> {
     // Extension-contributed agent providers supply their models via the
     // AgentProviderRegistry (surfaced in AIService.ai:getModels), not this
     // built-in registry. Short-circuit so the exhaustive switch below does not
@@ -80,80 +167,60 @@ export class ModelRegistry {
       return [];
     }
 
-    // Fetch fresh models
-    let models: AIModel[] = [];
-
-    try {
-      switch (provider) {
-        case 'claude':
-          const { ClaudeProvider } = await import('./providers/ClaudeProvider');
-          models = this.filterLatestClaudeModels(ClaudeProvider.getModels());
-          // console.log('[ModelRegistry] Claude models:', models);
-          break;
-        case 'claude-code':
-          // Use SDK version with dynamic loading
-          // console.log('[ModelRegistry] Fetching claude-code models via ClaudeCodeProvider.getModels()');
-          const { ClaudeCodeProvider } = await import('./providers/ClaudeCodeProvider');
-          models = await ClaudeCodeProvider.getModels();
-          // console.log('[ModelRegistry] Claude Code models retrieved:', models.map(m => ({ id: m.id, name: m.name })));
-          break;
-        case 'claude-code-cli':
-          const { ClaudeCodeCliProvider } = await import('./providers/ClaudeCodeCliProvider');
-          models = await ClaudeCodeCliProvider.getModels();
-          break;
-        case 'openai':
-          const { OpenAIProvider } = await import('./providers/OpenAIProvider');
-          models = await OpenAIProvider.getModels(apiKey);
-          break;
-        case 'openai-codex':
-          const { OpenAICodexProvider } = await import('./providers/OpenAICodexProvider');
-          models = await OpenAICodexProvider.getModels(apiKey);
-          break;
-        case 'openai-codex-acp':
-          const { OpenAICodexACPProvider } = await import('./providers/OpenAICodexACPProvider');
-          models = await OpenAICodexACPProvider.getModels(apiKey);
-          break;
-        case 'opencode':
-          const { OpenCodeProvider } = await import('./providers/OpenCodeProvider');
-          models = await OpenCodeProvider.getModels(workspacePath);
-          break;
-        case 'lmstudio':
-          // Try to fetch models from LMStudio
-          // The provider will return empty array if LMStudio is not running
-          const { LMStudioProvider } = await import('./providers/LMStudioProvider');
-          models = await LMStudioProvider.getModels(baseUrl || 'http://127.0.0.1:1234');
-          break;
-        case 'copilot-cli':
-          const { CopilotCLIProvider } = await import('./providers/CopilotCLIProvider');
-          models = await CopilotCLIProvider.getModels();
-          break;
-        case 'grok-build':
-          const { GrokBuildProvider } = await import('./providers/GrokBuildProvider');
-          models = await GrokBuildProvider.getModels();
-          break;
-        case 'cursor-agent':
-          const { CursorAgentProvider } = await import('./providers/CursorAgentProvider');
-          models = await CursorAgentProvider.getModels();
-          break;
-        case 'antigravity-gemini-agent':
-          const { GeminiAntigravityProvider } = await import('./providers/GeminiAntigravityProvider');
-          models = await GeminiAntigravityProvider.getModels();
-          break;
-        default:
-          assertExhaustiveProvider(provider);
-      }
-
-      // Update cache
-      this.cachedModels.set(provider, models);
-      this.lastFetch.set(provider, Date.now());
-
-    } catch (error) {
-      console.error(`Failed to fetch models for ${provider}:`, error);
-      // Return empty array on error
-      models = [];
+    switch (provider) {
+      case 'claude':
+        const { ClaudeProvider } = await import('./providers/ClaudeProvider');
+        return this.filterLatestClaudeModels(ClaudeProvider.getModels());
+      case 'claude-code':
+        const { ClaudeCodeProvider } = await import('./providers/ClaudeCodeProvider');
+        return ClaudeCodeProvider.getModels();
+      case 'claude-code-cli':
+        const { ClaudeCodeCliProvider } = await import('./providers/ClaudeCodeCliProvider');
+        return ClaudeCodeCliProvider.getModels();
+      case 'openai':
+        const { OpenAIProvider } = await import('./providers/OpenAIProvider');
+        return OpenAIProvider.getModels(apiKey);
+      case 'openai-codex':
+        const { OpenAICodexProvider } = await import('./providers/OpenAICodexProvider');
+        return OpenAICodexProvider.getModels(apiKey);
+      case 'openai-codex-acp':
+        const { OpenAICodexACPProvider } = await import('./providers/OpenAICodexACPProvider');
+        return OpenAICodexACPProvider.getModels(apiKey);
+      case 'opencode':
+        const { OpenCodeProvider } = await import('./providers/OpenCodeProvider');
+        return OpenCodeProvider.getModels(workspacePath);
+      case 'lmstudio':
+        const { LMStudioProvider } = await import('./providers/LMStudioProvider');
+        return LMStudioProvider.getModels(baseUrl || 'http://127.0.0.1:1234');
+      case 'copilot-cli':
+        const { CopilotCLIProvider } = await import('./providers/CopilotCLIProvider');
+        return CopilotCLIProvider.getModels();
+      case 'grok-build':
+        const { GrokBuildProvider } = await import('./providers/GrokBuildProvider');
+        return GrokBuildProvider.getModels();
+      case 'cursor-agent':
+        const { CursorAgentProvider } = await import('./providers/CursorAgentProvider');
+        return CursorAgentProvider.getModels();
+      case 'antigravity-gemini-agent':
+        const { GeminiAntigravityProvider } = await import('./providers/GeminiAntigravityProvider');
+        return GeminiAntigravityProvider.getModels();
+      default:
+        return assertExhaustiveProvider(provider);
     }
+  }
 
-    return models;
+  private static getCacheScope(
+    provider: AIProviderType,
+    workspacePath: string | undefined,
+    baseUrl: string | undefined,
+  ): string {
+    if (provider === 'opencode') {
+      return JSON.stringify([provider, workspacePath ?? null]);
+    }
+    if (provider === 'lmstudio') {
+      return JSON.stringify([provider, baseUrl ?? 'http://127.0.0.1:1234']);
+    }
+    return JSON.stringify([provider]);
   }
 
   /**
@@ -271,10 +338,40 @@ export class ModelRegistry {
   static clearCache(provider?: AIProviderType): void {
     if (provider) {
       this.cachedModels.delete(provider);
-      this.lastFetch.delete(provider);
+      this.invalidateScopes(entry => entry.provider === provider);
     } else {
       this.cachedModels.clear();
-      this.lastFetch.clear();
+      this.invalidateScopes(() => true);
+    }
+  }
+
+  private static invalidateScopes(matches: (entry: ModelCatalogCacheEntry) => boolean): void {
+    const scopes = new Set([
+      ...this.catalogCache.keys(),
+      ...this.inFlightRefreshes.keys(),
+    ]);
+    for (const scope of scopes) {
+      const entry = this.catalogCache.get(scope);
+      const provider = entry?.provider ?? this.providerFromCacheScope(scope);
+      if (!provider || !matches(entry ?? {
+        provider,
+        apiKey: undefined,
+        models: [],
+        refreshedAt: 0,
+      })) continue;
+
+      this.catalogCache.delete(scope);
+      this.inFlightRefreshes.delete(scope);
+      this.latestRequestIds.set(scope, ++this.nextRequestId);
+    }
+  }
+
+  private static providerFromCacheScope(scope: string): AIProviderType | undefined {
+    try {
+      const [provider] = JSON.parse(scope) as [AIProviderType];
+      return provider;
+    } catch {
+      return undefined;
     }
   }
 

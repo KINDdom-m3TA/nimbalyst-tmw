@@ -115,14 +115,18 @@ export class CursorAgentProvider extends HeadlessCliAgentProvider {
   static async getModels(): Promise<AIModel[]> {
     const command = CursorAgentProvider.cursorPathLoader?.() ?? 'cursor-agent';
     try {
-      const { execFileSync } = await import('child_process');
-      const output = execFileSync(command, ['--list-models'], {
-        stdio: 'pipe',
-        timeout: 15_000,
-        encoding: 'utf8',
-        env: CursorAgentProvider.enhancedPathLoader
-          ? { ...process.env, PATH: CursorAgentProvider.enhancedPathLoader() }
-          : process.env,
+      const { execFile } = await import('child_process');
+      const output = await new Promise<string>((resolve, reject) => {
+        execFile(command, ['--list-models'], {
+          timeout: 15_000,
+          encoding: 'utf8',
+          env: CursorAgentProvider.enhancedPathLoader
+            ? { ...process.env, PATH: CursorAgentProvider.enhancedPathLoader() }
+            : process.env,
+        }, (error, stdout) => {
+          if (error) reject(error);
+          else resolve(stdout);
+        });
       });
       const models = parseCursorModelList(output);
       if (models.length > 0) {

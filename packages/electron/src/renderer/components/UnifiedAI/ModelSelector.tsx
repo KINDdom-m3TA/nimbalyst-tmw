@@ -102,25 +102,7 @@ export function ModelSelector({
   const role = useRole(context, { role: 'menu' });
   const { getReferenceProps, getFloatingProps } = useInteractions([dismiss, role]);
 
-  React.useLayoutEffect(() => {
-    if (openRequest === undefined || openRequest === lastOpenRequestRef.current) return;
-    lastOpenRequestRef.current = openRequest;
-    setIsOpen(true);
-  }, [openRequest]);
-
-  // Clear cached models when provider settings change so next dropdown open fetches fresh data
-  useEffect(() => {
-    setModels({});
-  }, [providers]);
-
-  // Load models when dropdown opens
-  useEffect(() => {
-    if (isOpen && Object.keys(models).length === 0) {
-      loadModels();
-    }
-  }, [isOpen]);
-
-  const loadModels = async () => {
+  const loadModels = React.useCallback(async () => {
     setLoading(true);
     try {
       const response = await window.electronAPI.aiGetModels();
@@ -138,7 +120,22 @@ export function ModelSelector({
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  React.useLayoutEffect(() => {
+    if (openRequest === undefined || openRequest === lastOpenRequestRef.current) return;
+    lastOpenRequestRef.current = openRequest;
+    setIsOpen(true);
+  }, [openRequest]);
+
+  // Preload before the user opens the picker. The main process serves its last
+  // successful catalog immediately and refreshes stale providers in the
+  // background, so mounting a new session input never turns a click into a
+  // network/CLI discovery boundary.
+  useEffect(() => {
+    setModels({});
+    void loadModels();
+  }, [providers, loadModels]);
 
   const resetTypeahead = React.useCallback(() => {
     typeaheadQueryRef.current = '';

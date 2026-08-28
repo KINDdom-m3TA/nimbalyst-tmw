@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- The session model picker loads ahead of opening and uses cached results instead of blocking on provider discovery.
 - Typing in a dialog while the tracker table is open no longer edits the selected cell.
 - A tracker item's body is no longer cleared when the item's metadata syncs with your team.
 

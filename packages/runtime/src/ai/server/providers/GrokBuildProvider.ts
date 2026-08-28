@@ -120,14 +120,18 @@ export class GrokBuildProvider extends HeadlessCliAgentProvider {
   private static async listModelIds(): Promise<string[]> {
     const command = GrokBuildProvider.grokPathLoader?.() ?? 'grok';
     try {
-      const { execFileSync } = await import('child_process');
-      const output = execFileSync(command, ['models'], {
-        stdio: 'pipe',
-        timeout: 10_000,
-        encoding: 'utf8',
-        env: GrokBuildProvider.enhancedPathLoader
-          ? { ...process.env, PATH: GrokBuildProvider.enhancedPathLoader() }
-          : process.env,
+      const { execFile } = await import('child_process');
+      const output = await new Promise<string>((resolve, reject) => {
+        execFile(command, ['models'], {
+          timeout: 10_000,
+          encoding: 'utf8',
+          env: GrokBuildProvider.enhancedPathLoader
+            ? { ...process.env, PATH: GrokBuildProvider.enhancedPathLoader() }
+            : process.env,
+        }, (error, stdout) => {
+          if (error) reject(error);
+          else resolve(stdout);
+        });
       });
       const ids = parseGrokModelList(output);
       if (ids.length > 0) return ids;
