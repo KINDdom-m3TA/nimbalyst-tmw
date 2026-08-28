@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 <!-- New features go here -->
 - An AI session can now build a Project Canvas board for you from a description, placing cards that reference real workspace files and shared documents instead of you dragging each one onto the board.
-- Author step-based technical animations in `.anim.json` files with a live stage, boundary-scrubbable timeline, retiming, playback, and agent-aware part selection, then export them as MP4 for posting or GIF for anywhere that cannot play video.
+- Author step-based technical animations in `.anim.json` files with a live stage, boundary-scrubbable timeline, retiming, playback, and agent-aware part selection. Frames can show real product UI rather than boxes and arrows, built from reusable HTML partials you keep beside your animations and drawn under a palette the document itself names, so the stage and every export agree. Export as MP4 for posting or GIF for anywhere that cannot play video.
 - A feedback request now previews the mockups it is about, not only the ones bound to individual options, both for the recipient answering it and for the author reading the results.
 - The author of a feedback request can open the session that composed it from the request's results.
 

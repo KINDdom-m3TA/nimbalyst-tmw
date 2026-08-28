@@ -120,4 +120,39 @@ describe('capture window workspace resolution', () => {
 
     expect(resolveSenderWorkspacePath({ windowId: null, webContentsId })).toBeUndefined();
   });
+
+  /*
+   * `project-fs:read` is the sibling-file surface an editor gets as `host.fs`.
+   * It resolved its workspace straight out of `windowStates`, so it threw
+   * "Project file access is unavailable outside a workspace" for the capture
+   * window -- and an animation whose parts reference sibling `htmlFile`
+   * partials rendered as empty boxes under `capture_editor_screenshot` while
+   * looking correct in a tab. The rule that must hold is that the workspace
+   * still comes from main's own records, never from a renderer argument.
+   */
+  describe('project file access from the capture window', () => {
+    /** Mirrors `getAuthorizedWorkspaceRoot` in HistoryHandlers. */
+    const authorize = (sender: { windowId: number | null; webContentsId: number }): string => {
+      const workspaceRoot = resolveSenderWorkspacePath(sender);
+      if (!workspaceRoot) throw new Error('Project file access is unavailable outside a workspace.');
+      return workspaceRoot;
+    };
+
+    it('authorizes the workspace of the file main mounted there', () => {
+      registerCaptureWindowMount(101, '/ws/demo/scene.anim.json', '/ws/demo');
+      expect(authorize({ windowId: null, webContentsId: 101 })).toBe('/ws/demo');
+    });
+
+    it('still refuses a sender main has no record of', () => {
+      expect(() => authorize({ windowId: null, webContentsId: 404 })).toThrow(
+        'unavailable outside a workspace'
+      );
+    });
+
+    it('does not let a stale mount outlive the capture', () => {
+      registerCaptureWindowMount(101, '/ws/demo/scene.anim.json', '/ws/demo');
+      clearCaptureWindowMounts(101);
+      expect(() => authorize({ windowId: null, webContentsId: 101 })).toThrow();
+    });
+  });
 });

@@ -53,6 +53,8 @@ function hostHarness(
     /** Omit to build a host with no filesystem, as an older host would be. */
     existingExport?: { sha256: string } | null;
     withFs?: boolean;
+    /** Markup returned for `htmlFile` reads, keyed by resolved path. */
+    partials?: Record<string, string>;
     supports?: (capability: string) => boolean;
   } = {}
 ) {
@@ -62,11 +64,15 @@ function hostHarness(
   const menuItems: Array<{ label: string; onClick: () => void }> = [];
 
   const fsRead = vi.fn(async (paths: string[]) =>
-    paths.map((path) => ({
-      path,
-      exists: Boolean(options.existingExport),
-      sha256: options.existingExport?.sha256 ?? null,
-    }))
+    paths.map((path) => {
+      const partial = options.partials?.[path];
+      return {
+        path,
+        exists: partial !== undefined || Boolean(options.existingExport),
+        content: partial ?? null,
+        sha256: options.existingExport?.sha256 ?? null,
+      };
+    })
   );
   // Typed parameters, so `fsWrite.mock.calls[0][0]` is inspectable rather than
   // an empty tuple.
@@ -273,5 +279,67 @@ describe("export menu item", () => {
         "Disk is full"
       )
     );
+  });
+});
+
+describe("htmlFile partials", () => {
+  const DOC_WITH_PARTIAL = JSON.stringify({
+    version: 1,
+    stage: { width: 200, height: 100, fps: 25 },
+    parts: {
+      card: {
+        type: "html",
+        x: 0,
+        y: 0,
+        w: 100,
+        h: 40,
+        htmlFile: "./parts/card.html",
+        vars: { who: "Ada" },
+      },
+    },
+    steps: [{ id: "one", duration: 400 }],
+  });
+
+  it("reads the partial and repaints the stage once it arrives", async () => {
+    // The read is async and lands after the document is already on screen, so
+    // the scene has to be rewritten on the asset change as well as on the
+    // document change. Miss that and the partial loads but never paints --
+    // which looks exactly like a partial that failed to load.
+    const harness = hostHarness({
+      content: DOC_WITH_PARTIAL,
+      partials: { "/workspace/parts/card.html": "<b>hello {{who}}</b>" },
+    });
+    const view = render(<AnimationEditor host={harness.host} />);
+
+    await waitFor(() =>
+      expect(harness.fsRead).toHaveBeenCalledWith(["/workspace/parts/card.html"])
+    );
+
+    const frame = view.container.querySelector(
+      "iframe.anim-stage-frame"
+    ) as HTMLIFrameElement;
+    await waitFor(() => {
+      expect(frame.contentDocument?.body.innerHTML).toContain("hello Ada");
+    });
+  });
+
+  it("warns when the host cannot read files at all", async () => {
+    // Without this the parts just draw nothing, which is indistinguishable from
+    // markup that is simply wrong.
+    const harness = hostHarness({ content: DOC_WITH_PARTIAL, withFs: false });
+    const view = render(<AnimationEditor host={harness.host} />);
+    await waitFor(() =>
+      expect(view.container.textContent).toContain("1 warning")
+    );
+  });
+
+  it("reports an unreadable partial as a warning rather than failing to open", async () => {
+    const harness = hostHarness({ content: DOC_WITH_PARTIAL, partials: {} });
+    const view = render(<AnimationEditor host={harness.host} />);
+
+    await waitFor(() =>
+      expect(view.container.textContent).toContain("1 warning")
+    );
+    expect(view.container.querySelector("iframe.anim-stage-frame")).not.toBeNull();
   });
 });

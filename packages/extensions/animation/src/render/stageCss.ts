@@ -70,9 +70,45 @@ export function safeCssColor(
   return candidate;
 }
 
+/**
+ * Custom-property names a document may declare.
+ *
+ * These are written straight into a `<style>` block, so the *name* needs the
+ * same care the *value* already gets from `safeCssColor` -- otherwise a
+ * document could close the declaration and open a rule of its own.
+ */
+const CUSTOM_PROPERTY_NAME = /^--[a-z0-9-]+$/;
+
+/**
+ * Split a document's stamped `stage.theme` into stage tokens and pass-through
+ * custom properties.
+ *
+ * Anything unrecognised is dropped rather than guessed at: a key that is
+ * neither a known token nor a valid custom-property name has no rendering
+ * meaning, and inventing one would make two consumers disagree the first time
+ * they guessed differently.
+ */
+export function resolveStageTheme(
+  theme: Record<string, string> | undefined,
+  fallback: ThemeTokens = FALLBACK_TOKENS
+): { tokens: ThemeTokens; custom: Record<string, string> } {
+  const tokens: ThemeTokens = { ...fallback };
+  const custom: Record<string, string> = {};
+  for (const [key, value] of Object.entries(theme ?? {})) {
+    if (typeof value !== "string") continue;
+    if (key in FALLBACK_TOKENS) {
+      tokens[key as keyof ThemeTokens] = value;
+    } else if (CUSTOM_PROPERTY_NAME.test(key)) {
+      custom[key] = value;
+    }
+  }
+  return { tokens, custom };
+}
+
 export function buildStageCss(
   tokens: ThemeTokens,
-  background?: string
+  background?: string,
+  custom?: Record<string, string>
 ): string {
   const safeTokens = Object.fromEntries(
     Object.entries(tokens).map(([key, value]) => [
@@ -81,6 +117,16 @@ export function buildStageCss(
     ])
   ) as unknown as ThemeTokens;
   const safeBackground = safeCssColor(background, safeTokens.bg);
+
+  // A project's own vocabulary, emitted after the stage's own tokens so a
+  // document cannot redefine `--anim-*` out from under the rules below.
+  const customCss = Object.entries(custom ?? {})
+    .filter(([name]) => CUSTOM_PROPERTY_NAME.test(name))
+    .map(([name, value]) => {
+      const safe = safeCssColor(value, "");
+      return safe === "" ? "" : `\n  ${name}: ${safe};`;
+    })
+    .join("");
 
   return `
 :root {
@@ -103,7 +149,7 @@ export function buildStageCss(
 
   --anim-mono: ui-monospace, 'SF Mono', Monaco, 'Courier New', monospace;
   --anim-duration: ${TRANSITION_MS}ms;
-  --anim-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --anim-ease: cubic-bezier(0.4, 0, 0.2, 1);${customCss}
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -134,6 +180,48 @@ html, body {
 .anim-part {
   --anim-tone-fill: color-mix(in srgb, var(--anim-tone) 14%, transparent);
 }
+
+/* ---- sub-parts ---------------------------------------------------------- */
+/*
+ * A region a component declared inside one html part, addressed by steps as
+ * partId/subId. Playback drives it with the same querySelector + setAttribute
+ * it uses for a top-level part, so there is no second mechanism -- only a
+ * second set of selectors.
+ *
+ * The one deliberate difference from .anim-part is what is NOT here: no
+ * unconditional "--anim-tone: var(--anim-tone-neutral)". That default would
+ * make a nested region *reset* to grey rather than inherit its container's
+ * tone, so a window whose chrome is accent-blue would go grey wherever a
+ * component happened to declare a region. Sub-parts are "inherit unless
+ * overridden", which is also why neutral has no rule: for a sub-part, neutral
+ * means "no opinion", and no opinion means take the parent's.
+ */
+.anim-subpart[data-tone="accent"]  { --anim-tone: var(--anim-tone-accent); }
+.anim-subpart[data-tone="data"]    { --anim-tone: var(--anim-tone-data); }
+.anim-subpart[data-tone="success"] { --anim-tone: var(--anim-tone-success); }
+.anim-subpart[data-tone="warning"] { --anim-tone: var(--anim-tone-warning); }
+.anim-subpart[data-tone="error"]   { --anim-tone: var(--anim-tone-error); }
+.anim-subpart[data-tone="muted"]   { --anim-tone: var(--anim-tone-muted); }
+
+/*
+ * A custom property whose value contains var() is substituted where it is
+ * declared, not where it is used, so a sub-part that overrides --anim-tone
+ * would otherwise keep inheriting the container's already-resolved fill.
+ * Recompute it exactly where the tone was overridden, and nowhere else.
+ */
+.anim-subpart[data-tone] {
+  --anim-tone-fill: color-mix(in srgb, var(--anim-tone) 14%, transparent);
+}
+
+/*
+ * State treatments mirror .anim-html, so a sub-part is not inert in the
+ * states every other part type reacts to. Authored markup overrides any of it
+ * by keying off the same attributes.
+ */
+.anim-subpart { transition: opacity var(--anim-duration) var(--anim-ease); }
+.anim-subpart[data-state="hidden"]  { opacity: 0; }
+.anim-subpart[data-state="waiting"] { opacity: 0.75; }
+.anim-subpart[data-state="offline"] { opacity: 0.4; }
 
 /* ---- nodes -------------------------------------------------------------- */
 .anim-node-body {
@@ -329,6 +417,41 @@ html, body {
 .anim-shape[data-state="hidden"] { opacity: 0; }
 .anim-shape { transition: opacity var(--anim-duration) var(--anim-ease); }
 
+/* ---- html parts --------------------------------------------------------- */
+/*
+ * Authored markup gets the stage's typography and colour as a starting point,
+ * then owns everything from there -- including font-size, which is exactly what
+ * the primitive part types cannot offer. The --anim-tone property resolves here
+ * through normal inheritance, so markup using it animates on step changes free.
+ */
+/*
+ * Proportional by default, unlike the SVG part types, which are mono because
+ * they are diagram furniture. An html part is usually prose or UI, and mono
+ * headings read as a terminal mock; markup that wants code sets --anim-mono
+ * itself, which is what the tool-call rows in the samples do.
+ */
+.anim-html-body {
+  width: 100%;
+  height: 100%;
+  color: var(--anim-text);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow: hidden;
+}
+
+.anim-html-body a { color: var(--anim-tone); }
+
+.anim-html { transition: opacity var(--anim-duration) var(--anim-ease); }
+.anim-html[data-state="hidden"] { opacity: 0; }
+/*
+ * The waiting and offline states get a default treatment so an html part is not
+ * inert in the states the other part types react to. Authored markup can
+ * override any of it with its own rules keyed off the same attributes.
+ */
+.anim-html[data-state="waiting"] .anim-html-body { opacity: 0.75; }
+.anim-html[data-state="offline"] .anim-html-body { opacity: 0.4; }
+
 /* ---- selection ---------------------------------------------------------- */
 .anim-part.anim-selected .anim-node-body,
 .anim-part.anim-selected .anim-shape-body {
@@ -341,6 +464,22 @@ html, body {
   stroke-width: 1.4px;
   stroke-dasharray: 3 3;
   pointer-events: none;
+}
+
+/*
+ * An html part and a region inside one both outline instead of taking a stroke:
+ * neither is an SVG shape, so there is no body element to put one on. An
+ * outline rather than a border, because it does not participate in layout -- the markup
+ * must not reflow just because someone clicked it -- and the offset is negative
+ * so the ring stays inside the foreignObject, which clips at its declared box.
+ *
+ * Without these the two part types this format is now mostly built from are the
+ * only ones with no visible selection at all.
+ */
+.anim-part.anim-selected .anim-html-body,
+.anim-subpart.anim-selected {
+  outline: 1.5px dashed var(--anim-tone-accent);
+  outline-offset: -2px;
 }
 
 .anim-hit { fill: transparent; cursor: pointer; }

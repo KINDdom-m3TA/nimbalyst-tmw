@@ -21,6 +21,7 @@ import {
   writeStageDocument,
 } from "../render/stageDocument";
 import type { ThemeTokens } from "../render/stageCss";
+import type { HtmlAssets } from "../core/htmlParts";
 
 export interface StageFrameProps {
   doc: AnimDocument;
@@ -32,6 +33,8 @@ export interface StageFrameProps {
   playing: boolean;
   selectedPartId: string | null;
   tokens: ThemeTokens;
+  /** Markup for the document's `htmlFile` refs. */
+  assets?: HtmlAssets;
   onSelectPart: (partId: string | null) => void;
 }
 
@@ -43,6 +46,7 @@ export function StageFrame({
   playing,
   selectedPartId,
   tokens,
+  assets,
   onSelectPart,
 }: StageFrameProps) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -52,7 +56,7 @@ export function StageFrame({
   const writeScene = useCallback(() => {
     const frame = frameRef.current;
     if (!frame) return;
-    writeStageDocument(frame, doc, tokens);
+    writeStageDocument(frame, doc, tokens, assets);
 
     const frameDoc = frame.contentDocument;
     if (!frameDoc) return;
@@ -69,7 +73,7 @@ export function StageFrame({
     // structural change, and reads whatever the current values are at that
     // moment. The effects below own the per-change updates.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, tokens, playing]);
+  }, [doc, tokens, assets, playing]);
 
   useEffect(() => {
     writeScene();

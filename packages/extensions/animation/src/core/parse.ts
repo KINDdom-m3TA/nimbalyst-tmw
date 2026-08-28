@@ -21,9 +21,11 @@ import {
   DEFAULT_TONE,
   TONES,
   type AnimDocument,
+  type BuildStamp,
   type Part,
   type PartAssignment,
   type Step,
+  type SubPartSpec,
   type Tone,
 } from "./types";
 
@@ -41,6 +43,8 @@ export interface DocumentExtras {
   rows: Record<string, Array<Record<string, unknown>>>;
   steps: Record<string, Record<string, unknown>>;
   assignments: Record<string, Record<string, Record<string, unknown>>>;
+  /** Unknown keys inside a `subParts` entry, keyed part id then sub-part id. */
+  subParts: Record<string, Record<string, Record<string, unknown>>>;
 }
 
 export interface ParseResult {
@@ -62,6 +66,7 @@ export function createEmptyExtras(): DocumentExtras {
     rows: {},
     steps: {},
     assignments: {},
+    subParts: {},
   };
 }
 
@@ -119,6 +124,97 @@ function coerceTone(
   return undefined;
 }
 
+/**
+ * `vars` for an html part: a flat string map, and nothing else.
+ *
+ * Non-string scalars are coerced rather than rejected -- an agent writing
+ * `"count": 4` means the text "4" -- but a nested object or array is dropped
+ * with a warning, because there is no substitution semantics that would make it
+ * meaningful and silently stringifying it would print "[object Object]" on the
+ * stage.
+ */
+function coerceVars(
+  value: unknown,
+  path: string,
+  problems: Problem[]
+): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    problems.push({
+      level: "warning",
+      path: `${path}.vars`,
+      message: "Vars must be an object of strings; ignored.",
+    });
+    return undefined;
+  }
+  const out: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    const text =
+      typeof raw === "boolean" ? String(raw) : coerceString(raw);
+    if (text === undefined) {
+      problems.push({
+        level: "warning",
+        path: `${path}.vars.${key}`,
+        message: "Var is not a string; ignored.",
+      });
+      continue;
+    }
+    out[key] = text;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * `subParts`: what the compiler observed the component emit.
+ *
+ * Values are baselines, so tone goes through the same coercion a part's does.
+ * Unknown keys inside an entry are handed to `extras` rather than dropped --
+ * this is generated content, but a future compiler writing a field this build
+ * does not model must not have it deleted by an unrelated save.
+ */
+function coerceSubParts(
+  partId: string,
+  value: unknown,
+  path: string,
+  problems: Problem[],
+  extras: DocumentExtras
+): Record<string, SubPartSpec> | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainObject(value)) {
+    problems.push({
+      level: "warning",
+      path: `${path}.subParts`,
+      message: "Sub-parts must be an object; ignored.",
+    });
+    return undefined;
+  }
+  const out: Record<string, SubPartSpec> = {};
+  const leftovers: Record<string, Record<string, unknown>> = {};
+  for (const [subId, raw] of Object.entries(value)) {
+    if (!isPlainObject(raw)) {
+      problems.push({
+        level: "warning",
+        path: `${path}.subParts.${subId}`,
+        message: "Not an object; sub-part ignored.",
+      });
+      continue;
+    }
+    const label = coerceString(raw.label);
+    const tone = coerceTone(raw.tone, `${path}.subParts.${subId}.tone`, problems);
+    const state = coerceString(raw.state);
+    const extra = leftoverKeys(raw, ["label", "tone", "state"]);
+    if (raw.tone !== undefined && tone === undefined) extra.tone = raw.tone;
+    if (Object.keys(extra).length > 0) leftovers[subId] = extra;
+    out[subId] = {
+      ...(label !== undefined ? { label } : {}),
+      ...(tone !== undefined ? { tone } : {}),
+      ...(state !== undefined ? { state } : {}),
+    };
+  }
+  if (Object.keys(leftovers).length > 0) extras.subParts[partId] = leftovers;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** Collect keys we did not consume so the serializer can write them back. */
 function leftoverKeys(
   source: Record<string, unknown>,
@@ -131,7 +227,45 @@ function leftoverKeys(
   return extra;
 }
 
-const STAGE_KEYS = ["width", "height", "fps", "background"];
+/**
+ * `stage.theme`: a flat map of colour strings, and nothing else.
+ *
+ * Deliberately not validated against a token list. The known-token names are
+ * one namespace and the project's own `--custom-property` names are another,
+ * and which is which is `resolveStageTheme`'s business at render time -- the
+ * parser rejecting an unfamiliar name would make adding a project token a
+ * change to the extension.
+ */
+function coerceTheme(
+  value: unknown,
+  problems: Problem[]
+): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainObject(value)) {
+    problems.push({
+      level: "warning",
+      path: "stage.theme",
+      message: "Theme must be an object of colour strings; ignored.",
+    });
+    return undefined;
+  }
+  const out: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const text = coerceString(raw);
+    if (text === undefined) {
+      problems.push({
+        level: "warning",
+        path: `stage.theme.${key}`,
+        message: "Theme value is not a string; ignored.",
+      });
+      continue;
+    }
+    out[key] = text;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+const STAGE_KEYS = ["width", "height", "fps", "background", "theme"];
 
 function parseStage(
   raw: unknown,
@@ -168,6 +302,8 @@ function parseStage(
   };
   const background = coerceString(raw.background);
   if (background) stage.background = background;
+  const theme = coerceTheme(raw.theme, problems);
+  if (theme) stage.theme = theme;
 
   if (width !== null && stage.width !== width) {
     problems.push({
@@ -355,6 +491,109 @@ function parsePart(
         h: dimension("h", 80),
         ...(shape !== undefined ? { shape } : {}),
         ...(text !== undefined ? { text } : {}),
+      };
+    }
+
+    case "html": {
+      extras.parts[id] = leftoverKeys(raw, [
+        ...COMMON_PART_KEYS,
+        "x",
+        "y",
+        "w",
+        "h",
+        "html",
+        "htmlFile",
+        "vars",
+        "component",
+        "props",
+        "subParts",
+        "build",
+      ]);
+      preserveInvalidTone(extras.parts[id]);
+
+      const markup = coerceString(raw.html);
+      const htmlFile = coerceString(raw.htmlFile);
+      const vars = coerceVars(raw.vars, path, problems);
+      const component = coerceString(raw.component);
+      const subParts = coerceSubParts(id, raw.subParts, path, problems, extras);
+
+      // Props are the compiler's business, not the parser's: they are carried
+      // by reference and written back untouched, so a compile and a save cannot
+      // fight over key order or over a value shape this build has no opinion on.
+      const props = isPlainObject(raw.props)
+        ? (raw.props as Record<string, unknown>)
+        : undefined;
+      if (raw.props !== undefined && props === undefined) {
+        problems.push({
+          level: "warning",
+          path: `${path}.props`,
+          message: "Props must be an object; kept but not used.",
+        });
+        extras.parts[id].props = raw.props;
+      }
+
+      // Carried by reference for the same reason as `props`: it is the
+      // compiler's record of its own inputs, and nothing here reads it.
+      const build = isPlainObject(raw.build)
+        ? (raw.build as BuildStamp)
+        : undefined;
+      if (raw.build !== undefined && build === undefined) {
+        extras.parts[id].build = raw.build;
+      }
+
+      // `htmlFile` wins over inline `html`. Say so when both are present rather
+      // than silently honouring one: a part that draws markup the author did
+      // not expect is far harder to spot than a warning.
+      const sources = [
+        htmlFile !== undefined ? "htmlFile" : null,
+        markup !== undefined ? "html" : null,
+      ].filter((name): name is string => name !== null);
+
+      if (sources.length === 0) {
+        // A `component` with no `html` yet is a document that has been written
+        // but not compiled -- a normal intermediate state, and a warning rather
+        // than a dropped part so the author can still see and edit their props.
+        if (component !== undefined) {
+          problems.push({
+            level: "warning",
+            path: `${path}.html`,
+            message:
+              'Component part has no compiled markup yet; run the compiler.',
+          });
+        } else {
+          problems.push({
+            level: "error",
+            path: `${path}.html`,
+            message: 'Html part needs "html", "htmlFile" or "component"; part dropped.',
+          });
+          return null;
+        }
+      }
+      if (sources.length > 1) {
+        problems.push({
+          level: "warning",
+          path,
+          message: 'Html part sets htmlFile and html; using "htmlFile".',
+        });
+      }
+
+      return {
+        type: "html",
+        ...base,
+        x: num("x", 0),
+        y: num("y", 0),
+        w: dimension("w", 200),
+        h: dimension("h", 120),
+        // Both sources the author wrote are kept, even the one precedence will
+        // ignore, so a save never silently deletes markup they can still see in
+        // the file. `resolveHtmlMarkup` applies the same order at render time.
+        ...(component !== undefined ? { component } : {}),
+        ...(props !== undefined ? { props } : {}),
+        ...(subParts !== undefined ? { subParts } : {}),
+        ...(build !== undefined ? { build } : {}),
+        ...(htmlFile !== undefined ? { htmlFile } : {}),
+        ...(markup !== undefined ? { html: markup } : {}),
+        ...(vars !== undefined ? { vars } : {}),
       };
     }
 
@@ -613,7 +852,15 @@ export function parseDocument(text: string): ParseResult {
     });
   }
 
+  // Sub-parts are step targets in their own right, so a step naming
+  // `chrome/session-a` is addressing something real and must not be warned at.
   const knownParts = new Set(Object.keys(parts));
+  for (const [id, part] of Object.entries(parts)) {
+    if (part.type !== "html" || !part.subParts) continue;
+    for (const subId of Object.keys(part.subParts)) {
+      knownParts.add(`${id}/${subId}`);
+    }
+  }
   const usedIds = new Set<string>();
   const steps: Step[] = [];
   if (Array.isArray(raw.steps)) {

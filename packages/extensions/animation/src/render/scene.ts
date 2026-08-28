@@ -15,12 +15,15 @@
 import type {
   AnimDocument,
   EdgePart,
+  HtmlPart,
   LabelPart,
   NodePart,
   Part,
   ShapePart,
 } from "../core/types";
 import { DEFAULT_STATE, DEFAULT_TONE } from "../core/types";
+import { sanitizeHtml } from "../core/sanitizeHtml";
+import { resolveHtmlMarkup, type HtmlAssets } from "../core/htmlParts";
 
 /** Escape text for XML content and attribute values. */
 export function escapeXml(value: string): string {
@@ -40,7 +43,7 @@ interface Rect {
 }
 
 function rectOf(part: Part): Rect | null {
-  if (part.type === "node" || part.type === "shape") {
+  if (part.type === "node" || part.type === "shape" || part.type === "html") {
     return { x: part.x, y: part.y, w: part.w, h: part.h };
   }
   if (part.type === "label") {
@@ -268,6 +271,33 @@ function renderShape(id: string, part: ShapePart): string {
 }
 
 /**
+ * Freeform markup in a `foreignObject`.
+ *
+ * The markup is sanitized rather than escaped: the point of this part type is
+ * that the author's elements survive as elements. What must not survive is
+ * anything executable -- the standalone export is a real page carrying a real
+ * script, so unchecked markup there would run on whoever opens the file.
+ *
+ * The XHTML namespace on the wrapper is required, not decorative: without it
+ * the browser parses the subtree as SVG and silently renders nothing.
+ */
+function renderHtml(
+  id: string,
+  part: HtmlPart,
+  assets?: HtmlAssets
+): string {
+  return (
+    `<g ${partAttrs(id, part, "anim-part anim-html")} transform="translate(${
+      part.x
+    } ${part.y})">` +
+    `<foreignObject width="${part.w}" height="${part.h}">` +
+    `<div xmlns="http://www.w3.org/1999/xhtml" class="anim-html-body">` +
+    sanitizeHtml(resolveHtmlMarkup(part, assets)) +
+    `</div></foreignObject></g>`
+  );
+}
+
+/**
  * Draw order: edges first so they sit behind nodes, then everything else in
  * canonical id order. Explicit z-control is deliberately not in the format
  * yet; sorting here keeps the live view identical before and after save, since
@@ -280,7 +310,11 @@ function drawOrder(doc: AnimDocument): string[] {
   return [...edges, ...rest];
 }
 
-export function renderPart(id: string, doc: AnimDocument): string {
+export function renderPart(
+  id: string,
+  doc: AnimDocument,
+  assets?: HtmlAssets
+): string {
   const part = doc.parts[id];
   if (!part) return "";
   switch (part.type) {
@@ -292,6 +326,8 @@ export function renderPart(id: string, doc: AnimDocument): string {
       return renderLabel(id, part);
     case "shape":
       return renderShape(id, part);
+    case "html":
+      return renderHtml(id, part, assets);
     default:
       return "";
   }
@@ -307,9 +343,9 @@ export function sceneAriaLabel(doc: AnimDocument): string {
   return `Animated diagram with ${partCount} parts and ${doc.steps.length} steps.${narration}`;
 }
 
-export function renderScene(doc: AnimDocument): string {
+export function renderScene(doc: AnimDocument, assets?: HtmlAssets): string {
   const body = drawOrder(doc)
-    .map((id) => renderPart(id, doc))
+    .map((id) => renderPart(id, doc, assets))
     .join("");
   return (
     `<svg class="anim-stage" xmlns="http://www.w3.org/2000/svg" ` +

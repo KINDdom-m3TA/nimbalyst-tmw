@@ -28,7 +28,7 @@ An animation is a named scene plus an ordered list of steps. Each step assigns *
 }
 ```
 
-Four part types -- `node`, `edge`, `label`, `shape` -- and seven semantic tones that follow the user's theme. States are **cumulative**: a step asserts only what changes, and anything it does not mention keeps whatever the previous step left it in.
+Five part types -- `node`, `edge`, `label`, `shape`, and `html` for product UI the primitives cannot draw -- and seven semantic tones that follow the user's theme. States are **cumulative**: a step asserts only what changes, and anything it does not mention keeps whatever the previous step left it in.
 
 `samples/demo.anim.json` is a complete ten-step example.
 

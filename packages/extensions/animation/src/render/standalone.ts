@@ -26,7 +26,8 @@
 import type { AnimDocument } from "../core/types";
 import { resolveAtStep, startTimeOf, totalDuration } from "../core/timeline";
 import { renderScene } from "./scene";
-import { buildStageCss, type ThemeTokens } from "./stageCss";
+import type { HtmlAssets } from "../core/htmlParts";
+import { buildStageCss, resolveStageTheme, type ThemeTokens } from "./stageCss";
 
 /** One step's worth of attribute writes: part id -> [state, tone]. */
 type StateDelta = Record<string, [string, string]>;
@@ -197,6 +198,8 @@ export interface StandaloneOptions {
    * Off for files handed to a user; on only for the GIF capture pass.
    */
   captureHooks?: boolean;
+  /** Markup for the document's `htmlFile` refs, resolved by the caller. */
+  assets?: HtmlAssets;
 }
 
 export function buildStandaloneDocument(
@@ -207,6 +210,9 @@ export function buildStandaloneDocument(
   const timeline = buildTimeline(doc);
   const total = totalDuration(doc);
   const title = options.title ?? "Animation";
+  // `tokens` is the fallback; a document that stamps `stage.theme` wins, which
+  // is what keeps this file and the in-editor preview the same picture.
+  const theme = resolveStageTheme(doc.stage.theme, tokens);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -214,10 +220,14 @@ export function buildStandaloneDocument(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtmlText(title)}</title>
-<style>${buildStageCss(tokens, doc.stage.background)}${PAGE_CSS}</style>
+<style>${buildStageCss(
+    theme.tokens,
+    doc.stage.background,
+    theme.custom
+  )}${PAGE_CSS}</style>
 </head>
 <body>
-<div data-anim-stage style="width:100%;height:100%">${renderScene(doc)}</div>
+<div data-anim-stage style="width:100%;height:100%">${renderScene(doc, options.assets)}</div>
 <script>
 var TIMELINE = ${embedJson(timeline)};
 var TOTAL = ${total};

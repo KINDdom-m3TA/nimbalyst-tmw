@@ -82,7 +82,7 @@ describe("parseDocument", () => {
 
   it("previews an unsupported part type but marks the document unsafe to save", () => {
     const result = parseDocument(
-      `{"version":2,"parts":{"a":{"type":"html","x":0,"y":0,"w":10,"h":10}},"steps":[]}`
+      `{"version":2,"parts":{"a":{"type":"sprite","x":0,"y":0,"w":10,"h":10}},"steps":[]}`
     );
     expect(result.doc.parts.a.type).toBe("node");
     expect(
@@ -90,7 +90,7 @@ describe("parseDocument", () => {
     ).toHaveLength(2);
     const serialized = JSON.parse(serializeDocument(result.doc, result.extras));
     expect(serialized.version).toBe(2);
-    expect(serialized.parts.a.type).toBe("html");
+    expect(serialized.parts.a.type).toBe("sprite");
   });
 
   it("keeps an assignment whose part no longer exists, and warns", () => {
@@ -398,5 +398,203 @@ describe("shipped samples", () => {
         ).toBeDefined();
       }
     }
+  });
+});
+
+/**
+ * Markup sources for html parts.
+ *
+ * These cover the ways the feature fails silently: a part with no markup at all
+ * drawing an empty box, a var breaking out of the partial it lands in, and a
+ * save dropping the very fields that let the document stop needing a generator.
+ */
+describe("html part markup sources", () => {
+  const parse = (part: Record<string, unknown>) =>
+    parseDocument(
+      JSON.stringify({
+        version: 1,
+        stage: { width: 100, height: 100, fps: 25 },
+        parts: { a: { type: "html", x: 0, y: 0, w: 10, h: 10, ...part } },
+        steps: [{ id: "s", duration: 100 }],
+      })
+    );
+
+  it("keeps htmlFile and vars through a round-trip", () => {
+    const source = parse({
+      htmlFile: "./partials/window.html",
+      vars: { workspace: "acme", model: "Claude Opus" },
+    });
+    expect(source.problems).toEqual([]);
+
+    const text = serializeDocument(source.doc, source.extras);
+    const again = parseDocument(text);
+    expect(again.doc.parts.a).toEqual(source.doc.parts.a);
+    expect(serializeDocument(again.doc, again.extras)).toBe(text);
+  });
+
+  it("needs at least one markup source", () => {
+    const { doc, problems } = parse({});
+    expect(doc.parts.a).toBeUndefined();
+    expect(problems[0]).toMatchObject({ level: "error" });
+  });
+
+  it("warns but keeps both sources when htmlFile and html are set", () => {
+    const { doc, problems } = parse({
+      htmlFile: "./partials/card.html",
+      html: "<b>hi</b>",
+    });
+    // Both survive the parse: precedence decides what draws, not what is kept,
+    // so saving cannot delete markup the author can still see in the file.
+    expect(doc.parts.a).toMatchObject({
+      htmlFile: "./partials/card.html",
+      html: "<b>hi</b>",
+    });
+    expect(problems[0].message).toContain("htmlFile and html");
+  });
+
+  it("drops non-scalar vars rather than stringifying them onto the stage", () => {
+    const { doc, problems } = parse({
+      html: "<b>{{title}}</b>",
+      vars: { title: "ok", nested: { deep: 1 }, count: 4, flag: true },
+    });
+    expect((doc.parts.a as { vars?: Record<string, string> }).vars).toEqual({
+      title: "ok",
+      count: "4",
+      flag: "true",
+    });
+    expect(problems[0].path).toBe("parts.a.vars.nested");
+  });
+});
+
+/**
+ * Component parts and the sub-parts they declare.
+ *
+ * The characteristic failure of this feature is silence: a step addressing a
+ * region the component stopped emitting goes inert, and a recompile that
+ * reorders or drops a generated field turns every later save into a spurious
+ * diff. Both are covered here rather than left to a screenshot.
+ */
+describe("component parts", () => {
+  const DOC = `{
+  "version": 1,
+  "stage": {
+    "width": 100,
+    "height": 100,
+    "fps": 25,
+    "theme": {
+      "bg": "#0f172a",
+      "accent": "#38bdf8",
+      "--nim-panel": "#1e293b"
+    }
+  },
+  "parts": {
+    "chrome": {
+      "type": "html",
+      "x": 0,
+      "y": 0,
+      "w": 90,
+      "h": 60,
+      "component": "./components/SessionList.tsx",
+      "props": {
+        "workspace": "acme",
+        "sessions": [
+          {
+            "id": "sync",
+            "title": "Sync explainer"
+          }
+        ]
+      },
+      "subParts": {
+        "sync": {
+          "label": "Sync explainer",
+          "tone": "accent"
+        },
+        "tracker": {}
+      },
+      "build": {
+        "props": "a1f3c9",
+        "source": "9c02be"
+      },
+      "html": "<div class=\\"anim-subpart\\" data-part=\\"chrome/sync\\">Sync explainer</div>"
+    }
+  },
+  "steps": [
+    {
+      "id": "landed",
+      "duration": 900,
+      "set": {
+        "chrome/sync": {
+          "state": "active",
+          "tone": "success"
+        }
+      }
+    }
+  ]
+}
+`;
+
+  it("round-trips every generated field byte-identically", () => {
+    // Props are carried by reference precisely so this holds: nothing here
+    // rebuilds them, so a compile and a save cannot disagree about key order.
+    const { doc, extras, problems } = parseDocument(DOC);
+    expect(problems).toEqual([]);
+    expect(serializeDocument(doc, extras)).toBe(DOC);
+  });
+
+  it("does not warn about a step addressing a declared sub-part", () => {
+    const { problems } = parseDocument(DOC);
+    expect(problems).toEqual([]);
+  });
+
+  it("warns when a step addresses a sub-part the component no longer emits", () => {
+    // This is the format's characteristic silent failure: the step keeps
+    // parsing, keeps serializing, and simply never does anything.
+    const { problems } = parseDocument(
+      DOC.replace('"chrome/sync": {', '"chrome/gone": {')
+    );
+    expect(problems).toHaveLength(1);
+    expect(problems[0].message).toContain("chrome/gone");
+  });
+
+  it("gives a sub-part its own baseline and resolves a step against it", () => {
+    const { doc } = parseDocument(DOC);
+    const before = resolveAtStep(doc, -1);
+    expect(before.get("chrome/sync")).toEqual({
+      state: "idle",
+      tone: "accent",
+    });
+    // A sub-part with no declared tone inherits its container's, which is what
+    // the missing `.anim-subpart` neutral rule expresses in CSS.
+    expect(before.get("chrome/tracker")).toEqual({
+      state: "idle",
+      tone: "neutral",
+    });
+    expect(resolveAtStep(doc, 0).get("chrome/sync")).toEqual({
+      state: "active",
+      tone: "success",
+    });
+    // The container itself is untouched by an assignment to one of its regions.
+    expect(resolveAtStep(doc, 0).get("chrome")).toEqual({
+      state: "idle",
+      tone: "neutral",
+    });
+  });
+
+  it("puts a clicked sub-part into chat context, not just its container", () => {
+    // `partIdFromEvent` closest()s to the nearest [data-part], which inside a
+    // component is the sub-part. Looking that up in `doc.parts` finds nothing,
+    // so the part chip vanished entirely and the agent was told only which step
+    // was playing -- strictly less than it got before components existed.
+    const { doc } = parseDocument(DOC);
+    const items = buildContextItems(doc, "chrome/sync", 100);
+
+    const part = items.find((item) => item.groupLabel === "parts");
+    expect(part?.id).toBe("anim-part:chrome/sync");
+    expect(part?.label).toBe("Sync explainer");
+    // Its own state at the playhead, not the container's, which is still the
+    // untouched idle/neutral baseline at this moment.
+    expect(part?.description).toContain('state "active" with tone "success"');
+    // The step that assigns the region is what "make this green sooner" needs.
+    expect(part?.description).toContain("Steps that assign it: landed");
   });
 });

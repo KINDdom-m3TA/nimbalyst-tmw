@@ -11,6 +11,7 @@ import { parseDocument, type Problem } from "./core/parse";
 import { totalDuration } from "./core/timeline";
 import type { AnimDocument } from "./core/types";
 import { buildStandaloneDocument } from "./render/standalone";
+import { loadHtmlAssets, type HtmlAssets } from "./core/htmlParts";
 import { FALLBACK_TOKENS } from "./render/stageCss";
 
 interface ExportParams {
@@ -52,7 +53,12 @@ async function loadExportable(
   rawPath: string | undefined,
   context: ExportToolContext
 ): Promise<
-  | { doc: AnimDocument; filePath: string; warnings: string[] }
+  | {
+      doc: AnimDocument;
+      filePath: string;
+      warnings: string[];
+      assets: HtmlAssets;
+    }
   | { success: false; error: string; problems?: string[] }
 > {
   const filePath = rawPath?.trim();
@@ -92,12 +98,22 @@ async function loadExportable(
     };
   }
 
+  // `htmlFile` partials are read here rather than at render time so all three
+  // exporters and the editor preview draw from the same resolved markup.
+  const { assets, errors: assetErrors } = await loadHtmlAssets(
+    doc,
+    filePath,
+    (path) => context.extensionContext.services.filesystem.readFile(path)
+  );
+
   return {
     doc,
     filePath,
-    warnings: problems
-      .filter((problem) => problem.level === "warning")
-      .map(text),
+    assets,
+    warnings: [
+      ...problems.filter((problem) => problem.level === "warning").map(text),
+      ...assetErrors,
+    ],
   };
 }
 
@@ -164,11 +180,12 @@ Example usage:
     handler: async (params: ExportParams, context: ExportToolContext) => {
       const loaded = await loadExportable(params.filePath, context);
       if ("error" in loaded) return loaded;
-      const { doc, filePath, warnings } = loaded;
+      const { doc, filePath, warnings, assets } = loaded;
 
       const outputPath =
         params.outputPath?.trim() || siblingPath(filePath, ".html");
       const html = buildStandaloneDocument(doc, FALLBACK_TOKENS, {
+        assets,
         title: titleFor(filePath),
       });
 
@@ -234,7 +251,7 @@ Example usage:
     handler: async (params: GifExportParams, context: ExportToolContext) => {
       const loaded = await loadExportable(params.filePath, context);
       if ("error" in loaded) return loaded;
-      const { doc, filePath, warnings } = loaded;
+      const { doc, filePath, warnings, assets } = loaded;
 
       const invoke = getInvoke();
       if (!invoke) {
@@ -251,6 +268,7 @@ Example usage:
       // Capture hooks let the recorder start the clock at t=0 rather than
       // trusting page-load timing; without them the GIF starts mid-animation.
       const html = buildStandaloneDocument(doc, FALLBACK_TOKENS, {
+        assets,
         title: titleFor(filePath),
         captureHooks: true,
       });
@@ -316,7 +334,7 @@ Example usage:
     handler: async (params: GifExportParams, context: ExportToolContext) => {
       const loaded = await loadExportable(params.filePath, context);
       if ("error" in loaded) return loaded;
-      const { doc, filePath, warnings } = loaded;
+      const { doc, filePath, warnings, assets } = loaded;
 
       const invoke = getInvoke();
       if (!invoke) {
@@ -331,6 +349,7 @@ Example usage:
         params.outputPath?.trim() || siblingPath(filePath, ".mp4");
 
       const html = buildStandaloneDocument(doc, FALLBACK_TOKENS, {
+        assets,
         title: titleFor(filePath),
         captureHooks: true,
       });

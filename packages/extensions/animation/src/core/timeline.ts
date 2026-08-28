@@ -77,6 +77,18 @@ export function startTimeOf(doc: AnimDocument, stepIndex: number): number {
   return acc;
 }
 
+/**
+ * Every addressable thing in the document and what it looks like before step 0.
+ *
+ * Sub-parts join the same map under `partId/subId`, so everything downstream --
+ * `applyStep`, `resolveAtStep`, `buildTimeline`, `applyStates`, the standalone
+ * player -- drives them without knowing they are nested. A region a component
+ * declared is a first-class target of a step, or it is nothing.
+ *
+ * `DEFAULT_TONE` for a sub-part means "inherit the enclosing part", not "grey":
+ * `stageCss` gives `.anim-subpart[data-tone="neutral"]` no rule at all, so
+ * writing the default onto a nested region leaves the container's tone standing.
+ */
 function baselineFor(doc: AnimDocument): Map<string, ResolvedPartState> {
   const out = new Map<string, ResolvedPartState>();
   for (const [id, part] of Object.entries(doc.parts)) {
@@ -84,6 +96,13 @@ function baselineFor(doc: AnimDocument): Map<string, ResolvedPartState> {
       state: part.state ?? DEFAULT_STATE,
       tone: part.tone ?? DEFAULT_TONE,
     });
+    if (part.type !== 'html' || !part.subParts) continue;
+    for (const [subId, spec] of Object.entries(part.subParts)) {
+      out.set(`${id}/${subId}`, {
+        state: spec.state ?? DEFAULT_STATE,
+        tone: spec.tone ?? DEFAULT_TONE,
+      });
+    }
   }
   return out;
 }

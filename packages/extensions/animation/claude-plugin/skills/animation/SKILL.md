@@ -92,6 +92,118 @@ Part ids are the keys. All four types share `label`, `tone`, and `state` (their 
 
 Shapes are how you show **quantity**, because text never changes (see Hard constraints). A grid of small shapes that go `hidden` one group at a time is a queue draining, a battery discharging, a work list being claimed.
 
+**`html`** -- freeform markup, for the things the primitives above cannot express: real typography, a type scale, flow layout, a UI that has to look like a real product rather than like a diagram of it.
+
+The markup comes from one of two places:
+
+```json
+{ "type": "html", "x": 55, "y": 108, "w": 1090, "h": 534,
+  "htmlFile": "./partials/app-window.html",
+  "vars": { "title": "acme-api", "branch": "main" } }
+```
+
+- **`htmlFile`** is a path to a `.html` file next to the document. Relative only; `..` is allowed, absolute is refused.
+- **`html`** is markup inline. Right for a few lines, wrong for a widget.
+
+`vars` fills `{{name}}` placeholders in whichever source won. Values are **HTML-escaped**, so a var is text and cannot change the structure of the partial it lands in. An unfilled placeholder resolves to empty, never to its own name. That is the entire template language -- no conditionals, no loops, no expressions.
+
+Three things about `html` parts that will otherwise cost you a build:
+
+- **`--anim-tone` inherits into the markup.** Give a border, a badge, a button `color: var(--anim-tone)` plus a `transition`, and a step's tone change animates the whole widget. This is how you avoid a second copy of the markup for a second state.
+- **Script, event handlers, `<style>` and non-`https`/`data:image` urls are stripped** at the render boundary. Inline `style=` attributes are fine.
+- **An opaque `html` part hides every edge underneath it.** Edges are drawn before *all* non-edge parts, so a background on a container is enough to make a nested diagram's lines vanish with no error. Keep containers transparent and set `stage.background` to supply the surface colour instead.
+
+### stage.theme
+
+`stage` may carry a stamped palette that every renderer reads:
+
+```json
+"stage": { "width": 1200, "height": 675, "fps": 25, "theme": {
+  "bg": "#1c1c1c", "border": "#383838", "accent": "#3b82f6",
+  "--nim-panel": "#2f2f2f"
+} }
+```
+
+Keys naming a stage token (`bg`, `surface`, `surfaceRaised`, `border`, `borderStrong`, `text`, `textMuted`, `textFaint`, `accent`, `success`, `warning`, `error`, `purple`) override that token. Keys of the form `--some-name` are emitted as extra custom properties, which is how a project carries its own vocabulary into the stage. Anything else is dropped.
+
+Values, not a theme *name*: no renderer then needs a theme registry, and the extension stays neutral about whose product this is. The cost is that editing a theme in the app does not reach existing documents until they are restamped.
+
+**Write markup against token names, not literal hex.** `var(--anim-border)` rather than `#383838` means switching palettes is a one-field edit with nothing to redraw. Reserve literal colours for things that genuinely are fixed -- macOS traffic lights.
+
+Note that `stage.background`, if set, still wins over `theme.bg`.
+
+### sub-parts
+
+Markup inside one `html` part can declare regions a step addresses individually:
+
+```html
+<div class="anim-subpart" data-part="chrome/session-a">…</div>
+```
+
+A step then writes `"set": { "chrome/session-a": { "tone": "success" } }`, and the stage drives it with the same `querySelector` + `setAttribute` it uses for a top-level part. Declare each one in the part's `subParts` map so the baseline resolver knows it exists:
+
+```json
+"subParts": { "session-a": { "tone": "accent" }, "session-b": {} }
+```
+
+Two things to know:
+
+- **The class is `anim-subpart`, never a nested `anim-part`.** `.anim-part` sets `--anim-tone` to neutral unconditionally, so a nested one *resets* to grey instead of inheriting its container's tone.
+- **For a sub-part, `neutral` means "inherit", not "grey".** That is what lets a whole window go accent without every region inside it snapping back.
+
+Writing `data-part` by hand is fine for two or three regions. Past that, the markup is worth compiling from a component -- see the compiler below.
+
+### Building a kit for your project
+
+Nothing product-specific ships with this extension, and that is deliberate: the markup worth reusing is always *your* product, so anything bundled here could only ever be somebody else's app.
+
+Instead, build a small kit once and reuse it across every animation you make:
+
+```
+docs/animations/
+  partials/
+    app-window.html      <- your chrome: title bar, sidebar, main pane
+    list-row.html        <- one row, used eight times with different vars
+    toolbar.html
+  onboarding.anim.json
+  sync-explainer.anim.json
+```
+
+Three rules make a kit that lasts:
+
+1. **Go look at the real thing first.** Chrome drawn from memory is wrong in *structure*, not just styling, and structural wrongness is invisible to you and instantly obvious to anyone who uses the product. Screenshot the app and draw against it.
+2. **Simplify hard, then make one thing big.** Keep only what makes it recognisable at a glance; cut every pane that is not part of the story. Then pick one hero and draw it at a size you can actually read.
+3. **Decide loop-vs-part per piece.** Markup that stays put lives inside a bigger partial. Anything a *step* changes is either its own top-level part positioned over the container, or -- if the container is a compiled component -- a sub-part the component declares. A `.html` partial has no way to declare one, so with partials a list's eight resting rows are one file and the row that turns green is its own part with its own coordinates.
+
+A partial has no defaults -- a var you leave out renders as empty, not as an error -- so document the vars each one expects at the top of the file in a comment.
+
+### Compiling components (optional, needs Node)
+
+`vars` is deliberately not a template language: no conditionals, no loops, no types, no defaults. When that starts to hurt -- a list whose length varies, a phase colour repeated across fifty documents, a region you want a step to address -- author the markup as a `.tsx` component instead and compile it into the part:
+
+```json
+{ "type": "html", "x": 55, "y": 108, "w": 1090, "h": 534,
+  "component": "./components/DesktopWindow.tsx",
+  "props": { "sessions": [ { "id": "sync", "title": "Sync explainer", "phase": "implementing" } ] } }
+```
+
+```
+node packages/extensions/animation/tools/anim-compile.mjs docs/onboarding.anim.json [--theme dark] [--check]
+```
+
+The compiler renders the component with those props and writes three fields back: `html` (the markup, sanitizer-clean), `subParts` (the regions the markup actually declared) and `build` (hashes of the props and of the component sources). **Nothing renders the component at play time.** Every consumer keeps drawing the same static string, which is the only reason they agree frame for frame -- and one of them, the offscreen screenshot host, has no filesystem to resolve a component from at all.
+
+What you get that `vars` cannot give you: real conditionals, typed props (a mistyped phase name is an error before anything renders), shared defaults, `children` for static panes, and `AnimPart` -- a wrapper that declares a step-addressable region from the data it was handed, so twelve kanban cards need no coordinates and a thirteenth needs no edit to the other twelve.
+
+It lints as it goes and refuses to write on a failure: markup that the sanitizer would alter, a step addressing a part or sub-part that does not exist, components that do not typecheck. It warns about an opaque container root and about a part sized away from the component's declared `size`.
+
+Constraints worth knowing before you reach for it:
+
+- **Sub-part ids come from your data**, so renaming `sessions[0].id` rewires the steps addressing it. The step-target lint turns that into an error rather than a region that silently stops animating.
+- **Layering inside a component is DOM order**, while layering between top-level parts is alphabetical id order. Two models.
+- **`subParts` is generated.** The compiler rewrites it from the markup on every run, so edit the component, not the map. A `label` you add by hand survives as long as the region does.
+- **v1 runs from a checkout of the Nimbalyst repo**, because it bundles this extension's own document reader and writer from source so its output and the editor's save cannot drift. `htmlFile` and inline `html` need none of this and are unchanged.
+
 ### tones
 
 `neutral` `accent` `data` `success` `warning` `error` `muted`
@@ -227,7 +339,7 @@ animation.export_gif { filePath: "docs/cache.anim.json", fps: 12, maxWidth: 720 
 
 **Prefer `export_html` whenever the destination can display a web page.** The GIF is recorded by playing the animation in an offscreen window and capturing it in real time, so it takes about as long as the animation runs, it is capped at 256 colours, and it is one to two orders of magnitude larger than the HTML. The HTML is instant, sharp at any size, and a few tens of kilobytes.
 
-Both exports use a fixed dark palette, because a filesystem-scoped tool has no host document to read the live theme from. Exporting from the editor's own **"…" menu** uses the theme you are actually looking at.
+All four renderers -- the editor preview, `export_html`, both recorders -- use the palette in `stage.theme`, or a fixed dark fallback when the document names none. They agree by construction. This used to be untrue: the preview read the app's live theme while every export hardcoded the fallback, so the same document was two different colours depending on who asked, and the authoring advice worked around it by telling you to hardcode your palette. That advice is withdrawn.
 
 Keep GIFs small: `fps` 8-12 is plenty for this kind of diagram, and `maxWidth` 720 is usually enough. Both file size and recording memory scale with the square of the width.
 

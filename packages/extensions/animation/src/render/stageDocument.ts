@@ -10,30 +10,41 @@
 
 import type { AnimDocument, ResolvedPartState } from "../core/types";
 import { renderScene } from "./scene";
-import { buildStageCss, type ThemeTokens } from "./stageCss";
+import type { HtmlAssets } from "../core/htmlParts";
+import { buildStageCss, resolveStageTheme, type ThemeTokens } from "./stageCss";
 
+/**
+ * `tokens` is the fallback, not the answer: a document that stamps
+ * `stage.theme` renders under its own palette here, in the standalone export
+ * and in the recorder alike. That is the point of stamping it -- the preview
+ * and the export used to read different palettes and quietly disagree.
+ */
 export function buildStageDocument(
   doc: AnimDocument,
-  tokens: ThemeTokens
+  tokens: ThemeTokens,
+  assets?: HtmlAssets
 ): string {
+  const theme = resolveStageTheme(doc.stage.theme, tokens);
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>${buildStageCss(
-    tokens,
-    doc.stage.background
+    theme.tokens,
+    doc.stage.background,
+    theme.custom
   )}</style></head>
-<body>${renderScene(doc)}</body></html>`;
+<body>${renderScene(doc, assets)}</body></html>`;
 }
 
 /** Write a fresh scene into the frame. Replaces whatever was there. */
 export function writeStageDocument(
   frame: HTMLIFrameElement,
   doc: AnimDocument,
-  tokens: ThemeTokens
+  tokens: ThemeTokens,
+  assets?: HtmlAssets
 ): void {
   const frameDoc = frame.contentDocument;
   if (!frameDoc) return;
   frameDoc.open();
-  frameDoc.write(buildStageDocument(doc, tokens));
+  frameDoc.write(buildStageDocument(doc, tokens, assets));
   frameDoc.close();
 }
 

@@ -35,8 +35,13 @@ import {
   totalDuration,
 } from "../core/timeline";
 import type { AnimDocument } from "../core/types";
-import { FALLBACK_TOKENS, type ThemeTokens } from "../render/stageCss";
+import { FALLBACK_TOKENS } from "../render/stageCss";
 import { buildStandaloneDocument } from "../render/standalone";
+import {
+  htmlFileRefs,
+  loadHtmlAssets,
+  type HtmlAssets,
+} from "../core/htmlParts";
 import { StageFrame } from "./StageFrame";
 import { StepStrip } from "./StepStrip";
 import { usePlayback } from "./usePlayback";
@@ -47,37 +52,6 @@ import { usePlayback } from "./usePlayback";
  */
 function sceneSignature(doc: AnimDocument): string {
   return JSON.stringify({ stage: doc.stage, parts: doc.parts });
-}
-
-const TOKEN_VARS: Record<keyof ThemeTokens, string> = {
-  bg: "--nim-bg-secondary",
-  surface: "--nim-bg",
-  surfaceRaised: "--nim-bg-tertiary",
-  border: "--nim-border",
-  borderStrong: "--nim-bg-active",
-  text: "--nim-text",
-  textMuted: "--nim-text-muted",
-  textFaint: "--nim-text-faint",
-  accent: "--nim-primary",
-  success: "--nim-success",
-  warning: "--nim-warning",
-  error: "--nim-error",
-  purple: "--nim-purple",
-};
-
-/** Read the host's theme so the iframe can be given matching values. */
-function readThemeTokens(): ThemeTokens {
-  if (typeof window === "undefined") return FALLBACK_TOKENS;
-  const computed = getComputedStyle(document.documentElement);
-  const out = { ...FALLBACK_TOKENS };
-  for (const [key, cssVar] of Object.entries(TOKEN_VARS) as [
-    keyof ThemeTokens,
-    string
-  ][]) {
-    const value = computed.getPropertyValue(cssVar).trim();
-    if (value) out[key] = value;
-  }
-  return out;
 }
 
 /** Minimal structural view of the host; the SDK type is not a build-time dep. */
@@ -116,10 +90,18 @@ type InvokeFn = (
   payload: unknown
 ) => Promise<{ success: boolean; error?: string } | undefined>;
 
-/** The compare-and-swap slice of the host filesystem the export uses. */
+/**
+ * The slice of the host filesystem this editor uses: compare-and-swap writes
+ * for export, and content reads for `htmlFile` partials.
+ */
 interface AnimationHostFileSystem {
   read(paths: string[]): Promise<
-    Array<{ path: string; exists: boolean; sha256: string | null }>
+    Array<{
+      path: string;
+      exists: boolean;
+      content: string | null;
+      sha256: string | null;
+    }>
   >;
   write(edit: {
     label: string;
@@ -153,7 +135,7 @@ export function AnimationEditor({ host }: AnimationEditorProps) {
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
   const [immediate, setImmediate] = useState(true);
   const [loop, setLoopState] = useState(true);
-  const [tokens, setTokens] = useState<ThemeTokens>(FALLBACK_TOKENS);
+  const [assets, setAssets] = useState<HtmlAssets>(() => new Map());
   const [readOnly, setReadOnly] = useState(Boolean(host.readOnly));
   const [exportNotice, setExportNotice] = useState<{
     ok: boolean;
@@ -167,8 +149,8 @@ export function AnimationEditor({ host }: AnimationEditorProps) {
   readOnlyRef.current = readOnly;
   const docRef = useRef(doc);
   docRef.current = doc;
-  const tokensRef = useRef(tokens);
-  tokensRef.current = tokens;
+  const assetsRef = useRef(assets);
+  assetsRef.current = assets;
   const lastSavedTextRef = useRef<string | null>(null);
   const undoRef = useRef<AnimDocument[]>([]);
   const redoRef = useRef<AnimDocument[]>([]);
@@ -185,13 +167,74 @@ export function AnimationEditor({ host }: AnimationEditorProps) {
   const { pause, seek, toggle } = playback;
 
   // ---- loading -----------------------------------------------------------
-  const ingest = useCallback((text: string) => {
-    const result = parseDocument(text);
-    extrasRef.current = result.extras;
-    problemsRef.current = result.problems;
-    setDoc(result.doc);
-    setProblems(result.problems);
-  }, []);
+  /**
+   * Read the markup for any `htmlFile` the document references.
+   *
+   * Kept out of `ingest` -- and out of the renderer -- because it is the only
+   * async step in getting from text to a drawn frame. Parsing stays synchronous
+   * and total; a partial that fails to load costs its own part and reports a
+   * warning, rather than blocking the document from opening.
+   */
+  const refreshAssets = useCallback(
+    async (next: AnimDocument) => {
+      const refs = htmlFileRefs(next);
+      const fs = host.fs;
+      if (refs.length === 0) {
+        setAssets(new Map());
+        return;
+      }
+      // A host without filesystem access cannot resolve partials at all. Say so
+      // rather than drawing empty boxes: an html part that renders nothing looks
+      // identical to one whose markup is wrong.
+      if (!fs) {
+        setAssets(new Map());
+        const problem: Problem = {
+          level: "warning",
+          path: "parts",
+          message: `This view has no filesystem access, so ${refs.length} htmlFile partial${
+            refs.length === 1 ? "" : "s"
+          } could not be loaded.`,
+        };
+        problemsRef.current = [...problemsRef.current, problem];
+        setProblems((previous) => [...previous, problem]);
+        return;
+      }
+      const { assets: loaded, errors } = await loadHtmlAssets(
+        next,
+        host.filePath,
+        async (path) => {
+          const [snapshot] = await fs.read([path]);
+          if (!snapshot?.exists || snapshot.content === null) {
+            throw new Error("file does not exist");
+          }
+          return snapshot.content;
+        }
+      );
+      setAssets(loaded);
+      if (errors.length > 0) {
+        const extra: Problem[] = errors.map((message) => ({
+          level: "warning",
+          path: "parts",
+          message,
+        }));
+        problemsRef.current = [...problemsRef.current, ...extra];
+        setProblems((previous) => [...previous, ...extra]);
+      }
+    },
+    [host]
+  );
+
+  const ingest = useCallback(
+    (text: string) => {
+      const result = parseDocument(text);
+      extrasRef.current = result.extras;
+      problemsRef.current = result.problems;
+      setDoc(result.doc);
+      setProblems(result.problems);
+      void refreshAssets(result.doc);
+    },
+    [refreshAssets]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -220,11 +263,6 @@ export function AnimationEditor({ host }: AnimationEditorProps) {
       cancelled = true;
     };
   }, [host, ingest]);
-
-  useEffect(() => {
-    setTokens(readThemeTokens());
-    return host.onThemeChanged(() => setTokens(readThemeTokens()));
-  }, [host]);
 
   useEffect(() => {
     setReadOnly(Boolean(host.readOnly));
@@ -266,10 +304,11 @@ export function AnimationEditor({ host }: AnimationEditorProps) {
 
   // ---- export ------------------------------------------------------------
   //
-  // The menu export uses the live theme tokens rather than the fallback
-  // palette, which is the one thing it can do that the `export_html` AI tool
-  // cannot: a filesystem-scoped tool has no host document to read `--nim-*`
-  // from, so it always exports dark.
+  // Same palette the preview just drew: `FALLBACK_TOKENS` is only the fallback
+  // for a document that stamps no `stage.theme`, and `buildStandaloneDocument`
+  // applies the stamped one itself. This used to read the app's live `--nim-*`
+  // values, which no export tool could see, so the menu export and the AI tool
+  // produced different-coloured files from the same document.
   const exportHtml = useCallback(async () => {
     const fs = host.fs;
     if (!fs) {
@@ -285,8 +324,9 @@ export function AnimationEditor({ host }: AnimationEditorProps) {
     const name = outputPath.split(/[\\/]/).pop() ?? outputPath;
 
     try {
-      const html = buildStandaloneDocument(docRef.current, tokensRef.current, {
+      const html = buildStandaloneDocument(docRef.current, FALLBACK_TOKENS, {
         title: host.fileName.replace(/(\.anim)?\.json$/i, ""),
+        assets: assetsRef.current,
       });
       // Read first so an existing export is overwritten rather than rejected by
       // the compare-and-swap; `null` means "must not exist yet".
@@ -347,9 +387,10 @@ export function AnimationEditor({ host }: AnimationEditorProps) {
         const response = await invoke(
           format === "gif" ? "export:animationGif" : "export:animationMp4",
           {
-            html: buildStandaloneDocument(doc, tokensRef.current, {
+            html: buildStandaloneDocument(doc, FALLBACK_TOKENS, {
               title: host.fileName.replace(/(\.anim)?\.json$/i, ""),
               captureHooks: true,
+              assets: assetsRef.current,
             }),
             outputPath,
             width: doc.stage.width,
@@ -471,8 +512,12 @@ export function AnimationEditor({ host }: AnimationEditorProps) {
   const signature = useMemo(() => sceneSignature(doc), [doc]);
   const sceneVersion = useRef(0);
   const lastSignature = useRef(signature);
-  if (lastSignature.current !== signature) {
+  const lastAssets = useRef(assets);
+  // Assets live outside the document, so a late-arriving partial changes what
+  // the scene draws without changing its signature. Both have to force a write.
+  if (lastSignature.current !== signature || lastAssets.current !== assets) {
     lastSignature.current = signature;
+    lastAssets.current = assets;
     sceneVersion.current += 1;
   }
 
@@ -641,22 +686,10 @@ export function AnimationEditor({ host }: AnimationEditorProps) {
             immediate={immediate}
             playing={playback.playing}
             selectedPartId={selectedPartId}
-            tokens={tokens}
+            tokens={FALLBACK_TOKENS}
+            assets={assets}
             onSelectPart={setSelectedPartId}
           />
-          <div className="anim-stage-hud">
-            <span className="anim-hud-pill">
-              {doc.stage.width} &times; {doc.stage.height}
-              <span className="anim-sep">|</span>
-              {doc.stage.fps} fps
-            </span>
-          </div>
-        </div>
-
-        <div className="anim-sel-hint">
-          {selectedPartId
-            ? "Selection is in the chat context. Click the background to clear it."
-            : "Click a part of the diagram to talk to the agent about it"}
         </div>
       </div>
 

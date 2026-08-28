@@ -16,7 +16,14 @@
 import type { AnimDocument, Part, Step } from "./types";
 import { createEmptyExtras, type DocumentExtras } from "./parse";
 
-const STAGE_ORDER = ["width", "height", "fps", "background"] as const;
+const STAGE_ORDER = ["width", "height", "fps", "background", "theme"] as const;
+
+/**
+ * A sub-part entry's key order. Sub-part *ids* keep the order the compiler
+ * emitted them in, which is DOM order -- sorting them would scramble the one
+ * cue an author has for where a region sits inside the component.
+ */
+const SUB_PART_ORDER = ["label", "tone", "state"] as const;
 
 const PART_ORDER: Record<Part["type"], readonly string[]> = {
   node: [
@@ -44,6 +51,23 @@ const PART_ORDER: Record<Part["type"], readonly string[]> = {
     "h",
     "shape",
     "text",
+  ],
+  html: [
+    "type",
+    "label",
+    "tone",
+    "state",
+    "x",
+    "y",
+    "w",
+    "h",
+    "component",
+    "props",
+    "subParts",
+    "build",
+    "htmlFile",
+    "html",
+    "vars",
   ],
 };
 
@@ -79,8 +103,24 @@ function ordered(
 function serializePart(
   part: Part,
   extra?: Record<string, unknown>,
-  rowExtras?: Array<Record<string, unknown>>
+  rowExtras?: Array<Record<string, unknown>>,
+  subPartExtras?: Record<string, Record<string, unknown>>
 ): Record<string, unknown> {
+  if (part.type === "html" && part.subParts) {
+    const subParts: Record<string, unknown> = {};
+    for (const [subId, spec] of Object.entries(part.subParts)) {
+      subParts[subId] = ordered(
+        spec as unknown as Record<string, unknown>,
+        SUB_PART_ORDER,
+        subPartExtras?.[subId]
+      );
+    }
+    return ordered(
+      { ...part, subParts } as unknown as Record<string, unknown>,
+      PART_ORDER.html,
+      extra
+    );
+  }
   if (part.type !== "node" || !part.rows) {
     return ordered(
       part as unknown as Record<string, unknown>,
@@ -149,7 +189,12 @@ export function toCanonicalObject(
   // Sorted so two documents with the same parts serialize identically no matter
   // which order the editor happened to insert them in.
   for (const id of Object.keys(doc.parts).sort()) {
-    parts[id] = serializePart(doc.parts[id], extras.parts[id], extras.rows[id]);
+    parts[id] = serializePart(
+      doc.parts[id],
+      extras.parts[id],
+      extras.rows[id],
+      extras.subParts[id]
+    );
   }
 
   // Steps keep document order -- it *is* the animation.

@@ -63,6 +63,30 @@ export interface SelectionReadout {
 }
 
 /**
+ * The container and spec behind a `partId/subId` selection.
+ *
+ * Split on the first `/` because that is exactly how a region becomes
+ * addressable: the compiler writes `data-part="<partId>/<id>"` and
+ * `baselineFor` registers the same string. Clicking a session row inside a
+ * component hands `partIdFromEvent` the sub-part rather than its container, so
+ * without this the chat panel loses the selection entirely -- which is worse
+ * than what it showed before components existed.
+ */
+function resolveSubPart(
+  doc: AnimDocument,
+  partId: string
+): { subId: string; label?: string } | null {
+  const slash = partId.indexOf("/");
+  if (slash === -1) return null;
+  const container = doc.parts[partId.slice(0, slash)];
+  if (!container || container.type !== "html") return null;
+  const subId = partId.slice(slash + 1);
+  const spec = container.subParts?.[subId];
+  if (!spec) return null;
+  return { subId, label: spec.label };
+}
+
+/**
  * Everything the context chips describe for the selected part. Returns null
  * when the part is gone, which happens if an agent deletes it while it is
  * selected.
@@ -73,7 +97,8 @@ export function buildSelectionReadout(
   time: number
 ): SelectionReadout | null {
   const part = doc.parts[partId];
-  if (!part) return null;
+  const sub = part ? null : resolveSubPart(doc, partId);
+  if (!part && !sub) return null;
 
   const position = positionAt(doc, time);
   const states = resolveAtStep(doc, position.stepIndex);
@@ -86,8 +111,11 @@ export function buildSelectionReadout(
 
   return {
     partId,
-    label: part.label ?? partId,
-    type: part.type,
+    label: part ? part.label ?? partId : sub?.label ?? sub?.subId ?? partId,
+    // "sub-part" rather than the container's type, because what the agent has
+    // to know is that this is one region inside a component, not the whole
+    // window. The container's id is the part of the selection id before the `/`.
+    type: part ? part.type : "sub-part",
     current,
     next: change
       ? { state: change.state, time: change.time, stepId: change.step.id }
