@@ -22,8 +22,8 @@ import type {
   CanonicalEventDescriptor,
 } from './IRawMessageParser';
 import type { ProtocolEvent, ToolResult } from '../../protocols/ProtocolInterface';
-import { mapGrokRecord } from '../../protocols/GrokBuildProtocol';
-import { mapCursorRecord } from '../../protocols/CursorAgentProtocol';
+import { mapGrokRecord } from '../../protocols/headless/GrokBuildRecordMapper';
+import { mapCursorRecord } from '../../protocols/headless/CursorAgentRecordMapper';
 
 export type HeadlessAgentKind = 'grok-build' | 'cursor-agent';
 
