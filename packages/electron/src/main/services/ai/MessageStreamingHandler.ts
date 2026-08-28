@@ -115,6 +115,7 @@ import { addGitignoreBypass } from '../../file/WorkspaceEventBus';
 import { getSyncProvider, isDesktopTrulyAway } from '../SyncManager';
 import { requestMobilePush } from './mobilePushRequest';
 import { setSessionPendingPrompt } from './pendingPromptPersistence';
+import type { PromptKind } from '../../tray/fleetSnapshot';
 import { getAgentWorkflowService } from '../AgentWorkflowService';
 import { getMetaAgentOpenAITools } from '../../mcp/metaAgentServer';
 import { getDevAgentOpenAITools, resolveDevToolScope } from '../../mcp/devAgentTools';
@@ -943,15 +944,20 @@ export class MessageStreamingHandler {
     // for why we persist locally: the in-memory atom can desync from reality
     // if a resolve event is missed (renderer reload, HMR, late delivery),
     // and the only recovery is rehydrating from the DB on next list refresh.
-    const syncPendingPrompt = (sessionId: string, hasPendingPrompt: boolean) => {
-      void setSessionPendingPrompt(sessionId, hasPendingPrompt);
+    // `kind` colours the menu bar strip's dot: a tap versus thinking required.
+    const syncPendingPrompt = (
+      sessionId: string,
+      hasPendingPrompt: boolean,
+      kind: PromptKind = 'approval',
+    ) => {
+      void setSessionPendingPrompt(sessionId, hasPendingPrompt, kind);
     };
 
     // Listen for ExitPlanMode confirmation requests and forward to renderer
     const onExitPlanModeConfirm = async (data: { requestId: string; sessionId: string; planSummary: string; timestamp: number }) => {
       logger.main.info('[AIService] ExitPlanMode confirmation requested:', data.requestId);
       safeSend(event, 'ai:exitPlanModeConfirm', { ...data, workspacePath: effectiveWorkspacePath });
-      syncPendingPrompt(data.sessionId, true);
+      syncPendingPrompt(data.sessionId, true, 'decision');
 
       // Update session status so all windows show the pending indicator
       getSessionStateManager().updateActivity({
@@ -1003,7 +1009,7 @@ export class MessageStreamingHandler {
     const onAskUserQuestion = async (data: { questionId: string; sessionId: string; questions: any[]; timestamp: number }) => {
       // logger.main.info('[AIService] AskUserQuestion requested:', data.questionId);
       safeSend(event, 'ai:askUserQuestion', { ...data, workspacePath: effectiveWorkspacePath });
-      syncPendingPrompt(data.sessionId, true);
+      syncPendingPrompt(data.sessionId, true, 'decision');
 
       // Update session status to waiting_for_input so all windows show the pending indicator
       getSessionStateManager().updateActivity({
