@@ -10,16 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
-- Grok Build and Cursor Agent join the coding agents you can run a session on, with their own settings panels, model pickers, edited-file tracking and diff review. Each turns itself on when you already have its command-line tool installed and signed in, and stays off otherwise; turning one off is remembered. Each panel says exactly how well that agent can track the files it changes.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
-- Gemini is now one of the built-in coding agents rather than an extension: it tracks the files it edits so you can review the diffs, its settings pane covers whether Antigravity is installed, how sign-in works and which models you can use instead of asking you to grant Nimbalyst permission to run itself, and its model list comes from your account rather than a fixed three that had gone stale. It turns itself on when Antigravity is installed and stays off otherwise; turning it off is remembered.
 
 ### Fixed
 <!-- Bug fixes go here -->
-- Reopening a Gemini session now shows the tool calls it made; the transcript kept only the conversation and dropped every tool call on reload.
-- An AI session can now read and edit a shared document without you opening it in a tab first, and can work on shared mockups, drawings and data models rather than only markdown.
+
+### Removed
+<!-- Removed features go here -->
+
+## [0.75.5] - 2026-08-28
+
+
+### Added
+<!-- New features go here -->
+- Grok Build and Cursor Agent as coding agents, each with settings, model picker, edited-file tracking and diff review.
+- AI sessions can read and edit a shared document without it being open in a tab, including mockups, drawings and data models.
+
+### Changed
+<!-- Changes to existing functionality go here -->
+- Gemini is a built-in coding agent rather than an extension, with edited-file tracking and a model list from your account.
+
+### Fixed
+<!-- Bug fixes go here -->
+- Reopening a Gemini session shows the tool calls it made instead of only the conversation.
+- "Accept all" no longer refuses an AI edit by claiming the file changed on disk.
+- Documents with a scalar status key in frontmatter render the frontmatter card instead of falling back to the raw text editor (#1392).
 
 ### Removed
 <!-- Removed features go here -->
