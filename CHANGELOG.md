@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - Reopening a Gemini session now shows the tool calls it made; the transcript kept only the conversation and dropped every tool call on reload.
+- An AI session can now read and edit a shared document without you opening it in a tab first, and can work on shared mockups, drawings and data models rather than only markdown.
 
 ### Removed
 <!-- Removed features go here -->
