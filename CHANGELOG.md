@@ -10,9 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- Animations can show a spinning indicator for a running or loading state.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- An animation plays inline in the agent transcript when an agent creates or edits it, as a click-to-activate stage rather than a plain file row.
 
 ### Fixed
 <!-- Bug fixes go here -->
