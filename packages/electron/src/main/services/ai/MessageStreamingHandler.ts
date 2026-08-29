@@ -49,6 +49,7 @@ import {
 import { toolRegistry } from './tools';
 import type { DriveReason } from './QueueDriveService';
 import { resolveExtensionAgentRef, usesHostSuppliedToolLoop } from './providerResolution';
+import { resolveProviderAuthRequirement } from './providerAuthRequirement';
 import { getAgentProviderRegistry } from '../../extensions/AgentProviderRegistry';
 
 /**
@@ -108,6 +109,8 @@ import { windowStates, findWindowByWorkspace } from '../../window/WindowManager'
 import { sessionFileTracker } from '../SessionFileTracker';
 import { codexEditWindowRegistry, shouldOpenCodexEditWindow } from '../CodexEditWindowRegistry';
 import { toolCallMatcher, unwrapShellCommand } from '../ToolCallMatcher';
+import { getGitOperationLogService } from '../GitOperationLogService';
+import { GitActivityBridge } from './GitActivityBridge';
 import { FeatureUsageService, FEATURES } from '../FeatureUsageService.ts';
 import { ToolUsageService } from '../ToolUsageService';
 import { historyManager } from '../../HistoryManager';
@@ -567,44 +570,18 @@ export class MessageStreamingHandler {
         // (e.g. Antigravity rides ~/.gemini OAuth). No host-side apiKey check.
         requiresApiKey = false;
       } else {
-        switch (session.provider) {
-          case 'claude':
-            errorMessage = 'Anthropic API key not configured';
-            break;
-          case 'claude-code':
-            // Claude Code: API key is optional and uses OAuth login when not configured.
-            requiresApiKey = false;
-            break;
-          case 'claude-code-cli':
-            // Genuine `claude` CLI: uses its own login/subscription, no API key.
-            requiresApiKey = false;
-            break;
-          case 'openai':
-            errorMessage = 'OpenAI API key not configured';
-            break;
-          case 'openai-codex':
-            // Codex SDK uses its own auth (codex auth login), API key is optional
-            requiresApiKey = false;
-            break;
-          case 'openai-codex-acp':
-            // Codex ACP uses the codex-acp binary's own auth, API key is optional
-            requiresApiKey = false;
-            break;
-          case 'opencode':
-            // OpenCode uses its own config, API key is optional
-            requiresApiKey = false;
-            break;
-          case 'copilot-cli':
-            // Copilot uses its own CLI auth, no API key needed
-            requiresApiKey = false;
-            break;
-          case 'lmstudio':
-            // LMStudio doesn't need an API key, just the base URL
-            apiKey = 'not-required'; // Dummy value since LMStudio doesn't need a key
-            break;
-          default:
-            trackSendBlocked('no_provider', session.provider);
-            throw new Error(`Unknown provider: ${session.provider}`);
+        // Shared with the session-create auth check in AIService. Keeping the
+        // decision in one exhaustive place is what stops a newly-added
+        // provider from reaching a `default:` throw on the send path.
+        const authRequirement = resolveProviderAuthRequirement(session.provider as AIProviderType);
+        if (!authRequirement) {
+          trackSendBlocked('no_provider', session.provider);
+          throw new Error(`Unknown provider: ${session.provider}`);
+        }
+        requiresApiKey = authRequirement.requiresApiKey;
+        errorMessage = authRequirement.missingKeyMessage;
+        if (authRequirement.placeholderApiKey) {
+          apiKey = authRequirement.placeholderApiKey;
         }
       }
 
@@ -1294,6 +1271,16 @@ export class MessageStreamingHandler {
       });
     }
 
+    // Mirrors this turn's direct Git commands into the workspace Git journal so
+    // they appear in the menu-bar indicator and the Git Output tab. Declared
+    // outside the try so a stream that throws still terminalizes its entries --
+    // otherwise the indicator spins until the next app restart.
+    const gitActivityBridge = new GitActivityBridge(
+      getGitOperationLogService(),
+      session.id,
+      session.provider,
+    );
+
     try {
       let fullResponse = '';
       let lastTextSection = '';  // Track text after the last tool call (for notifications)
@@ -1907,6 +1894,23 @@ export class MessageStreamingHandler {
                         chunkSyntheticToolUseId,
                         looksError ? 'error' : 'completed',
                       );
+                    }
+                  }
+
+                  // Recorded after worktree adoption above so the entry attaches
+                  // to the repository the command actually targeted. Failure is
+                  // isolated but logged: losing observability must not break the
+                  // agent's command, and must not be silent either.
+                  if (trackToolName === 'Bash' && typeof trackArgs?.command === 'string' && toolUseId) {
+                    try {
+                      await gitActivityBridge.observe({
+                        command: trackArgs.command,
+                        workspacePath: effectiveWorkspacePath,
+                        providerToolCallId: toolUseId,
+                        result: chunk.toolCall.result,
+                      });
+                    } catch (gitActivityError) {
+                      logger.main.error('[AIService] Failed to record agent Git activity:', gitActivityError);
                     }
                   }
 
@@ -2945,6 +2949,10 @@ export class MessageStreamingHandler {
         }
       }
 
+      // A cancelled turn or a provider that disconnected mid-command never sends
+      // the completion, so anything still open here will never settle on its own.
+      await gitActivityBridge.interruptOutstanding();
+
       // Flush any Bash commands that only emitted one observable tool event
       // so they still get pending-review tags and tool-call-linked diffs.
       for (const [commandItemId, command] of pendingBashCommands.entries()) {
@@ -2983,6 +2991,9 @@ export class MessageStreamingHandler {
 
       return { content: fullResponse };
     } catch (error) {
+      await gitActivityBridge.interruptOutstanding(
+        'The agent session failed before this command reported a final status.',
+      );
       const errorTime = Date.now() - startTime;
       const isClaudeCode = session?.provider === 'claude-code';
       const logPrefix = isClaudeCode ? '[CLAUDE-CODE-SERVICE]' : '[AIService]';

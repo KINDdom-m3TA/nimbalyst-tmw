@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- New features go here -->
 - The macOS menu bar shows your session fleet at a glance: it names a session for a few seconds as it starts, finishes, blocks or fails, flags one that has stopped responding, and stays out of the way entirely when nothing is running.
 - Animations can show a spinning indicator for a running or loading state.
+- The title bar names the Git command running right now, whether you started it, the Git panel did or an agent session did, and the Git panel's Output tab marks the ones an agent ran.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
