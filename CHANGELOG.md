@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
-- The macOS menu bar shows your session fleet at a glance, and names a session for a few seconds whenever it starts, finishes, blocks or fails.
+- The macOS menu bar shows your session fleet at a glance: it names a session for a few seconds as it starts, finishes, blocks or fails, flags one that has stopped responding, and stays out of the way entirely when nothing is running.
 - Animations can show a spinning indicator for a running or loading state.
 
 ### Changed

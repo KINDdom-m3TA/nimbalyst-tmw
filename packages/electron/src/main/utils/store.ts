@@ -81,6 +81,9 @@ export const DEFAULT_DATABASE_MAINTENANCE: DatabaseMaintenanceSettings = {
   toolOutputRetentionDays: 0,
 };
 
+/** How the macOS menu bar fleet strip is drawn. See `getTrayStripStyle`. */
+export type TrayStripStyle = 'image' | 'island';
+
 interface AppStoreSchema {
   theme: AppTheme;
   themeIsDark?: boolean; // Whether the current theme is dark (used for extension themes)
@@ -276,6 +279,7 @@ interface AppStoreSchema {
   // A wide item is a real risk of overflowing under the notch on a laptop, so
   // it can be turned off without losing the tray icon and its panel.
   showTrayStrip?: boolean;
+  trayStripStyle?: TrayStripStyle;
   // Advanced: V8 heap memory limit in MB (default: 4096 = 4GB)
   // Increase if you experience OOM crashes with large sessions
   maxHeapSizeMB?: number;
@@ -1705,6 +1709,22 @@ export function isShowTrayStrip(): boolean {
 
 export function setShowTrayStrip(show: boolean): void {
   getAppStore().set('showTrayStrip', show);
+}
+
+/**
+ * How the fleet strip is drawn.
+ *
+ * `image` is the bitmap composited onto the tray item; `island` is a live
+ * window drawn in the menu bar row that expands into the session rows on hover.
+ * Both render the same `StripView`. Defaults to `image` -- the island paints
+ * over the centre of the menu bar, which is the app's menus on a narrow display.
+ */
+export function getTrayStripStyle(): TrayStripStyle {
+  return getAppStore().get('trayStripStyle', 'image') === 'island' ? 'island' : 'image';
+}
+
+export function setTrayStripStyle(style: TrayStripStyle): void {
+  getAppStore().set('trayStripStyle', style);
 }
 
 // Completion Sound Settings
