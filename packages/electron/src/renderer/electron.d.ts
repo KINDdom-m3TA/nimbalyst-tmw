@@ -1,3 +1,15 @@
+/** Mirrors the main-process `git:status-changed` payload. */
+interface GitStatusChangedPayload {
+  workspacePath: string;
+  revision?: number;
+  status?: {
+    branch: string;
+    ahead: number;
+    behind: number;
+    hasUncommitted: boolean;
+  };
+}
+
 interface FileTreeItem {
   name: string;
   path: string;
@@ -1065,7 +1077,7 @@ interface ElectronAPI {
 
   // Git operations (real-time status events)
   git?: {
-    onStatusChanged?: (callback: (data: { workspacePath: string }) => void) => () => void;
+    onStatusChanged?: (callback: (data: GitStatusChangedPayload) => void) => () => void;
     onCommitDetected?: (callback: (data: {
       workspacePath: string;
       commitHash: string;
