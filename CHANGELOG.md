@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Typing in a dialog while the tracker table is open no longer edits the selected cell.
 - A tracker item's body is no longer cleared when the item's metadata syncs with your team.
 - A tracker item can no longer drift onto an issue key that belongs to a different item.
+- An API key left in your shell environment is no longer handed to the Codex or Copilot coding agents; only a key you configured in Nimbalyst settings is used.
 
 ### Removed
 <!-- Removed features go here -->
