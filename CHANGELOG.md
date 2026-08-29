@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Files whose AI edits have already been committed no longer open with a leftover change count and review dot.
+- Images in a shared document now render in the web console instead of showing a broken-image placeholder.
 - Sending a message to Grok Build, Cursor Agent or Gemini no longer fails with "Unknown provider".
 - Grok Build and Cursor Agent report the tokens a session actually consumed, including cached input, instead of a fraction of it.
 - The session model picker loads ahead of opening and uses cached results instead of blocking on provider discovery.
