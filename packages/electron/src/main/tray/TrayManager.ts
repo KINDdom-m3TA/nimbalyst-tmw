@@ -49,10 +49,14 @@ import {
   type PromptKind,
   type TraySessionInfo,
 } from './fleetSnapshot';
+import { buildFleetActivityPayload } from './fleetActivity';
+import { FleetActivityPublisher } from './fleetActivityPublisher';
+import { isFleetActivityAvailable, sendFleetActivity } from '../services/ai/fleetActivityPush';
 import { isIdleView, StripStateMachine, stripViewKey, type StripView } from './stripStateMachine';
 import { TrayStripRenderer } from './TrayStripRenderer';
 import { ISLAND_STRIP_KEY, toIslandStrip } from './islandStrip';
 import { latestAssistantTextSql, toSnippetLine } from './sessionSnippets';
+import { unreadSeedQuery } from './unreadSeedQuery';
 import {
   closeMenuBarIsland,
   isMenuBarIslandSupported,
@@ -84,6 +88,15 @@ interface TrayUnreadClearPayload {
 
 const MENU_REBUILD_DEBOUNCE_MS = 300;
 const COMPLETED_LINGER_MS = 60_000; // Keep completed sessions visible for 1 minute
+/**
+ * How many already-unread sessions to restore from the database at launch.
+ *
+ * A cap rather than the whole set. Nothing clears the unread flag on a session
+ * the user never opens, so it accumulates without bound -- a real install had
+ * 427 of them -- and the tray menu and the island panel are both lists someone
+ * is meant to work through. `seedUnreadFromDatabase` takes the newest.
+ */
+const UNREAD_SEED_LIMIT = 25;
 /**
  * The strip's age is rounded to minutes, so it only needs redrawing that often.
  * A ticking second counter would be 60x the captures to say the same thing.
@@ -252,6 +265,18 @@ export class TrayManager {
   /** Backing the idle panel's "reopen one of these" list. See refreshRecentSessions. */
   private recentSessions: TrayPanelSession[] = [];
   private recentSessionsFetchedAt = 0;
+  // ─── iOS Live Activity ────────────────────────────────────────────────
+  /**
+   * The phone's half of the same snapshot.
+   *
+   * Owned here rather than beside the strip because the Live Activity is not a
+   * render style: it must keep publishing when the menu bar icon is hidden, when
+   * the strip is switched off, and on Windows and Linux, where the desktop is
+   * still the only thing that knows what the fleet is doing.
+   */
+  private fleetPublisher: FleetActivityPublisher | null = null;
+  private fleetActivityTimer: NodeJS.Timeout | null = null;
+
   /** Whether the island panel is open; snippets are only read while it is. */
   private islandExpanded = false;
   /** sessionId -> one line of what that session last said. */
@@ -327,6 +352,8 @@ export class TrayManager {
     if (isShowTrayIcon()) {
       this.createTray();
     }
+
+    this.startFleetActivity();
 
     logger.main.info('[TrayManager] Initialized');
   }
@@ -477,6 +504,7 @@ export class TrayManager {
     this.lingerTimers.clear();
 
     this.teardownStrip();
+    this.stopFleetActivity();
 
     if (this.tray) {
       this.tray.destroy();
@@ -717,6 +745,10 @@ export class TrayManager {
     }
     this.menuRebuildTimer = setTimeout(() => {
       this.menuRebuildTimer = null;
+      // Ahead of `rebuildMenu`, which returns early when the tray icon is
+      // hidden. The phone's card has nothing to do with whether there is an icon
+      // in this machine's menu bar.
+      this.publishFleetActivity();
       this.rebuildMenu();
     }, MENU_REBUILD_DEBOUNCE_MS);
   }
@@ -951,6 +983,50 @@ export class TrayManager {
       now,
       ...(this.lastFleetActivityAt !== null ? { lastActivityAt: this.lastFleetActivityAt } : {}),
     });
+  }
+
+  // ─── iOS Live Activity ─────────────────────────────────────────────────
+
+  /**
+   * Start publishing the fleet to the phone.
+   *
+   * Its own timer rather than a ride on `stripAgeTimer`, for the same reason it
+   * is not part of `paintStrip`: the strip's timer only exists while the strip
+   * is enabled and the tray icon is showing, and neither has any bearing on
+   * whether a phone across the room should know a session went quiet. The
+   * interval is the same, because the thing it catches is the same -- a stall
+   * emits no event, so it is only ever noticed by re-deriving on a clock.
+   */
+  private startFleetActivity(): void {
+    if (this.fleetPublisher) return;
+    this.fleetPublisher = new FleetActivityPublisher({ send: sendFleetActivity });
+    this.publishFleetActivity();
+    this.fleetActivityTimer = setInterval(() => this.publishFleetActivity(), STRIP_AGE_TICK_MS);
+    this.fleetActivityTimer.unref?.();
+  }
+
+  private stopFleetActivity(): void {
+    if (this.fleetActivityTimer) {
+      clearInterval(this.fleetActivityTimer);
+      this.fleetActivityTimer = null;
+    }
+    this.fleetPublisher?.stop();
+    this.fleetPublisher = null;
+  }
+
+  /**
+   * Hand the publisher the current truth. It decides whether that is news.
+   *
+   * Cheap enough to call on every rebuild by design -- the coalescing lives in
+   * the publisher, so no caller has to reason about the APNs budget.
+   */
+  private publishFleetActivity(): void {
+    if (!this.fleetPublisher || !isFleetActivityAvailable()) return;
+    const now = Date.now();
+    const snapshot = this.buildFleetSnapshot(now);
+    this.fleetPublisher.submit(
+      buildFleetActivityPayload(snapshot, this.sessionCache.values(), now),
+    );
   }
 
   private async updateStrip(): Promise<void> {
@@ -1430,17 +1506,11 @@ export class TrayManager {
     if (!this.database) return;
 
     try {
-      // The hasUnread flag is stored in the metadata JSONB column.
-      // metadata.metadata.hasUnread is the nested path used by sessionStateListeners.
-      // Also check metadata.hasUnread for backwards compatibility.
-      const { rows } = await this.database.query<any>(
-        `SELECT id, title, workspace_id, provider, model, updated_at, metadata FROM ai_sessions
-         WHERE is_archived = false
-           AND (metadata->'metadata'->>'hasUnread' = 'true'
-                OR metadata->>'hasUnread' = 'true')`
-      );
+      // One row over the cap, so the log can say whether it truncated.
+      const { rows } = await this.database.query<any>(unreadSeedQuery(UNREAD_SEED_LIMIT + 1));
+      const seeded = rows.slice(0, UNREAD_SEED_LIMIT);
 
-      for (const row of rows) {
+      for (const row of seeded) {
         // Don't overwrite sessions already in cache (e.g., currently running)
         if (this.sessionCache.has(row.id)) continue;
 
@@ -1463,8 +1533,13 @@ export class TrayManager {
         });
       }
 
-      if (rows.length > 0) {
-        logger.main.info(`[TrayManager] Seeded ${rows.length} unread session(s) from database`);
+      if (seeded.length > 0) {
+        // The truncation is logged because the strip's unread count is drawn
+        // from the cache: past the cap it stops being the fleet's real number,
+        // and a capped count that says so is recoverable where a silent one is
+        // just wrong.
+        const truncated = rows.length > UNREAD_SEED_LIMIT ? ` (capped at ${UNREAD_SEED_LIMIT})` : '';
+        logger.main.info(`[TrayManager] Seeded ${seeded.length} unread session(s) from database${truncated}`);
         this.scheduleMenuRebuild();
       }
     } catch (error) {

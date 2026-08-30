@@ -27,6 +27,9 @@ export function emptyMenuBarIslandState(): MenuBarIslandState {
     feed: emptyTrayPanelFeed(),
     snippets: {},
     expanded: false,
+    // Main overrides this with the real display's anchor on the first frame.
+    // Centring is the safe placeholder: nothing is painted yet either way.
+    anchor: 'center',
     // Nothing has arrived yet, and an empty frame is by definition the idle
     // state -- which is the one state that paints nothing. Starting visible
     // would flash a bare glyph in the menu bar on every launch.

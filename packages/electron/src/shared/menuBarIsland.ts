@@ -15,6 +15,43 @@ import type { TrayIdleSummary, TrayPanelFeed } from './traySessions';
 /** Fade to nothing, then the window hides. Matches the expand/collapse easing. */
 export const ISLAND_FADE_MS = 260;
 
+/**
+ * Width of the expanded panel.
+ *
+ * Lives here rather than only in the renderer's Tailwind class because main
+ * needs it too: on a notched display the island is right-anchored just left of
+ * the notch, and the placement has to know how far left the *open* panel will
+ * reach to keep it on screen.
+ */
+export const ISLAND_EXPANDED_WIDTH = 420;
+
+/**
+ * Which edge of the island window the island itself is pinned to.
+ *
+ * `center` is the ordinary menu bar. `notch-left` is a display with a camera
+ * housing: the island is placed against the right edge of its window, which
+ * main has positioned so that edge lands just left of the notch, and it grows
+ * leftward as it expands. Centering there would draw the collapsed strip -- the
+ * only thing normally on screen -- entirely behind the notch.
+ */
+export type IslandAnchor = 'center' | 'notch-left';
+
+/**
+ * Which display the user dragged the island onto.
+ *
+ * Both fields are recorded because neither is dependable alone. Electron's
+ * `id` is unique but not durable -- unplugging a monitor and plugging it back
+ * in can renumber it -- while `label` survives that but is not guaranteed
+ * unique, and two identical monitors will share one. Matching id first and
+ * falling back to label gets the common cases right without ever hard-failing:
+ * see `resolveIslandDisplay`, which drops back to the primary display rather
+ * than leaving the island on a screen that is gone.
+ */
+export interface IslandDisplayPreference {
+  id: number;
+  label: string;
+}
+
 /** Everything the island needs to paint one frame. */
 export interface MenuBarIslandState {
   /**
@@ -70,6 +107,13 @@ export interface MenuBarIslandState {
   snippets: Record<string, string>;
   /** Main owns the hit test (see islandGeometry), so it owns the open state too. */
   expanded: boolean;
+  /**
+   * Where inside the window to draw the island.
+   *
+   * Derived from the display, so main attaches it on the way out rather than
+   * TrayManager carrying it -- the fleet has no opinion about the notch.
+   */
+  anchor: IslandAnchor;
 }
 
 export const MENU_BAR_ISLAND_CHANNELS = {
@@ -90,8 +134,21 @@ export const MENU_BAR_ISLAND_CHANNELS = {
   rect: 'menu-bar-island:rect',
   /** island → main: open this session's workspace window and navigate to it. */
   selectSession: 'menu-bar-island:select-session',
-  /** island → main: the collapsed pill was clicked; pin or unpin the panel. */
-  togglePin: 'menu-bar-island:toggle-pin',
+  /**
+   * island → main: a press started on the pill.
+   *
+   * The pill is both the drag handle and the pin toggle, so the renderer does
+   * not decide which happened -- it reports the press and the release, and main
+   * measures how far the cursor travelled in between. Main also samples the
+   * cursor itself rather than trusting `screenX`/`screenY`: those are CSS
+   * pixels, and dragging between displays of different scale factors is exactly
+   * where that conversion goes wrong.
+   */
+  dragStart: 'menu-bar-island:drag-start',
+  /** island → main: the pointer moved during a press. Main re-samples the cursor. */
+  dragMove: 'menu-bar-island:drag-move',
+  /** island → main: the press ended. Main decides: a move, or a pin toggle. */
+  dragEnd: 'menu-bar-island:drag-end',
   /**
    * island → main: close the panel.
    *

@@ -12,7 +12,33 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
  * deliberately pinned the panel open.
  */
 
-const { browserWindowCtor, appMock, screenMock, applyDockIconMock } = vi.hoisted(() => {
+const {
+  browserWindowCtor,
+  appMock,
+  screenMock,
+  applyDockIconMock,
+  setIslandDisplayMock,
+  cursorRef,
+} = vi.hoisted(() => {
+  /** The primary at the origin, and a second display 2048pt to its right. */
+  const displays = [
+    {
+      id: 1,
+      label: 'Studio Display',
+      bounds: { x: 0, y: 0, width: 1440, height: 900 },
+      workArea: { x: 0, y: 30, width: 1440, height: 870 },
+      internal: false,
+    },
+    {
+      id: 2,
+      label: 'Built-in',
+      bounds: { x: 2048, y: 0, width: 1440, height: 900 },
+      workArea: { x: 2048, y: 30, width: 1440, height: 870 },
+      internal: false,
+    },
+  ];
+  /** Mutable so a test can walk the cursor across the display boundary. */
+  const cursorRef = { current: { x: 5, y: 800 } };
   const listeners = new Map<string, Function>();
   const instance = {
     listeners,
@@ -42,10 +68,22 @@ const { browserWindowCtor, appMock, screenMock, applyDockIconMock } = vi.hoisted
     ),
     appMock: { getAppPath: () => '/app', isPackaged: false, setActivationPolicy: vi.fn() },
     applyDockIconMock: vi.fn(),
+    setIslandDisplayMock: vi.fn(),
+    cursorRef,
     screenMock: {
-      getPrimaryDisplay: vi.fn(() => ({ bounds: { x: 0, y: 0, width: 1440, height: 900 } })),
+      // Two external displays, so a drag has somewhere to go and the island
+      // centres on both. Notch placement is covered in islandGeometry.test.ts.
+      getPrimaryDisplay: vi.fn(() => displays[0]),
+      getAllDisplays: vi.fn(() => displays),
+      getDisplayNearestPoint: vi.fn((point: { x: number; y: number }) => (
+        displays.find((display) => (
+          point.x >= display.bounds.x && point.x < display.bounds.x + display.bounds.width
+        )) ?? displays[0]
+      )),
       // Parked far from the island, so nothing hovers by accident.
-      getCursorScreenPoint: vi.fn(() => ({ x: 5, y: 800 })),
+      getCursorScreenPoint: vi.fn(() => cursorRef.current),
+      on: vi.fn(),
+      removeListener: vi.fn(),
     },
   };
 });
@@ -61,7 +99,12 @@ vi.mock('../../utils/ipcRegistry', () => ({
   safeOn: vi.fn((channel: string, handler: Function) => { ipcHandlers.set(channel, handler); }),
 }));
 vi.mock('../../utils/appPaths', () => ({ getPreloadPath: () => '/preload.js' }));
-vi.mock('../../utils/store', () => ({ getTheme: () => 'dark' }));
+vi.mock('../../utils/store', () => ({
+  getTheme: () => 'dark',
+  // No saved choice, so placement follows the primary until a drag says otherwise.
+  getIslandDisplay: () => null,
+  setIslandDisplay: setIslandDisplayMock,
+}));
 vi.mock('../../utils/logger', () => ({ logger: { main: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } } }));
 vi.mock('../../utils/dockIcon', () => ({ applyDockIcon: applyDockIconMock }));
 vi.mock('../../tray/trayGlyph', () => ({ loadTrayGlyphDataUri: () => null }));
@@ -72,6 +115,7 @@ import {
   showMenuBarIsland,
 } from '../MenuBarIslandWindow';
 import { ISLAND_FADE_MS, MENU_BAR_ISLAND_CHANNELS } from '../../../shared/menuBarIsland';
+import { ISLAND_WINDOW_WIDTH } from '../islandGeometry';
 import { emptyTrayPanelFeed } from '../../../shared/traySessions';
 
 const win = browserWindowCtor.instance;
@@ -107,6 +151,9 @@ describe('MenuBarIslandWindow idle hiding', () => {
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
     closeMenuBarIsland();
     vi.clearAllMocks();
+    // Back on the primary, far from the island, so nothing hovers or drags by
+    // accident and each drag test starts its gesture from a known point.
+    cursorRef.current = { x: 5, y: 800 };
     win.visible = false;
     win.listeners.clear();
   });
@@ -157,19 +204,62 @@ describe('MenuBarIslandWindow idle hiding', () => {
   // finishing is not a reason to pull it out from under them mid-sentence.
   it('defers the fade while the panel is pinned open, and takes it on release', () => {
     setupMenuBarIslandHandlers({ onSelectSession: vi.fn(), onExpandedChange: vi.fn() });
-    const togglePin = ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.togglePin)!;
     const event = { sender: win.webContents };
+    // A press that does not move is the pin toggle -- the pill is both the
+    // toggle and the drag handle, and main is what tells them apart.
+    const togglePin = () => {
+      ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.dragStart)!(event);
+      ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.dragEnd)!(event);
+    };
 
     showMenuBarIsland(frame(true));
     finishLoad();
-    togglePin(event);
+    togglePin();
 
     showMenuBarIsland(frame(false));
     vi.advanceTimersByTime(ISLAND_FADE_MS * 4);
     expect(win.hide).not.toHaveBeenCalled();
 
-    togglePin(event);
+    togglePin();
     vi.advanceTimersByTime(ISLAND_FADE_MS + 1);
     expect(win.hide).toHaveBeenCalledTimes(1);
+  });
+
+  // The gesture that this whole drag path exists for: the island has to end up
+  // on the display the user released it over, and stay there next launch.
+  it('moves to the display the press was released on, and remembers it', () => {
+    setupMenuBarIslandHandlers({ onSelectSession: vi.fn(), onExpandedChange: vi.fn() });
+    const event = { sender: win.webContents };
+
+    showMenuBarIsland(frame(true));
+    finishLoad();
+    win.setBounds.mockClear();
+
+    ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.dragStart)!(event);
+    // Travel well past the slop, onto the second display.
+    cursorRef.current = { x: 2400, y: 10 };
+    ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.dragMove)!(event);
+    ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.dragEnd)!(event);
+
+    expect(setIslandDisplayMock).toHaveBeenCalledWith({ id: 2, label: 'Built-in' });
+    // Centred on the second display, whose origin is x=2048.
+    expect(win.setBounds).toHaveBeenLastCalledWith(
+      expect.objectContaining({ x: 2048 + 720 - ISLAND_WINDOW_WIDTH / 2, y: 0 }),
+    );
+  });
+
+  it('reads a press that never moved as a pin, not a move', () => {
+    setupMenuBarIslandHandlers({ onSelectSession: vi.fn(), onExpandedChange: vi.fn() });
+    const event = { sender: win.webContents };
+
+    showMenuBarIsland(frame(true));
+    finishLoad();
+
+    ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.dragStart)!(event);
+    // Within the slop: a hand that failed to hold still, not an instruction.
+    cursorRef.current = { x: 5 + 3, y: 800 };
+    ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.dragEnd)!(event);
+
+    expect(setIslandDisplayMock).not.toHaveBeenCalled();
   });
 });

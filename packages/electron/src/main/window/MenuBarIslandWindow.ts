@@ -2,7 +2,7 @@ import { app, BrowserWindow, screen } from 'electron';
 import { join } from 'path';
 import { safeHandle, safeOn } from '../utils/ipcRegistry';
 import { getPreloadPath } from '../utils/appPaths';
-import { getTheme } from '../utils/store';
+import { getIslandDisplay, getTheme, setIslandDisplay } from '../utils/store';
 import { logger } from '../utils/logger';
 import { applyDockIcon } from '../utils/dockIcon';
 import { loadTrayGlyphDataUri } from '../tray/trayGlyph';
@@ -15,10 +15,13 @@ import {
 import {
   ISLAND_WINDOW_HEIGHT,
   ISLAND_WINDOW_WIDTH,
-  islandWindowBounds,
+  islandPlacement,
   isCursorOverIsland,
+  isDragGesture,
   nextHoverState,
+  resolveIslandDisplay,
   type HoverState,
+  type IslandPlacement,
 } from './islandGeometry';
 
 /**
@@ -43,8 +46,17 @@ let pollTimer: NodeJS.Timeout | null = null;
 let islandRect: IslandRect = { left: 0, top: 0, width: 0, height: 0 };
 let hover: HoverState = { hovered: false, outsideSince: 0 };
 let pinned = false;
+/**
+ * The in-flight press on the pill, or null.
+ *
+ * `origin` is where the cursor was when the press began; comparing it to the
+ * release decides whether the user meant to move the island or to pin it. The
+ * pill is the only handle the island has, so it has to carry both.
+ */
+let dragging: { origin: { x: number; y: number }; displayId: number } | null = null;
 let ignoringMouse = true;
-let latestState: MenuBarIslandState | null = null;
+/** The fleet's half of the frame. `expanded` and `anchor` are main's, added on push. */
+let latestState: Omit<MenuBarIslandState, 'expanded' | 'anchor'> | null = null;
 /** Set while the fade-out is in flight, so a fleet waking up mid-fade cancels it. */
 let fadeTimer: NodeJS.Timeout | null = null;
 let onSelectSession: ((sessionId: string, workspacePath: string) => void) | null = null;
@@ -80,13 +92,46 @@ function loadIslandRenderer(window: BrowserWindow): void {
   void window.loadFile(htmlPath, { query });
 }
 
-/** The display the island lives on. Follows the menu bar the user is looking at. */
-function targetDisplayBounds() {
-  return screen.getPrimaryDisplay().bounds;
+/**
+ * The display the island belongs on: the user's dragged choice, or the primary.
+ *
+ * Resolved on every read rather than cached, because the answer changes without
+ * anyone telling us -- unplugging the chosen monitor has to fall back to the
+ * primary, and it is `resolveIslandDisplay` that guarantees we never place the
+ * island on a screen that is no longer there.
+ */
+function targetDisplay(): Electron.Display {
+  return resolveIslandDisplay(
+    screen.getAllDisplays(),
+    screen.getPrimaryDisplay(),
+    getIslandDisplay(),
+  );
+}
+
+/**
+ * Where the island sits. Follows the menu bar the user put it on.
+ *
+ * Recomputed rather than cached because it also decides the anchor, and a
+ * display change (external monitor, scaling) has to be able to move the island
+ * out from behind a notch that was not there before.
+ */
+function targetPlacement(): IslandPlacement {
+  return islandPlacement(targetDisplay());
+}
+
+/** Move the window onto a display, and tell the renderer which edge to hug. */
+function applyPlacement(display: Electron.Display): void {
+  if (!islandWindow || islandWindow.isDestroyed()) return;
+  const { anchor: _anchor, ...bounds } = islandPlacement(display);
+  islandWindow.setBounds(bounds);
+  // The anchor rides on the frame, and crossing onto a notched display changes
+  // it -- so this push is not merely cosmetic, it is what stops the island
+  // landing under the camera housing on arrival.
+  pushState();
 }
 
 function createIslandWindow(): BrowserWindow {
-  const bounds = islandWindowBounds(targetDisplayBounds());
+  const { anchor: _anchor, ...bounds } = targetPlacement();
 
   const window = new BrowserWindow({
     ...bounds,
@@ -123,7 +168,14 @@ function createIslandWindow(): BrowserWindow {
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   window.setIgnoreMouseEvents(true, { forward: true });
 
+  screen.on('display-metrics-changed', handleDisplayChange);
+  screen.on('display-added', handleDisplayChange);
+  screen.on('display-removed', handleDisplayChange);
+
   window.on('closed', () => {
+    screen.removeListener('display-metrics-changed', handleDisplayChange);
+    screen.removeListener('display-added', handleDisplayChange);
+    screen.removeListener('display-removed', handleDisplayChange);
     islandWindow = null;
     stopPolling();
   });
@@ -144,7 +196,8 @@ function createIslandWindow(): BrowserWindow {
     // another app's full-screen space; screen-saver level is not needed.
     window.setAlwaysOnTop(true, 'status');
     // Re-assert the bounds now that the level is above the menu bar.
-    window.setBounds(islandWindowBounds(targetDisplayBounds()));
+    const { anchor: _anchor, ...bounds } = targetPlacement();
+    window.setBounds(bounds);
     window.showInactive();
     // The renderer pulls the glyph and its first frame itself once mounted --
     // see `requestInit`. Pushing here would land before React subscribes.
@@ -172,7 +225,11 @@ function pollCursor(): void {
     islandWindow.getBounds(),
     islandRect,
   );
-  const next = nextHoverState(hover, { inside, pinned, now: Date.now() });
+  // A drag holds the island open exactly as pinning does. Without this the
+  // cursor leaves the island the instant it starts moving, the poll collapses
+  // it and makes the window click-through again, and the press the user is
+  // still holding stops being delivered -- the drag dies a few pixels in.
+  const next = nextHoverState(hover, { inside, pinned: pinned || !!dragging, now: Date.now() });
   const changed = next.hovered !== hover.hovered;
   hover = next;
   if (!changed) return;
@@ -249,10 +306,30 @@ function stopPolling(): void {
 
 function pushState(): void {
   if (!islandWindow || islandWindow.isDestroyed() || !latestState) return;
-  islandWindow.webContents.send(MENU_BAR_ISLAND_CHANNELS.state, {
-    ...latestState,
-    expanded: hover.hovered,
-  });
+  islandWindow.webContents.send(MENU_BAR_ISLAND_CHANNELS.state, currentFrame());
+}
+
+/** The frame as the renderer should see it: the fleet, plus what main owns. */
+function currentFrame(): MenuBarIslandState | null {
+  if (!latestState) return null;
+  return { ...latestState, expanded: hover.hovered, anchor: targetPlacement().anchor };
+}
+
+/**
+ * Follow the display the island is drawn on.
+ *
+ * Both halves of the placement can change under us: the bounds when a monitor
+ * arrives or the resolution changes, and the *anchor* when the primary display
+ * becomes (or stops being) a notched one -- docking a MacBook does both. The
+ * window outlives those events, because an idle fleet hides it rather than
+ * destroying it, so without this it would keep a placement chosen for a screen
+ * that is no longer there.
+ */
+function handleDisplayChange(): void {
+  if (!islandWindow || islandWindow.isDestroyed()) return;
+  const { anchor: _anchor, ...bounds } = targetPlacement();
+  islandWindow.setBounds(bounds);
+  pushState();
 }
 
 // ─── Public surface ──────────────────────────────────────────────────────────
@@ -270,20 +347,20 @@ function pushState(): void {
  * island may exist, because in this state there is no island: the tray icon is
  * how the user gets to the panel.
  */
-export function showMenuBarIsland(state: Omit<MenuBarIslandState, 'expanded'>): void {
+export function showMenuBarIsland(state: Omit<MenuBarIslandState, 'expanded' | 'anchor'>): void {
   if (!isMenuBarIslandSupported()) return;
 
   const wasVisible = latestState?.visible ?? false;
-  latestState = { ...state, expanded: hover.hovered };
+  latestState = state;
 
   if (!state.visible) {
     // Never create a window just to hide it -- an install that launches quiet
     // should not pay for one at all.
     if (!islandWindow || islandWindow.isDestroyed()) return;
-    // Pinning is the user reading the panel on purpose. The last session
-    // finishing is not a reason to pull it out from under them; `setPinned`
-    // re-checks this and fades then.
-    if (pinned) {
+    // Pinning is the user reading the panel on purpose, and a drag is the user
+    // holding it. The last session finishing is not a reason to pull either out
+    // from under them; `setPinned` re-checks this and fades then.
+    if (pinned || dragging) {
       pushState();
       return;
     }
@@ -335,6 +412,7 @@ export function closeMenuBarIsland(): void {
   cancelFadeOut();
   hover = { hovered: false, outsideSince: 0 };
   pinned = false;
+  dragging = null;
   ignoringMouse = true;
   islandRect = { left: 0, top: 0, width: 0, height: 0 };
   latestState = null;
@@ -381,7 +459,7 @@ export function setupMenuBarIslandHandlers(dependencies: {
     if (!isIslandSenderInvoke(event)) return null;
     return {
       glyph: loadTrayGlyphDataUri(),
-      state: latestState ? { ...latestState, expanded: hover.hovered } : null,
+      state: currentFrame(),
     };
   });
 
@@ -390,9 +468,45 @@ export function setupMenuBarIslandHandlers(dependencies: {
     islandRect = rect;
   });
 
-  safeOn(MENU_BAR_ISLAND_CHANNELS.togglePin, (event) => {
+  safeOn(MENU_BAR_ISLAND_CHANNELS.dragStart, (event) => {
     if (!isIslandSender(event)) return;
-    setPinned(!pinned);
+    dragging = { origin: screen.getCursorScreenPoint(), displayId: targetDisplay().id };
+    // Hold the panel open for the duration; see the note in `pollCursor`.
+    hover = { hovered: true, outsideSince: 0 };
+    setIgnoreMouse(false);
+  });
+
+  safeOn(MENU_BAR_ISLAND_CHANNELS.dragMove, (event) => {
+    if (!isIslandSender(event) || !dragging) return;
+    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    // Only the *display* is a degree of freedom. The island is pinned to the
+    // menu bar row and its x is whatever the placement says, so there is
+    // nothing to follow within a screen -- it hops when the cursor crosses.
+    if (display.id === dragging.displayId) return;
+    dragging.displayId = display.id;
+    applyPlacement(display);
+  });
+
+  safeOn(MENU_BAR_ISLAND_CHANNELS.dragEnd, (event) => {
+    if (!isIslandSender(event) || !dragging) return;
+    const { origin } = dragging;
+    dragging = null;
+
+    const cursor = screen.getCursorScreenPoint();
+    if (!isDragGesture(origin, cursor)) {
+      // The press never really moved, so it was the pin toggle. Releasing the
+      // drag hold first means `setPinned` sees the true resting state.
+      setPinned(!pinned);
+      return;
+    }
+
+    const display = screen.getDisplayNearestPoint(cursor);
+    setIslandDisplay({ id: display.id, label: display.label });
+    applyPlacement(display);
+    // The drag was holding the panel open. Hand the decision back to the poll
+    // rather than forcing either state: the cursor may have been released on
+    // the island or well away from it.
+    hover = { hovered: true, outsideSince: Date.now() };
   });
 
   safeOn(MENU_BAR_ISLAND_CHANNELS.dismiss, (event) => {

@@ -11,7 +11,12 @@
  * `nimbalyst-local/spikes/menu-bar-island/`.
  */
 
-import type { IslandRect } from '../../shared/menuBarIsland';
+import {
+  ISLAND_EXPANDED_WIDTH,
+  type IslandAnchor,
+  type IslandDisplayPreference,
+  type IslandRect,
+} from '../../shared/menuBarIsland';
 
 /**
  * Window size.
@@ -27,6 +32,55 @@ export const ISLAND_WINDOW_HEIGHT = 460;
 /** Don't collapse the instant the cursor clips an edge mid-transition. */
 export const ISLAND_EXIT_GRACE_MS = 260;
 
+/**
+ * Aspect ratio below which an *internal* display is called notched.
+ *
+ * Electron exposes no notch API -- there is no binding for `NSScreen`'s
+ * `safeAreaInsets` or `auxiliaryTopLeftArea` -- so the camera housing has to be
+ * inferred from the geometry we do get.
+ *
+ * Menu bar height, the obvious signal, does not work. It reads 30pt on a
+ * notched MacBook Pro built-in panel and *also* 30pt on a Studio Display next
+ * to it: current macOS grew the ordinary bar to meet the housing rather than
+ * growing the bar only where there is one. A height threshold therefore either
+ * misses every notched display or claims every unnotched one.
+ *
+ * Aspect ratio separates them cleanly, because the notch is a strip of panel
+ * *added above* an otherwise 16:10 screen. Every Mac without a housing is
+ * exactly 16:10 (1.600); every Mac with one is shorter and wider-looking in
+ * reverse -- 14" 3024x1964 is 1.540, 16" 3456x2234 is 1.547, 13" Air 2560x1664
+ * is 1.538, 15" Air 2880x1864 is 1.545. The gap between 1.547 and 1.600 is
+ * wide, and it survives scaling: macOS's scaled modes preserve the panel's
+ * ratio, so this reads the same in every resolution the user can pick.
+ */
+export const NOTCH_MAX_ASPECT_RATIO = 1.57;
+
+/**
+ * Notch width as a fraction of the display's logical width.
+ *
+ * A fraction rather than a point count because the notch scales with the
+ * display mode: the same housing is ~175pt wide at a 14" panel's default
+ * scaling and ~200pt at a 16"'s, and both land near this ratio. A hardcoded
+ * width would be wrong on every setting except the one it was measured at.
+ *
+ * Deliberately generous. Overshooting shifts the island a few points further
+ * from the notch; undershooting tucks its edge underneath.
+ */
+export const NOTCH_WIDTH_RATIO = 0.13;
+
+/** Breathing room between the island's right edge and the notch. */
+export const NOTCH_CLEARANCE = 10;
+
+/**
+ * How far the cursor may travel before a press stops being a click.
+ *
+ * The pill is both the drag handle and the pin toggle, so one gesture has to
+ * resolve into two meanings. Generous rather than tight: a press that wobbles
+ * by a couple of points is a click that the user's hand failed to hold still,
+ * and reading it as a drag would move the island for no reason.
+ */
+export const DRAG_SLOP = 6;
+
 export interface Rect {
   x: number;
   y: number;
@@ -34,20 +88,124 @@ export interface Rect {
   height: number;
 }
 
+export interface IslandPlacement extends Rect {
+  anchor: IslandAnchor;
+}
+
 /**
- * Centre the island window on the top edge of a display.
+ * The parts of an Electron `Display` the placement needs.
+ *
+ * Narrowed to a structural type so the geometry stays testable without a real
+ * display, which is the whole reason this module is separate from the window.
+ */
+export interface DisplayInfo {
+  bounds: Rect;
+  workArea: Rect;
+  /** `false` for every external monitor. */
+  internal: boolean;
+}
+
+/** A display we can both place the island on and recognise again later. */
+export interface IdentifiedDisplay extends DisplayInfo {
+  id: number;
+  label: string;
+}
+
+/**
+ * Pick the display to draw on, honouring a saved choice when it still exists.
+ *
+ * The fallback is the point of this function. A preference outlives the monitor
+ * it names -- the user parks the island on an external display, goes to a
+ * meeting, and opens the laptop somewhere else -- and an island placed on a
+ * disconnected screen is not merely misplaced, it is invisible, which is the
+ * one failure this whole surface cannot signal.
+ */
+export function resolveIslandDisplay<T extends IdentifiedDisplay>(
+  displays: T[],
+  primary: T,
+  preference: IslandDisplayPreference | null,
+): T {
+  if (!preference) return primary;
+  return displays.find((display) => display.id === preference.id)
+    ?? displays.find((display) => !!display.label && display.label === preference.label)
+    ?? primary;
+}
+
+/** Did this press travel far enough to mean "move me" rather than "toggle me"? */
+export function isDragGesture(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  slop: number = DRAG_SLOP,
+): boolean {
+  return Math.hypot(end.x - start.x, end.y - start.y) > slop;
+}
+
+/**
+ * Does this display have a camera housing interrupting its menu bar?
+ *
+ * `internal` is a fact rather than a guess: the notch is a property of a
+ * built-in Apple panel, so no external monitor has one whatever its shape.
+ * That clause alone keeps an ultrawide -- which is nowhere near 16:10 either --
+ * from being read as a notched laptop.
+ *
+ * The ratio then separates a notched built-in from an unnotched one (an Air, a
+ * pre-2021 Pro), which are exactly 16:10. See `NOTCH_MAX_ASPECT_RATIO` for why
+ * this is shape rather than the menu bar height it replaced.
+ */
+export function isNotchedDisplay(display: DisplayInfo): boolean {
+  if (!display.internal || display.bounds.height <= 0) return false;
+  return display.bounds.width / display.bounds.height < NOTCH_MAX_ASPECT_RATIO;
+}
+
+/**
+ * Place the island window on the top edge of a display.
  *
  * `y` is the display's own top, *inside* the menu bar. That only survives if the
  * window is created with `enableLargerThanScreen: true`: without it AppKit's
  * `constrainFrameRect:` snaps `y` down to the bottom of the menu bar the moment
  * the window becomes visible, and no window level overrides it.
+ *
+ * `x` is the centre of the display, *except* on a notched one. There the centre
+ * is the camera housing, and since the island draws inside the menu bar row the
+ * collapsed strip would be entirely behind it -- which is how this presented:
+ * the island was running and painting, and simply could not be seen. In that
+ * case the window is shifted left so its right edge clears the notch, and the
+ * returned `anchor` tells the renderer to draw against that edge and expand
+ * leftward. The window may then start left of the display; the overhang is
+ * transparent click-through canvas, and `enableLargerThanScreen` is what lets
+ * the frame keep the negative origin.
  */
-export function islandWindowBounds(displayBounds: Rect): Rect {
+export function islandPlacement(display: DisplayInfo): IslandPlacement {
+  const displayBounds = display.bounds;
+  const y = displayBounds.y;
+
+  if (!isNotchedDisplay(display)) {
+    return {
+      x: Math.round(displayBounds.x + displayBounds.width / 2 - ISLAND_WINDOW_WIDTH / 2),
+      y,
+      width: ISLAND_WINDOW_WIDTH,
+      height: ISLAND_WINDOW_HEIGHT,
+      anchor: 'center',
+    };
+  }
+
+  const notchWidth = displayBounds.width * NOTCH_WIDTH_RATIO;
+  const notchLeft = displayBounds.x + (displayBounds.width - notchWidth) / 2;
+  // Clamped against the *expanded* width, not the collapsed strip: the panel is
+  // the wider of the two and is what would run off the left edge on a narrow
+  // display. On a very narrow one the clamp wins and the island ends up nearer
+  // the notch than the clearance asks for, which is still visible.
+  const islandRight = Math.max(
+    displayBounds.x + ISLAND_EXPANDED_WIDTH,
+    notchLeft - NOTCH_CLEARANCE,
+  );
+
   return {
-    x: Math.round(displayBounds.x + displayBounds.width / 2 - ISLAND_WINDOW_WIDTH / 2),
-    y: displayBounds.y,
+    x: Math.round(islandRight - ISLAND_WINDOW_WIDTH),
+    y,
     width: ISLAND_WINDOW_WIDTH,
     height: ISLAND_WINDOW_HEIGHT,
+    anchor: 'notch-left',
   };
 }
 

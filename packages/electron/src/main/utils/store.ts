@@ -5,6 +5,7 @@ import * as path from 'path';
 import { RecentItem, SessionState, SessionWindow } from '../types';
 import { logger } from './logger';
 import { type EffortLevel, type ThinkingMode, parseEffortLevel, parseThinkingMode } from '@nimbalyst/runtime/ai/server/effortLevels';
+import type { IslandDisplayPreference } from '../../shared/menuBarIsland';
 import type { OnboardingConfig } from '../../shared/types/workspace';
 import { DEFAULT_ONBOARDING_CONFIG } from '../../shared/types/workspace';
 import { AlphaFeatureTag, getDefaultAlphaFeatures, ALPHA_FEATURES } from '../../shared/alphaFeatures';
@@ -280,6 +281,10 @@ interface AppStoreSchema {
   // it can be turned off without losing the tray icon and its panel.
   showTrayStrip?: boolean;
   trayStripStyle?: TrayStripStyle;
+  // Which display the user dragged the menu bar island onto. Absent means the
+  // primary display, which is also the fallback when this names a monitor that
+  // is no longer connected.
+  islandDisplay?: IslandDisplayPreference;
   // Advanced: V8 heap memory limit in MB (default: 4096 = 4GB)
   // Increase if you experience OOM crashes with large sessions
   maxHeapSizeMB?: number;
@@ -1725,6 +1730,24 @@ export function getTrayStripStyle(): TrayStripStyle {
 
 export function setTrayStripStyle(style: TrayStripStyle): void {
   getAppStore().set('trayStripStyle', style);
+}
+
+/**
+ * The display the user dragged the island onto, if any.
+ *
+ * Null rather than a default display because "no preference" and "the primary
+ * display" are different states: the first follows the primary as the user
+ * rearranges their monitors, the second would pin the island to whatever
+ * happened to be primary the day it was saved.
+ */
+export function getIslandDisplay(): IslandDisplayPreference | null {
+  const stored = getAppStore().get('islandDisplay');
+  if (!stored || typeof stored.id !== 'number') return null;
+  return { id: stored.id, label: typeof stored.label === 'string' ? stored.label : '' };
+}
+
+export function setIslandDisplay(preference: IslandDisplayPreference): void {
+  getAppStore().set('islandDisplay', preference);
 }
 
 // Completion Sound Settings

@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAtomValue } from 'jotai';
 import {
+  ISLAND_EXPANDED_WIDTH,
   MENU_BAR_ISLAND_CHANNELS,
   type MenuBarIslandState,
 } from '../../../shared/menuBarIsland';
@@ -203,7 +204,7 @@ export function MenuBarIslandApp() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const { strip, feed, expanded, snippets, idle, visible } = state;
+  const { strip, feed, expanded, snippets, idle, visible, anchor } = state;
 
   const sections = useMemo(() => ([
     { state: 'attention' as const, sessions: feed.needsAttention },
@@ -243,6 +244,18 @@ export function MenuBarIslandApp() {
       observer.disconnect();
     };
   }, [expanded, strip, feed]);
+
+  /** Whether a press is in flight, so stray pointermove is not read as a drag. */
+  const pressedRef = useRef(false);
+
+  const endPress = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!pressedRef.current) return;
+    pressedRef.current = false;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    window.electronAPI.send(MENU_BAR_ISLAND_CHANNELS.dragEnd);
+  };
 
   const handleSelect = (sessionId: string) => {
     const all = [
@@ -285,19 +298,59 @@ export function MenuBarIslandApp() {
          * later. Appearing needs no such easing -- it coincides with a real
          * transition, which is the point of every expansion here.
          */
-        className={`menu-bar-island absolute left-1/2 top-0 flex -translate-x-1/2 flex-col overflow-hidden rounded-b-[13px] bg-black transition-[width,height,box-shadow,opacity] duration-[260ms] ease-[cubic-bezier(.22,1,.36,1)] ${
-          expanded ? 'w-[420px] shadow-[0_10px_34px_rgba(0,0,0,0.55)]' : 'w-max'
+        /*
+         * `notch-left` pins the island to the window's right edge instead of
+         * its centre. Main has already placed that edge just left of the camera
+         * housing, so the island grows leftward and stays out from under it --
+         * centring on a notched display hides the collapsed strip completely.
+         */
+        className={`menu-bar-island absolute top-0 flex flex-col overflow-hidden rounded-b-[13px] bg-black transition-[width,height,box-shadow,opacity] duration-[260ms] ease-[cubic-bezier(.22,1,.36,1)] ${
+          anchor === 'notch-left' ? 'right-0' : 'left-1/2 -translate-x-1/2'
+        } ${
+          expanded ? 'shadow-[0_10px_34px_rgba(0,0,0,0.55)]' : 'w-max'
         } ${visible ? 'opacity-100' : 'opacity-0'}`}
-        style={{ height: expanded ? undefined : STRIP_HEIGHT }}
+        /*
+         * The expanded width is inline rather than a `w-[420px]` utility because
+         * main needs the same number to keep the open panel clear of the notch,
+         * and an interpolated arbitrary value would not survive Tailwind's
+         * static scan. Collapsed stays on `w-max`: it sizes to its content.
+         */
+        style={{
+          height: expanded ? undefined : STRIP_HEIGHT,
+          width: expanded ? ISLAND_EXPANDED_WIDTH : undefined,
+        }}
         data-testid="menu-bar-island"
         data-component="MenuBarIslandApp"
         data-expanded={expanded}
         data-visible={visible}
       >
+        {/*
+          * The pill is both the pin toggle and the drag handle for moving the
+          * island to another display's menu bar. The renderer does not choose
+          * between them: it reports the press, the movement and the release,
+          * and main -- which can sample the real cursor across displays of
+          * differing scale factors -- decides which gesture happened.
+          */}
         <button
           type="button"
           className="cursor-default text-left outline-none"
-          onClick={() => window.electronAPI.send(MENU_BAR_ISLAND_CHANNELS.togglePin)}
+          onPointerDown={(event) => {
+            // Capture, or the press stops reporting the moment the cursor
+            // leaves the pill -- which dragging to another screen does
+            // immediately. Without it a drag can never leave this display.
+            event.currentTarget.setPointerCapture(event.pointerId);
+            pressedRef.current = true;
+            window.electronAPI.send(MENU_BAR_ISLAND_CHANNELS.dragStart);
+          }}
+          onPointerMove={() => {
+            if (!pressedRef.current) return;
+            window.electronAPI.send(MENU_BAR_ISLAND_CHANNELS.dragMove);
+          }}
+          onPointerUp={endPress}
+          // A cancelled pointer must still end the press. Main holds the panel
+          // open for the whole drag, so a press that never reports its release
+          // pins the island open with no way back.
+          onPointerCancel={endPress}
           data-testid="menu-bar-island-strip"
         >
           <IslandStrip strip={strip} expanded={expanded} glyph={glyph} />
