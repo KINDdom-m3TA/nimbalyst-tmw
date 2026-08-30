@@ -23,6 +23,7 @@ import { GIT_INHERITED_ENV_UNSAFE } from './gitInheritedEnvUnsafe';
 import { gitOperationLock } from './GitOperationLock';
 import { getGitOperationLogService, recordGitActivity } from './GitOperationLogService';
 import { SessionCommitService } from './SessionCommitService';
+import { historyManager } from '../HistoryManager';
 
 const logger = log.scope('GitWorktreeService');
 
@@ -524,6 +525,20 @@ export class GitWorktreeService {
     }
 
     logger.info('Worktree directory confirmed deleted', { worktreePath });
+
+    // Step 4b: Retire pending AI reviews for files that lived in this worktree.
+    // Their paths can never resolve again, so the tags would sit pending
+    // forever, inflating the pending counts (#1403). This marks them reviewed;
+    // the rows and their baselines stay in document_history.
+    try {
+      const { count } = await historyManager.clearAllPending(worktreePath);
+      if (count > 0) {
+        logger.info('Retired pending AI reviews for removed worktree', { worktreePath, count });
+      }
+    } catch (error) {
+      // Never let history bookkeeping fail a worktree removal that succeeded.
+      logger.warn('Failed to retire pending reviews for removed worktree', { error, worktreePath });
+    }
 
     // Step 5: Delete the branch if we found it (best effort, don't fail if this doesn't work)
     if (branchName && branchName !== 'HEAD') {
