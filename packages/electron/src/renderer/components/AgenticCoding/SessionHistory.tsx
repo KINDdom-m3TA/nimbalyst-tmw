@@ -33,10 +33,10 @@ import {
 } from '../../store';
 import { alphaFeatureEnabledAtom, worktreesFeatureAvailableAtom } from '../../store/atoms/appSettings';
 import { activeWorkspacePathAtom } from '../../store/atoms/openProjects';
+import { useGitRepoProbe } from '../../hooks/useGitRepoProbe';
 import { activeSessionIdAtom as globalActiveSessionIdAtom, sessionPinnedUpdateAtom } from '../../store/atoms/sessions';
 import { collapsedGroupsAtom, sortOrderAtom, setCollapsedGroupsAtom, setSortOrderAtom } from '../../store/atoms/agentMode';
 import {
-  isGitRepoAtom,
   recentlyRenamedSessionAtom,
   selectSessionActionAtom,
   selectChildSessionActionAtom,
@@ -200,7 +200,7 @@ function compareNumbersAsc(a: number, b: number): number {
  *   - `activeWorkspacePathAtom` for the current workspace
  *   - `globalActiveSessionIdAtom` for the selected session
  *   - `collapsedGroupsAtom` / `sortOrderAtom` for user preferences
- *   - `isGitRepoAtom(workspacePath)` for the New Worktree button
+ *   - `useGitRepoProbe(workspacePath)` for the New Worktree button
  *   - `recentlyRenamedSessionAtom` for the rename-cache patch signal
  *   - The action atoms in `sessionHistoryActions.ts` for every handler
  *
@@ -217,7 +217,10 @@ const SessionHistoryComponent: React.FC = () => {
   const setSortOrderAction = useSetAtom(setSortOrderAtom);
   const onCollapsedGroupsChange = setCollapsedGroupsAction;
   const onSortOrderChange = setSortOrderAction;
-  const isGitRepo = useAtomValue(isGitRepoAtom(workspacePath));
+  // `undefined` until the probe resolves. Gate on an explicit `false` so a
+  // not-yet-answered probe never reads as "not a git repository".
+  const isGitRepo = useGitRepoProbe(workspacePath);
+  const isNotGitRepo = isGitRepo === false;
   const isWorktreesFeatureAvailable = useAtomValue(worktreesFeatureAvailableAtom);
   const isBlitzAlphaAvailable = useAtomValue(alphaFeatureEnabledAtom('blitz'));
 
@@ -318,7 +321,7 @@ const SessionHistoryComponent: React.FC = () => {
   const isSuperLoopsAlphaEnabled = useAtomValue(alphaFeatureEnabledAtom('super-loops'));
   // Super Loops is gated by its alpha feature alone (like Meta Agent), not by
   // developer mode. The worktree it creates still requires a git repo, which is
-  // enforced on the New Super Loop button (disabled when !isGitRepo).
+  // enforced on the New Super Loop button (disabled when isNotGitRepo).
   const isSuperLoopsAvailable = isSuperLoopsAlphaEnabled;
   const isMetaAgentEnabled = useAtomValue(alphaFeatureEnabledAtom('meta-agent'));
 
@@ -2088,10 +2091,10 @@ const SessionHistoryComponent: React.FC = () => {
   // Open the worktree picker modal. It drives creation by calling
   // onNewWorktreeSession({ baseBranch, name }).
   const openWorktreeBaseBranchPicker = useCallback(() => {
-    if (!isGitRepo || !onNewWorktreeSession) return;
+    if (isNotGitRepo || !onNewWorktreeSession) return;
     newDropdownMenu.setIsOpen(false);
     setWorktreeBaseBranchPickerOpen(true);
-  }, [isGitRepo, onNewWorktreeSession, newDropdownMenu]);
+  }, [isNotGitRepo, onNewWorktreeSession, newDropdownMenu]);
 
   // Handle new button click - if only one option available, trigger it directly
   const handleNewButtonClick = () => {
@@ -2941,11 +2944,11 @@ const SessionHistoryComponent: React.FC = () => {
       )}
       {onNewWorktreeSession && (
         <button
-          className={`session-history-new-option flex items-center w-full px-3 py-2 text-[13px] bg-transparent border-none text-[var(--nim-text)] cursor-pointer transition-colors duration-150 text-left gap-2 hover:bg-[var(--nim-bg-hover)] [&_svg]:shrink-0 [&_svg]:text-[var(--nim-text-muted)] [&>span]:flex-1 ${!isGitRepo ? 'opacity-50 cursor-not-allowed hover:bg-transparent' : ''}`}
+          className={`session-history-new-option flex items-center w-full px-3 py-2 text-[13px] bg-transparent border-none text-[var(--nim-text)] cursor-pointer transition-colors duration-150 text-left gap-2 hover:bg-[var(--nim-bg-hover)] [&_svg]:shrink-0 [&_svg]:text-[var(--nim-text-muted)] [&>span]:flex-1 ${isNotGitRepo ? 'opacity-50 cursor-not-allowed hover:bg-transparent' : ''}`}
           data-testid="new-worktree-session-button"
-          onClick={() => { if (isGitRepo) { openWorktreeBaseBranchPicker(); } }}
-          disabled={!isGitRepo}
-          title={!isGitRepo ? 'Worktrees require a git repository' : undefined}
+          onClick={() => { if (!isNotGitRepo) { openWorktreeBaseBranchPicker(); } }}
+          disabled={isNotGitRepo}
+          title={isNotGitRepo ? 'Worktrees require a git repository' : undefined}
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
             <path d="M5 13v-2.5a1.5 1.5 0 0 1 1.5-1.5h3"/>
@@ -2961,11 +2964,11 @@ const SessionHistoryComponent: React.FC = () => {
       )}
       {onNewBlitz && (
         <button
-          className={`session-history-new-option flex items-center w-full px-3 py-2 text-[13px] bg-transparent border-none text-[var(--nim-text)] cursor-pointer transition-colors duration-150 text-left gap-2 hover:bg-[var(--nim-bg-hover)] [&_svg]:shrink-0 [&_svg]:text-[var(--nim-text-muted)] ${!isGitRepo ? 'opacity-50 cursor-not-allowed hover:bg-transparent' : ''}`}
+          className={`session-history-new-option flex items-center w-full px-3 py-2 text-[13px] bg-transparent border-none text-[var(--nim-text)] cursor-pointer transition-colors duration-150 text-left gap-2 hover:bg-[var(--nim-bg-hover)] [&_svg]:shrink-0 [&_svg]:text-[var(--nim-text-muted)] ${isNotGitRepo ? 'opacity-50 cursor-not-allowed hover:bg-transparent' : ''}`}
           data-testid="new-blitz-button"
-          onClick={() => { if (isGitRepo) { onNewBlitz(); newDropdownMenu.setIsOpen(false); } }}
-          disabled={!isGitRepo}
-          title={!isGitRepo ? 'Blitz requires a git repository' : undefined}
+          onClick={() => { if (!isNotGitRepo) { onNewBlitz(); newDropdownMenu.setIsOpen(false); } }}
+          disabled={isNotGitRepo}
+          title={isNotGitRepo ? 'Blitz requires a git repository' : undefined}
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M9 2L4 9h4l-1 5 5-7H8l1-5z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
@@ -2989,11 +2992,11 @@ const SessionHistoryComponent: React.FC = () => {
       )}
       {isSuperLoopsAvailable && (
         <button
-          className={`session-history-new-option flex items-center w-full px-3 py-2 text-[13px] bg-transparent border-none text-[var(--nim-text)] cursor-pointer transition-colors duration-150 text-left gap-2 hover:bg-[var(--nim-bg-hover)] [&_svg]:shrink-0 [&_svg]:text-[var(--nim-text-muted)] ${!isGitRepo ? 'opacity-50 cursor-not-allowed hover:bg-transparent' : ''}`}
+          className={`session-history-new-option flex items-center w-full px-3 py-2 text-[13px] bg-transparent border-none text-[var(--nim-text)] cursor-pointer transition-colors duration-150 text-left gap-2 hover:bg-[var(--nim-bg-hover)] [&_svg]:shrink-0 [&_svg]:text-[var(--nim-text-muted)] ${isNotGitRepo ? 'opacity-50 cursor-not-allowed hover:bg-transparent' : ''}`}
           data-testid="new-super-loop-button"
-          onClick={() => { if (isGitRepo) { openSuperLoopDialog(); newDropdownMenu.setIsOpen(false); } }}
-          disabled={!isGitRepo}
-          title={!isGitRepo ? 'Super Loops require a git repository' : undefined}
+          onClick={() => { if (!isNotGitRepo) { openSuperLoopDialog(); newDropdownMenu.setIsOpen(false); } }}
+          disabled={isNotGitRepo}
+          title={isNotGitRepo ? 'Super Loops require a git repository' : undefined}
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M13 5.5H9.5M13 5.5L10.5 3M13 5.5L10.5 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>

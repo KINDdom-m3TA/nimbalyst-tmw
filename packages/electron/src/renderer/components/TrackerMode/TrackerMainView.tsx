@@ -92,9 +92,9 @@ import {
 } from './trackerSavedViews';
 import { orderTrackerItemsByLeverage, READINESS_LEVERAGE_SORT } from './trackerReadyQueue';
 import { useTrackerUnread } from '../../hooks/useTrackerUnread';
+import { useGitRepoProbe } from '../../hooks/useGitRepoProbe';
 import {
   createNewWorktreeSessionActionAtom,
-  isGitRepoAtom,
 } from '../../store/actions/sessionHistoryActions';
 import { setTrackerFavoriteAtom } from '../../store/atoms/trackerPersonalState';
 import { WorktreeBaseBranchPicker } from '../AgenticCoding/WorktreeBaseBranchPicker';
@@ -192,7 +192,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   // See nimbalyst#176.
   const defaultModel = useAtomValue(defaultAgentModelAtom);
   const isWorktreesFeatureAvailable = useAtomValue(worktreesFeatureAvailableAtom);
-  const isGitRepo = useAtomValue(isGitRepoAtom(workspacePath || ''));
+  const isGitRepo = useGitRepoProbe(workspacePath);
 
   useEffect(() => {
     if (!workspacePath) return;
@@ -1040,7 +1040,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
         });
       }}
       onLaunchSession={handleLaunchSession}
-      onLaunchWorktree={isWorktreesFeatureAvailable && isGitRepo ? handleLaunchWorktree : undefined}
+      onLaunchWorktree={isWorktreesFeatureAvailable && isGitRepo !== false ? handleLaunchWorktree : undefined}
       onArchive={handleArchiveItem}
       onDelete={handleDeleteItem}
       onOpenItem={handleItemSelect}
@@ -1385,7 +1385,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
               getLinkedSessions={getLinkedSessionOptions}
               onOpenSession={handleSwitchToAgentMode}
               onLaunchSession={handleLaunchSession}
-              onLaunchWorktree={isWorktreesFeatureAvailable && isGitRepo ? handleLaunchWorktree : undefined}
+              onLaunchWorktree={isWorktreesFeatureAvailable && isGitRepo !== false ? handleLaunchWorktree : undefined}
               favoriteItemIds={favoriteItemIds}
               onToggleFavorite={handleToggleFavorite}
               searchQuery={searchQuery}
@@ -1460,7 +1460,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
               getLinkedSessions={getLinkedSessionOptions}
               onOpenSession={handleSwitchToAgentMode}
               onLaunchSession={handleLaunchSession}
-              onLaunchWorktree={isWorktreesFeatureAvailable && isGitRepo ? handleLaunchWorktree : undefined}
+              onLaunchWorktree={isWorktreesFeatureAvailable && isGitRepo !== false ? handleLaunchWorktree : undefined}
               favoriteItemIds={favoriteItemIds}
               onToggleFavorite={handleToggleFavorite}
             />
