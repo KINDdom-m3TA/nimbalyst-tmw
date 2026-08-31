@@ -441,14 +441,20 @@ describe('groupTraySessions', () => {
 });
 
 describe('menu bar island render style', () => {
+  // `isStripEnabled()` is darwin-gated, so without pinning the platform none of
+  // this paints on a Linux CI runner and every assertion below sees zero calls.
+  let restorePlatform: () => void = () => {};
+
   beforeEach(() => {
     vi.clearAllMocks();
     resetSingleton();
+    restorePlatform = stubPlatform('darwin');
     isShowTrayStripMock.mockReturnValue(true);
     getTrayStripStyleMock.mockReturnValue('island');
   });
 
   afterEach(() => {
+    restorePlatform();
     isShowTrayStripMock.mockReturnValue(false);
     getTrayStripStyleMock.mockReturnValue('image');
   });
