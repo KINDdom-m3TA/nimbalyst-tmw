@@ -114,6 +114,8 @@ const nodeOnly = [
   'packages/electron/src/shared/analytics/**',
   'packages/runtime/src/ai/**',
   'packages/runtime/src/ui/git/__tests__/unifiedDiffModel.test.ts',
+  // The recovery planner is a pure function over three numbers.
+  'packages/runtime/src/sync/__tests__/trackerIdentityRecovery.test.ts',
   // `feedback-ui` is otherwise React components; only the pure scroll-carry
   // arithmetic is routed here, for the same reason as the diff model above.
   'packages/collab-client/src/feedback-ui/__tests__/artifactScrollCarry.test.ts',
@@ -125,6 +127,10 @@ const nodeOnly = [
   // boundary stubbed; it never mounts an editor, which is the whole point.
   'packages/electron/src/renderer/services/__tests__/HeadlessCollabDocument.test.ts',
   'packages/electron/src/renderer/services/__tests__/codecOnlyHeadlessEdit.test.ts',
+  // `nim` is a terminal process; nothing under it can touch a DOM. These were
+  // running in the jsdom project purely because they matched the default
+  // include, paying an environment they cannot use.
+  'packages/cli/src/**',
 ];
 
 // The node project's `include` and the jsdom project's `exclude` must describe

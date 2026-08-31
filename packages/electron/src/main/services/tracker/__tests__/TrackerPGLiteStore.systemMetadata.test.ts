@@ -210,6 +210,73 @@ async function expectStaleBlobKeyNotLeakedToCustomFields(db: TestDb, store: Trac
   expect(item?.customFields?.typeTags).toBeUndefined();
 }
 
+/**
+ * The room is the sole allocator of issue identity -- `TrackerRoom` says so
+ * outright, and enforces uniqueness across the whole room. So when an item
+ * arrives holding a key some local row already claims, the local row is the
+ * one that guessed: every client create path used to allocate its own
+ * `MAX(issue_number)+1` before the mutation was acked, which is why `LC-###`
+ * and the dotted `local_key` exist at all.
+ *
+ * The client used to resolve this backwards, dropping the number the room had
+ * just vouched for and keeping the local guess. That stranded the incoming row
+ * with no key at all, and no renumber path existed to give it one back.
+ */
+async function expectIncomingKeyWinsCollision(
+  db: TestDb,
+  store: TrackerPGLiteStore,
+) {
+  await db.query(
+    `INSERT INTO tracker_items (id, issue_number, issue_key, type, data, workspace)
+     VALUES ($1, 42, 'NIM-42', 'bug', $2, $3)`,
+    ['squatter-1', JSON.stringify({ title: 'Locally numbered first', status: 'to-do' }), WORKSPACE],
+  );
+
+  await store.applyRemoteItem({ ...envelope(), issueNumber: 42, issueKey: 'NIM-42' }, payload());
+
+  const rows = await db.query<{ id: string; issue_key: string | null; issue_number: unknown }>(
+    'SELECT id, issue_key, issue_number FROM tracker_items ORDER BY id',
+    [],
+  );
+  const byId = new Map(rows.rows.map((r) => [r.id, r]));
+
+  // The room's allocation lands on the item the room allocated it to.
+  expect(byId.get('bug-1')?.issue_key).toBe('NIM-42');
+  expect(Number(byId.get('bug-1')?.issue_number)).toBe(42);
+
+  // The local guess yields rather than being renumbered into the room's
+  // namespace -- a recycled number sends you to the wrong item with no warning.
+  expect(byId.get('squatter-1')?.issue_key).toBeNull();
+  expect(byId.get('squatter-1')?.issue_number).toBeNull();
+}
+
+/**
+ * A prefix change (`tracker_set_issue_key_prefix`, or the room's own conflict
+ * path handing back NIM -> NIMA) leaves two legitimately distinct keys sharing
+ * one number. Uniqueness keyed on the number alone called that a duplicate and
+ * stranded the second item.
+ */
+async function expectSameNumberDifferentPrefixCoexists(
+  db: TestDb,
+  store: TrackerPGLiteStore,
+) {
+  await db.query(
+    `INSERT INTO tracker_items (id, issue_number, issue_key, type, data, workspace)
+     VALUES ($1, 42, 'NIM-42', 'bug', $2, $3)`,
+    ['older-prefix-1', JSON.stringify({ title: 'Numbered under the old prefix', status: 'to-do' }), WORKSPACE],
+  );
+
+  await store.applyRemoteItem({ ...envelope(), issueNumber: 42, issueKey: 'NIMA-42' }, payload());
+
+  const rows = await db.query<{ id: string; issue_key: string | null }>(
+    'SELECT id, issue_key FROM tracker_items ORDER BY id',
+    [],
+  );
+  const byId = new Map(rows.rows.map((r) => [r.id, r.issue_key]));
+  expect(byId.get('older-prefix-1')).toBe('NIM-42');
+  expect(byId.get('bug-1')).toBe('NIMA-42');
+}
+
 async function expectSystemCollections(db: { query<T>(sql: string, params?: unknown[]): Promise<{ rows: T[] }> }) {
   const result = await db.query<{ data: unknown }>('SELECT data FROM tracker_items WHERE id = $1', ['bug-1']);
   const data = parseData(result.rows[0].data);
@@ -247,6 +314,8 @@ describe('TrackerPGLiteStore system metadata projection (PGLite)', () => {
         updated TIMESTAMPTZ DEFAULT NOW(),
         last_indexed TIMESTAMPTZ DEFAULT NOW()
       );
+      CREATE UNIQUE INDEX idx_tracker_workspace_issue_key
+        ON tracker_items(workspace, issue_key) WHERE issue_key IS NOT NULL;
     `);
     store = new TrackerPGLiteStore(db as any, WORKSPACE);
   });
@@ -312,6 +381,14 @@ describe('TrackerPGLiteStore system metadata projection (PGLite)', () => {
 
   it('does not leak a legacy row\'s stale blob key into customFields', async () => {
     await expectStaleBlobKeyNotLeakedToCustomFields(db as any, store);
+  });
+
+  it('gives the room\'s key to the item the room allocated it to', async () => {
+    await expectIncomingKeyWinsCollision(db as any, store);
+  });
+
+  it('lets one number carry two prefixes', async () => {
+    await expectSameNumberDifferentPrefixCoexists(db as any, store);
   });
 
   it('repairs a legacy blob copy but spares a collision-stranded row', async () => {
@@ -398,6 +475,14 @@ describe('TrackerPGLiteStore system metadata projection (SQLite)', () => {
 
   it('does not leak a legacy row\'s stale blob key into customFields', async () => {
     await expectStaleBlobKeyNotLeakedToCustomFields(db as any, store);
+  });
+
+  it('gives the room\'s key to the item the room allocated it to', async () => {
+    await expectIncomingKeyWinsCollision(db as any, store);
+  });
+
+  it('lets one number carry two prefixes', async () => {
+    await expectSameNumberDifferentPrefixCoexists(db as any, store);
   });
 
   it('repairs a legacy blob copy but spares a collision-stranded row', async () => {
