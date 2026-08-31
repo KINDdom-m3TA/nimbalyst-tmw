@@ -13,9 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- The title bar now carries two create buttons: one on the left that makes a new file, doc or item in the list you are looking at, and one on the right that always starts a new session.
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Cmd+N in Shared Docs opened the local new-file dialog instead of creating a shared document, and did nothing in the tracker.
 
 ### Removed
 <!-- Removed features go here -->
