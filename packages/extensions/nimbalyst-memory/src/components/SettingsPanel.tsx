@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { SettingsPanelProps } from '@nimbalyst/runtime';
+import { isKeywordOnly, isSemanticProviderFailing } from '../capabilityResults';
 
 interface IndexStatus {
   ready?: boolean;
@@ -25,7 +26,6 @@ interface IndexStatus {
   lastIndexedAt?: number | null;
   indexSizeBytes?: number;
   indexing?: boolean;
-  lastEmbedError?: string | null;
   embedder?: { id?: string; model?: string; dims?: number } | null;
   retrieval?: {
     mode?: 'hybrid' | 'keyword-only';
@@ -349,10 +349,9 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
   const totalChunks = status?.chunks ?? 0;
   const coverage =
     totalChunks > 0 ? Math.round(((status?.denseChunks ?? 0) / totalChunks) * 100) : 0;
-  const keywordOnly =
-    status?.retrieval?.mode === 'keyword-only' ||
-    status?.retrieval?.semantic?.available === false ||
-    Boolean(status?.lastEmbedError);
+  const keywordOnly = isKeywordOnly(status);
+  // The provider's error text stays out of the UI; only the fact of it surfaces.
+  const semanticProviderFailing = isSemanticProviderFailing(status);
   const breakdown = useMemo(
     () =>
       Object.entries(bySourceClass)
@@ -546,7 +545,9 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
 
             {keywordOnly && (
               <p style={{ margin: 0, color: 'var(--nim-warning, #d19a66)', lineHeight: 1.5 }}>
-                Local keyword search is active. Semantic matching is unavailable.
+                {semanticProviderFailing
+                  ? 'Local keyword search is active. Your configured embedding provider is not responding, so semantic matching is unavailable — check the API key in AI settings.'
+                  : 'Local keyword search is active. Semantic matching is unavailable.'}
               </p>
             )}
           </div>
