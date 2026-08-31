@@ -999,7 +999,14 @@ export class TrayManager {
    */
   private startFleetActivity(): void {
     if (this.fleetPublisher) return;
-    this.fleetPublisher = new FleetActivityPublisher({ send: sendFleetActivity });
+    // `isStripEnabled()` is read at flush time rather than captured here: the
+    // user can toggle Show Fleet Status from the tray menu at any point, and the
+    // phone should hear the current answer on the next send rather than whatever
+    // was true when the publisher was constructed.
+    this.fleetPublisher = new FleetActivityPublisher({
+      send: (payload) =>
+        sendFleetActivity(payload, this.isStripEnabled() && isShowTrayIcon()),
+    });
     this.publishFleetActivity();
     this.fleetActivityTimer = setInterval(() => this.publishFleetActivity(), STRIP_AGE_TICK_MS);
     this.fleetActivityTimer.unref?.();
