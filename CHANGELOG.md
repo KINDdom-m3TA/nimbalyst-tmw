@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Extensions can store secrets on Windows again; secrets saved on macOS and Linux by earlier versions are picked up automatically.
 - Sessions that were already unread when Nimbalyst started now appear in the menu bar again, up to the 25 most recent.
 - Files whose AI edits have already been committed no longer open with a leftover change count and review dot.
 - Images in a shared document now render in the web console instead of showing a broken-image placeholder.
