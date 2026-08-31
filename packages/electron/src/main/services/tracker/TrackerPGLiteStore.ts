@@ -327,6 +327,14 @@ export class TrackerPGLiteStore implements TrackerPersistence {
     delete dataJson.lastIndexed;
     delete dataJson.created;
     delete dataJson.updated;
+    // The identity keys live in the indexed columns, and only there. Keeping a
+    // second copy in the blob gave them two writers with different rules --
+    // the columns COALESCE, the blob is replaced wholesale from the server
+    // payload -- so they drifted and an item could report a key that was not
+    // its own. Every reader goes through the columns, so the blob copy could
+    // only ever be a wrong shadow of them.
+    delete dataJson.issueNumber;
+    delete dataJson.issueKey;
     liftSystemCollections(dataJson, record);
 
     // `data` carries device-local keys (e.g. linkedSessions) that the wire
@@ -341,6 +349,14 @@ export class TrackerPGLiteStore implements TrackerPersistence {
     // COALESCE-from-EXCLUDED-fallback-to-existing so a brand-new item still
     // gets the engine-provided defaults but an existing inline item keeps
     // its provenance.
+    //
+    // `content` needs the same treatment for a stronger reason: the body has
+    // no wire representation at all. The metadata envelope carries only a
+    // `bodyVersion` pointer -- the body itself lives in the separate
+    // `tracker-content/<itemId>` DocumentRoom -- so `payloadToRecord` always
+    // yields `content: undefined`. Writing the column from a remote payload
+    // could therefore only ever write NULL over the user's body: with the
+    // room connected, every ordinary metadata sync silently emptied the item.
     //
     // Issue-number conflict resolution: two clients that each had locally
     // assigned NIM-{N} before the new tracker room arbitrated them can
@@ -400,7 +416,7 @@ export class TrackerPGLiteStore implements TrackerPersistence {
         archived = EXCLUDED.archived,
         source = COALESCE(tracker_items.source, EXCLUDED.source),
         source_ref = COALESCE(tracker_items.source_ref, EXCLUDED.source_ref),
-        content = EXCLUDED.content,
+        content = COALESCE(EXCLUDED.content, tracker_items.content),
         updated = EXCLUDED.updated,
         last_indexed = NOW()`,
       [
@@ -493,6 +509,9 @@ export class TrackerPGLiteStore implements TrackerPersistence {
     delete dataJson.lastIndexed;
     delete dataJson.created;
     delete dataJson.updated;
+    // See applyRemoteItem: the identity keys are column-only.
+    delete dataJson.issueNumber;
+    delete dataJson.issueKey;
     liftSystemCollections(dataJson, record);
 
     // See applyRemoteItem for why the JSONB-merge + COALESCE pattern is
@@ -849,10 +868,17 @@ function pgliteRowToPayload(row: PGLiteTrackerItemRow): TrackerItemPayload {
     typeof row.data === 'string' ? JSON.parse(row.data) : ((row.data as Record<string, unknown>) || {});
 
   // Carve system/non-field keys out of `fields`.
+  //
+  // `issueNumber` / `issueKey` are listed because rows written before the
+  // identity keys became column-only still carry a stale copy in `data`, and
+  // that copy is exactly the one that drifted. Reading it back into `fields`
+  // would launder a known-wrong key into a payload; the row's own columns are
+  // the authority and are read separately below.
   const systemKeys = new Set([
     'authorIdentity', 'lastModifiedBy', 'createdByAgent',
     'linkedSessions', 'linkedCommitSha', 'linkedCommits', 'linkedPullRequests', 'documentId',
     'activity', 'comments', 'created', 'updated', 'origin', 'triagedAt', 'triagedBy',
+    'issueNumber', 'issueKey',
   ]);
   const fields: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(data)) {

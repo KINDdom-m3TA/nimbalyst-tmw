@@ -70,6 +70,7 @@ import { getMcpConfigService, isInternalMcpServerEnabled, areTrackerToolsEnabled
 import { historyManager } from '../../../../../electron/src/main/HistoryManager';
 import {
   appendLargeAttachmentInstructions,
+  appendFailedAttachmentNotice,
   buildMessageWithDocumentContext,
   prepareClaudeCodeAttachments,
 } from './claudeCode/messagePreparation';
@@ -721,6 +722,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
       imageContentBlocks,
       documentContentBlocks,
       largeAttachmentFilePaths,
+      failedAttachments,
     } = await prepareClaudeCodeAttachments({
       attachments,
       largeAttachmentCharThreshold: LARGE_ATTACHMENT_CHAR_THRESHOLD,
@@ -792,6 +794,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
       // Add large attachment file paths to system message
       // These are text attachments over 10k chars that were written to /tmp
       message = appendLargeAttachmentInstructions(message, largeAttachmentFilePaths);
+      message = appendFailedAttachmentNotice(message, failedAttachments);
 
       // Load env vars from ~/.claude/settings.json early so they're available for both
       // system prompt building (agent teams flag) and SDK environment setup
@@ -1459,6 +1462,13 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
                   // Tool finished -- re-arm the stall watchdog for the model's
                   // next thinking/generation phase. NIM-1481.
                   outstandingToolCalls = Math.max(0, outstandingToolCalls - 1);
+
+                  // The result is attached by mutating the object yielded at
+                  // tool_use, which a consumer that already handled that chunk
+                  // can never observe. Announce the completion so liveness
+                  // tracking -- the Git journal behind the menu-bar indicator --
+                  // can settle the call instead of spinning until turn end.
+                  yield { type: 'tool_result', toolCall };
 
                   // Diagnostic: detect "Stream closed" errors from the native binary
                   const resultText = typeof item.content === 'string' ? item.content : JSON.stringify(item.content);

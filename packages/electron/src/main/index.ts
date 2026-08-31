@@ -40,6 +40,7 @@ import {
 import { createWorkspaceManagerWindow, setupWorkspaceManagerHandlers, wasWorkspaceManagerManuallyClosed } from './window/WorkspaceManagerWindow.ts';
 import { createTeamManagementWindow, setupTeamManagementHandlers } from './window/TeamManagementWindow';
 import { setupTrayPanelHandlers } from './window/TrayPanelWindow';
+import { setupMenuBarIslandHandlers } from './window/MenuBarIslandWindow';
 import { applyDockIcon } from './utils/dockIcon';
 import { showSplashScreen, closeSplashScreen } from './window/SplashScreen';
 import { registerFileHandlers } from './ipc/FileHandlers';
@@ -122,6 +123,7 @@ import {
     getClaudeCodeSettings,
     getAttachmentStagingConfig,
     getOpenCodeModelCatalogCache,
+    getAiSettingsStore,
     getProviderApiKeyFromSettings,
     isSettingsAgentToolsDisabled,
     isTrackersAgentToolsEnabled,
@@ -140,6 +142,7 @@ import { registerSemanticSearchHandlers } from './ipc/SemanticSearchHandlers';
 import { SemanticCatalogService } from './services/SemanticCatalogService';
 import { registerShareHandlers } from './ipc/ShareHandlers';
 import { MCPConfigService } from './services/MCPConfigService';
+import { compressImage, shouldCompress } from './services/ImageCompressor';
 import { setMcpConfigServiceGetter } from './mcpConfigServiceRef';
 import { ClaudeCliLauncherConfig } from './services/ai/claudeCliLauncherSingleton';
 import { registerDatabaseBrowserHandlers } from './ipc/DatabaseBrowserHandlers';
@@ -215,16 +218,29 @@ import {
   OpenAICodexACPProvider,
   OpenCodeProvider,
   CopilotCLIProvider,
+  GrokBuildProvider,
+  CursorAgentProvider,
+  GeminiAntigravityProvider,
   configureOpenCodeModelCatalog,
 } from '@nimbalyst/runtime/ai/server';
 import { configureMcpServers } from '@nimbalyst/runtime/ai/server';
 import { matchesAllowPattern } from '@nimbalyst/runtime/ai/server/permissions/toolPermissionHelpers';
 import { resolveCodexPreEditHookScriptPath } from './services/ai/codexPreEditHookPath';
+import { createGrokAskUserQuestionHandler } from './services/ai/grokAskUserQuestionHandler';
+import { executeGeminiTool } from './services/ai/geminiToolExecutor';
 import { sessionFileTracker } from './services/SessionFileTracker';
+import {
+  refreshHeadlessAgentAvailability,
+  setHeadlessAgentEnhancedPathLoader,
+} from './services/ai/headlessAgentAvailability';
+import {
+  headlessAgentMcpConfigService,
+  type HeadlessAgentMcpTarget,
+} from './services/HeadlessAgentMcpConfigService';
 import { historyManager } from './HistoryManager';
 import { readFileContentOrNull } from './services/ai/aiServiceUtils';
 import { AISessionsRepository } from '@nimbalyst/runtime/storage/repositories/AISessionsRepository';
-import { isMCPServerEnabledForProvider, MCP_PROVIDER_IDS } from '@nimbalyst/runtime/types/MCPServerConfig';
+import { isMCPServerEnabledForProvider, MCP_PROVIDER_IDS, type MCPProviderId } from '@nimbalyst/runtime/types/MCPServerConfig';
 import type { MCPServerConfig } from '@nimbalyst/runtime/types/MCPServerConfig';
 import { logger, overrideConsole } from './utils/logger';
 import { startPerformanceMonitoring, stopPerformanceMonitoring } from './utils/performanceMonitor';
@@ -1997,6 +2013,15 @@ app.whenReady().then(async () => {
             void TrayManager.getInstance().clearAllUnreadSessions();
         },
     });
+    setupMenuBarIslandHandlers({
+        onSelectSession: (sessionId, workspacePath) =>
+            TrayManager.getInstance().handleSessionClick(sessionId, workspacePath),
+        onExpandedChange: (expanded) =>
+            TrayManager.getInstance().onIslandExpandedChange(expanded),
+        onNewSession: () => TrayManager.getInstance().handleNewSession(),
+        onOpenApp: () => TrayManager.getInstance().handleOpenApp(),
+        onSettingChange: (change) => TrayManager.getInstance().applyIslandSetting(change),
+    });
     setupSessionFileHandlers();
     setupCanvasRevisionProvenanceHandlers();
     registerSlashCommandHandlers();
@@ -2219,6 +2244,37 @@ app.whenReady().then(async () => {
         }
         return enabledServers;
     });
+    /**
+     * Filter the merged MCP config down to the servers enabled for one
+     * provider, dropping any OAuth server the user has not authorized.
+     *
+     * Extracted because the per-provider loaders below were four copies of the
+     * same twenty lines with the provider id and a log string swapped.
+     */
+    const loadEnabledMcpServersFor = async (
+        providerId: MCPProviderId,
+        displayName: string,
+        workspacePath?: string,
+    ): Promise<Record<string, any>> => {
+        if (!mcpConfigService) {
+            throw new Error('MCP config service not initialized');
+        }
+        const mergedConfig = await mcpConfigService.getMergedConfig(workspacePath);
+        const enabledServers: Record<string, any> = {};
+        for (const [name, config] of Object.entries(mergedConfig.mcpServers || {})) {
+            if (!isMCPServerEnabledForProvider(config as MCPServerConfig, providerId)) continue;
+            const isAuthorized = await mcpConfigService.isOAuthAuthorized(config as MCPServerConfig, {
+                useMcpRemoteForNativeOAuth: true,
+            });
+            if (!isAuthorized) {
+                logger.mcp.info(`[MCP] Skipping unauthorized OAuth server for ${displayName}: ${name}`);
+                continue;
+            }
+            enabledServers[name] = mcpConfigService.processServerConfigForRuntime(config as any);
+        }
+        return enabledServers;
+    };
+
     CopilotCLIProvider.setMCPConfigLoader(async (workspacePath?: string) => {
         if (!mcpConfigService) {
             throw new Error('MCP config service not initialized');
@@ -2241,6 +2297,43 @@ app.whenReady().then(async () => {
         }
         return enabledServers;
     });
+
+    // Cursor reads MCP servers from a config file, not from a command-line
+    // list or a session/new payload. So its loader writes the filtered set to
+    // disk before returning it -- the returned value still feeds the provider's
+    // mcpServerCount, but the file is what the CLI acts on. Only
+    // `nimbalyst:`-prefixed entries are touched; see
+    // HeadlessAgentMcpConfigService.
+    const syncHeadlessAgentMcpConfig = async (
+        target: HeadlessAgentMcpTarget,
+        providerId: MCPProviderId,
+        displayName: string,
+        workspacePath?: string,
+    ): Promise<Record<string, any>> => {
+        const servers = await loadEnabledMcpServersFor(providerId, displayName, workspacePath);
+        try {
+            const written = await headlessAgentMcpConfigService.sync(target, servers, workspacePath);
+            if (written) {
+                logger.mcp.info(`[MCP] Wrote ${Object.keys(servers).length} server(s) for ${displayName}: ${written}`);
+            }
+        } catch (error) {
+            // A turn with no MCP servers is far better than a turn that cannot
+            // start, so this never throws into the provider.
+            logger.mcp.warn(`[MCP] Could not write ${displayName} MCP config:`, error);
+        }
+        return servers;
+    };
+
+    // Grok gets its servers inline through ACP `session/new`, so it writes
+    // nothing to disk. `~/.grok/mcp.json` used to be written here for the old
+    // `grok -p` transport; it is mode 0644 and holds resolved credentials, so
+    // once ACP delivery landed the write was redundant exposure.
+    GrokBuildProvider.setMCPConfigLoader(
+        (workspacePath?: string) => loadEnabledMcpServersFor(MCP_PROVIDER_IDS.GROK, 'Grok', workspacePath),
+    );
+    CursorAgentProvider.setMCPConfigLoader(
+        (workspacePath?: string) => syncHeadlessAgentMcpConfig('cursor-agent', MCP_PROVIDER_IDS.CURSOR, 'Cursor', workspacePath),
+    );
 
     // Claude CLI (subscription) launcher shares the Claude Agent MCP filter —
     // the genuine CLI hits the identical MCP handlers as the SDK path (NIM-806).
@@ -2343,6 +2436,8 @@ app.whenReady().then(async () => {
     OpenAICodexACPProvider.setShellEnvironmentLoader(() => getShellEnvironment());
     OpenCodeProvider.setShellEnvironmentLoader(() => getShellEnvironment());
     CopilotCLIProvider.setShellEnvironmentLoader(() => getShellEnvironment());
+    GrokBuildProvider.setShellEnvironmentLoader(() => getShellEnvironment());
+    CursorAgentProvider.setShellEnvironmentLoader(() => getShellEnvironment());
 
     // Inject enhanced PATH loader so agents can access system tools
     // (docker, homebrew, nvm, etc.) that are missing from Electron's GUI PATH.
@@ -2354,6 +2449,43 @@ app.whenReady().then(async () => {
     OpenAICodexACPProvider.setEnhancedPathLoader(() => getEnhancedPath());
     OpenCodeProvider.setEnhancedPathLoader(() => getEnhancedPath());
     CopilotCLIProvider.setEnhancedPathLoader(() => getEnhancedPath());
+    GrokBuildProvider.setEnhancedPathLoader(() => getEnhancedPath());
+    CursorAgentProvider.setEnhancedPathLoader(() => getEnhancedPath());
+
+    // Gemini executes its tools in this process. The provider ships in the
+    // runtime package, which cannot import from main, so the executor is
+    // injected rather than imported.
+    GeminiAntigravityProvider.setToolExecutor(executeGeminiTool);
+    // The Antigravity language server enforces a supported-build floor against
+    // --override_ide_version and rejects anything below it. Reading the value
+    // from settings means a user hit by a vendor-side bump can raise it without
+    // waiting for a Nimbalyst release; the baked-in default is what works today.
+    GeminiAntigravityProvider.setServerConfigLoader(() => {
+      const settings = (getAiSettingsStore().get('providerSettings', {}) as Record<string, {
+        overrideIdeVersion?: unknown;
+        spawnPortCandidates?: unknown;
+      }>)['antigravity-gemini-agent'] ?? {};
+      return {
+        overrideIdeVersion: typeof settings.overrideIdeVersion === 'string'
+          ? settings.overrideIdeVersion
+          : undefined,
+        spawnPortCandidates: Array.isArray(settings.spawnPortCandidates)
+          ? settings.spawnPortCandidates.filter(
+            (port): port is number => typeof port === 'number' && Number.isFinite(port) && port > 0,
+          )
+          : undefined,
+      };
+    });
+
+    // Grok, Cursor and Gemini default to on when their tool is present and
+    // usable. Deliberately fire-and-forget: subprocess spawns must not sit on
+    // the startup path, and until this resolves all three read as unavailable,
+    // so the providers appear a beat after launch rather than blocking it.
+    // Nothing is written to settings -- see headlessAgentAvailability.ts.
+    setHeadlessAgentEnhancedPathLoader(() => getEnhancedPath());
+    void refreshHeadlessAgentAvailability().catch((error) => {
+      logger.ai.warn('[AI] Headless agent availability probe failed:', error);
+    });
 
     configureOpenCodeModelCatalog({
       loadCache: (workspacePath) => getOpenCodeModelCatalogCache(workspacePath),
@@ -2574,6 +2706,8 @@ app.whenReady().then(async () => {
       ClaudeCodeProvider.setSecurityLogger(securityLogger);
       OpenAICodexProvider.setSecurityLogger(securityLogger);
       OpenAICodexACPProvider.setSecurityLogger(securityLogger);
+      GrokBuildProvider.setSecurityLogger(securityLogger);
+      CursorAgentProvider.setSecurityLogger(securityLogger);
     }
 
     ClaudeCodeProvider.setClaudeSettingsPatternSaver(patternSaver);
@@ -2587,6 +2721,20 @@ app.whenReady().then(async () => {
     OpenAICodexACPProvider.setPermissionPatternSaver(patternSaver);
     OpenAICodexACPProvider.setPermissionPatternChecker(patternChecker);
     OpenAICodexACPProvider.setTrustChecker(trustChecker);
+
+    GrokBuildProvider.setPermissionPatternSaver(patternSaver);
+    GrokBuildProvider.setPermissionPatternChecker(patternChecker);
+    GrokBuildProvider.setTrustChecker(trustChecker);
+
+    // Grok's native `ask_user_question` tool reaches the user through the
+    // ordinary AskUserQuestion widget. Without a handler the ACP request
+    // returns `cancelled` and Grok answers itself, which is the bug that
+    // started this workstream.
+    GrokBuildProvider.setAskUserQuestionHandler(createGrokAskUserQuestionHandler());
+
+    // Cursor's one-shot headless transport still gates the whole turn; Grok's
+    // ACP transport uses the same trust check plus per-tool permission events.
+    CursorAgentProvider.setTrustChecker(trustChecker);
 
     // ACP exposes pre/post file-write hooks. Wire them so Codex ACP edits
     // produce the same FilesEditedSidebar entries and pre-edit baselines as
@@ -2650,7 +2798,12 @@ app.whenReady().then(async () => {
     // Inject image compressor
     // Compresses images to fit within Claude API 5MB base64 limit
     ClaudeCodeProvider.setImageCompressor(async (buffer, mimeType, options) => {
-      const { compressImage } = await import('./services/ImageCompressor');
+      // A small or animated image gains nothing from a re-encode, so decoding it
+      // only creates a way to fail. Skipping keeps those attachments off Jimp
+      // entirely. #1389
+      if (!shouldCompress(buffer, mimeType)) {
+        return { buffer, mimeType, wasCompressed: false };
+      }
       const result = await compressImage(buffer, mimeType, options);
       return {
         buffer: result.buffer,

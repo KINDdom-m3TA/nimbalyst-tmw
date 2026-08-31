@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { createIpcSubscriber } from './ipcSubscriptions.ts';
 import {ClaudeForWindowsInstallation} from "../main/services/CLIManager.ts";
 import type { GhCliStatus } from '../main/services/GhCliDetector.ts';
+import type { GitStatusChangedPayload } from '../main/services/GitStatusRefreshCoordinator.ts';
 import type {
   AppendLocalReplicaUpdateInput,
   AppendRemoteReplicaUpdatesInput,
@@ -605,6 +606,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAIModels: () => ipcRenderer.invoke('ai:getModels'),
   // Aliases for consistency with component naming
   aiGetSettings: () => ipcRenderer.invoke('ai:getSettings'),
+  aiGetHeadlessAgentAvailability: () => ipcRenderer.invoke('ai:getHeadlessAgentAvailability'),
   aiSaveSettings: (settings: any) => ipcRenderer.invoke('ai:saveSettings', settings),
   aiTestConnection: (provider: string, workspacePath?: string) =>
     ipcRenderer.invoke('ai:testConnection', provider, workspacePath),
@@ -637,6 +639,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // CLI management
   cliCheckInstallation: (tool: string) => ipcRenderer.invoke('cli:checkInstallation', tool),
+  cliGetInstallStrategy: (tool: string) => ipcRenderer.invoke('cli:getInstallStrategy', tool),
   cliInstall: (tool: string, options: any) => ipcRenderer.invoke('cli:install', tool, options),
   cliUninstall: (tool: string) => ipcRenderer.invoke('cli:uninstall', tool),
   cliUpgrade: (tool: string) => ipcRenderer.invoke('cli:upgrade', tool),
@@ -655,7 +658,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('ai:error', handler);
     return () => ipcRenderer.removeListener('ai:error', handler);
   },
-  onAIApplyDiff: (callback: (data: { replacements: any[], resultChannel: string, targetFilePath?: string }) => void) => {
+  onAIApplyDiff: (callback: (data: { replacements: any[], resultChannel: string, targetFilePath?: string, workspacePath?: string, agent?: { sessionId: string; sessionName: string } }) => void) => {
     const handler = (_event: any, data: any) => callback(data);
     ipcRenderer.on('ai:applyDiff', handler);
     return () => ipcRenderer.removeListener('ai:applyDiff', handler);
@@ -720,7 +723,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // MCP Server operations
-  onMcpApplyDiff: (callback: (data: { replacements: any[], resultChannel: string }) => void) => {
+  onMcpApplyDiff: (callback: (data: { replacements: any[], resultChannel: string, targetFilePath?: string, workspacePath?: string, agent?: { sessionId: string; sessionName: string } }) => void) => {
     const handler = (_event: any, data: any) => callback(data);
     ipcRenderer.on('mcp:applyDiff', handler);
     return () => ipcRenderer.removeListener('mcp:applyDiff', handler);
@@ -730,12 +733,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('mcp:streamContent', handler);
     return () => ipcRenderer.removeListener('mcp:streamContent', handler);
   },
-  onMcpReadCollabDoc: (callback: (data: { targetFilePath: string, resultChannel: string }) => void) => {
+  onMcpReadCollabDoc: (callback: (data: { targetFilePath: string, resultChannel: string, workspacePath?: string }) => void) => {
     const handler = (_event: any, data: any) => callback(data);
     ipcRenderer.on('mcp:readCollabDoc', handler);
     return () => ipcRenderer.removeListener('mcp:readCollabDoc', handler);
   },
-  sendMcpReadCollabDocResult: (resultChannel: string, result: { success: boolean; content?: string; error?: string }) => {
+  sendMcpReadCollabDocResult: (resultChannel: string, result: { success: boolean; content?: string; error?: string; code?: string }) => {
     ipcRenderer.send(resultChannel, result);
   },
   onMcpReadCollabDocComments: (callback: (data: any) => void) => {
@@ -1074,6 +1077,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
           snippet: string;
           score: number;
           signals: { dense: boolean; sparse: boolean };
+          /** Raw pre-fusion scores; `score` is an RRF rank and carries no threshold. */
+          similarity?: { cosine?: number; bm25?: number };
         }>
       >,
   },
@@ -2121,8 +2126,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Git operations (real-time status events)
   git: {
     // Listen for git status changes (staging, unstaging, etc.)
-    onStatusChanged: (callback: (data: { workspacePath: string }) => void) => {
-      const handler = (_event: any, data: { workspacePath: string }) => callback(data);
+    // `revision`/`status` are present when main computed the snapshot itself
+    // (after a Git operation settled). The index and ref watchers still send the
+    // path-only shape, so both must stay handled.
+    onStatusChanged: (callback: (data: GitStatusChangedPayload) => void) => {
+      const handler = (_event: any, data: GitStatusChangedPayload) => callback(data);
       ipcRenderer.on('git:status-changed', handler);
       return () => ipcRenderer.removeListener('git:status-changed', handler);
     },

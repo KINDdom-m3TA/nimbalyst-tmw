@@ -11,6 +11,7 @@ import {
   isExtensionAgentProvider,
   resolveExtensionAgentRef,
 } from './providerResolution';
+import { resolveProviderAuthRequirement } from './providerAuthRequirement';
 import { getAgentProviderRegistry } from '../../extensions/AgentProviderRegistry';
 import {
   SessionManager,
@@ -22,11 +23,17 @@ import {
   ClaudeCodeProvider,
   OpenAICodexProvider,
   OpenCodeProvider,
+  GeminiAntigravityProvider,
 } from '@nimbalyst/runtime/ai/server';
 import { agentCapabilitiesForProviderType } from '@nimbalyst/runtime/ai/server/agentCapabilities';
 import { CLAUDE_CODE_SAFE_FALLBACK_MODEL } from '@nimbalyst/runtime/ai/modelConstants';
 import { reconcileClaudeCodeModels } from './claudeCodeModelReconcile';
 import { isModelEnabled, resolveProviderEnabled } from './modelEnablementFilter';
+import {
+  getCachedHeadlessAgentAvailability,
+  refreshHeadlessAgentAvailability,
+  type HeadlessAgentId,
+} from './headlessAgentAvailability';
 import { getSessionStateManager } from '@nimbalyst/runtime/ai/server/SessionStateManager';
 import { parseContextUsageMessage } from '@nimbalyst/runtime/ai/server/utils/contextUsage';
 import { isBedrockToolSearchError } from '@nimbalyst/runtime/ai/server/utils/errorDetection';
@@ -61,6 +68,7 @@ import { getSettingsService } from '../SettingsService';
 import { subscribeProviderSettingsInvalidation } from './providerSettingsCacheInvalidation';
 import { windowStates, findWindowByWorkspace, getWindowId, createWindow, isAppQuitting } from '../../window/WindowManager';
 import { getWindowIdForWindow, resolveActiveWorkspacePathForWindowId } from '../../window/windowState';
+import { resolveSenderWorkspacePath } from '../../window/captureWindowWorkspace';
 import { sessionFileTracker } from '../SessionFileTracker';
 import { extractFilePath } from './tools/extractFilePath';
 import { handleBackendTool } from '../../mcp/tools/backendToolHandler';
@@ -69,6 +77,7 @@ import { resolveBackendWorkspacePath } from '../../mcp/mcpWorkspaceResolver';
 import { toolCallMatcher, unwrapShellCommand } from '../ToolCallMatcher';
 import { workspaceFileEditAttributionService } from '../WorkspaceFileEditAttributionService';
 import {AnalyticsService} from "../analytics/AnalyticsService.ts";
+import { trackCreateAiSession } from '../analytics/sessionLaunchAnalytics';
 import { FeatureUsageService, FEATURES } from "../FeatureUsageService.ts";
 import { historyManager } from '../../HistoryManager';
 import { addGitignoreBypass } from '../../file/WorkspaceEventBus';
@@ -872,6 +881,11 @@ export class AIService {
       case 'openai-codex':
         return globalApiKeys['openai-codex'];
       case 'lmstudio':
+        return 'not-required';
+      case 'antigravity-gemini-agent':
+        // Rides the user's existing Antigravity / ~/.gemini login. Nimbalyst
+        // holds no key for it, and deliberately reads no env var -- see the
+        // standing rule in CLAUDE.md.
         return 'not-required';
       default:
         return globalApiKeys[provider];
@@ -1750,7 +1764,7 @@ export class AIService {
     // instance on this session; the first one that exists tells us the type.
     const providerCandidates = request.provider
       ? [request.provider]
-      : ['claude-code', 'openai-codex', 'openai-codex-acp', 'opencode'];
+      : ['claude-code', 'openai-codex', 'openai-codex-acp', 'opencode', 'grok-build', 'cursor-agent'];
 
     let instance: AIProvider | undefined;
     let resolvedType: string | null = request.provider ?? null;
@@ -2013,38 +2027,14 @@ export class AIService {
       // Extension-agent providers defer auth to the extension itself, so they
       // skip this switch entirely (no apiKey requirement on the host side).
       if (!isExtensionAgentProvider(provider)) {
-        switch (provider) {
-          case 'claude':
-            if (!apiKey) {
-              throw new Error('Anthropic API key not configured');
-            }
-            break;
-          case 'claude-code':
-            // Claude Code: API key is optional, uses SSO login if not provided
-            // No error if missing - will use SSO login
-            break;
-          case 'claude-code-cli':
-            // Genuine `claude` CLI: uses its own login/subscription, no API key.
-            break;
-          case 'openai':
-            if (!apiKey) {
-              throw new Error('OpenAI API key not configured');
-            }
-            break;
-          case 'openai-codex':
-            // Codex SDK uses its own auth (codex auth login), API key is optional
-            break;
-          case 'opencode':
-            // OpenCode uses its own config, API key is optional
-            break;
-          case 'copilot-cli':
-            // Copilot uses its own CLI auth (copilot auth login), no API key needed
-            break;
-          case 'lmstudio':
-            // LMStudio doesn't need an API key, just the base URL
-            break;
-          default:
-            throw new Error(`Unknown provider: ${provider}`);
+        // Shared with the send path in MessageStreamingHandler — see
+        // providerAuthRequirement.ts for why this is not an inline switch.
+        const authRequirement = resolveProviderAuthRequirement(provider as AIProviderType);
+        if (!authRequirement) {
+          throw new Error(`Unknown provider: ${provider}`);
+        }
+        if (authRequirement.requiresApiKey && !apiKey) {
+          throw new Error(authRequirement.missingKeyMessage);
         }
       }
 
@@ -2230,10 +2220,15 @@ export class AIService {
       // the index for pendingExecution flags. We do NOT call watchSession() here because
       // it creates a WebSocket connection per session, causing performance issues.
 
-      this.analytics.sendEvent('create_ai_session', {
+      // Was a second, drifted copy of the SessionHandlers emitter -- it omitted
+      // `is_meta_agent_session`, so meta-agent sessions created through this
+      // path were counted as ordinary ones. Both now go through one function.
+      trackCreateAiSession({
         provider,
-        is_worktree_session: !!session.worktreeId,
-        is_workstream_child: !!session.parentSessionId,
+        worktreeId: session.worktreeId,
+        parentSessionId: session.parentSessionId,
+        agentRole: (session as { agentRole?: string }).agentRole,
+        launchSource: (session as { launchSource?: string }).launchSource,
       });
       return session;
     });
@@ -3189,6 +3184,41 @@ export class AIService {
       this.interruptCurrentTurn(sessionId)
     );
 
+    /**
+     * Effective on/off state for the agents whose default is decided by
+     * detection rather than a constant.
+     *
+     * The renderer needs this at hydration: its own default table cannot tell
+     * "user turned it off" from "never touched", so without this the settings
+     * toggle would render OFF while the model picker showed the provider ON.
+     * Awaits any in-flight probe so the answer is deterministic rather than
+     * whatever the cache happened to hold.
+     */
+    safeHandle('ai:getHeadlessAgentAvailability', async () => {
+      await refreshHeadlessAgentAvailability();
+      const providerSettings = this.getNormalizedProviderSettings() as Record<string, any>;
+      const agents: HeadlessAgentId[] = ['grok-build', 'cursor-agent', 'antigravity-gemini-agent'];
+      const result: Record<string, {
+        installed: boolean;
+        signedIn: boolean;
+        defaultEnabled: boolean;
+        effectiveEnabled: boolean;
+        /** Resolved binary, so a panel can show WHERE it found the tool. */
+        executablePath?: string;
+      }> = {};
+      for (const agent of agents) {
+        const availability = getCachedHeadlessAgentAvailability(agent);
+        result[agent] = {
+          installed: availability.installed,
+          signedIn: availability.signedIn,
+          defaultEnabled: availability.installed && availability.signedIn,
+          effectiveEnabled: resolveProviderEnabled(agent, providerSettings[agent]),
+          executablePath: availability.executablePath,
+        };
+      }
+      return result;
+    });
+
     // Settings handlers
     safeHandle('ai:getSettings', async () => {
       const apiKeys = this.getSettingsStore().get('apiKeys', {}) as Record<string, string>;
@@ -3396,6 +3426,15 @@ export class AIService {
             // Copilot uses its own CLI auth, no API key needed
             apiKey = 'not-required';
             break;
+          case 'grok-build':
+          case 'cursor-agent':
+            // CLI login only; no API key to test.
+            apiKey = 'not-required';
+            break;
+          case 'antigravity-gemini-agent':
+            // Antigravity app login only; no API key to test.
+            apiKey = 'not-required';
+            break;
           case 'lmstudio':
             // LMStudio doesn't need an API key, just test the connection
             apiKey = 'not-required';
@@ -3403,6 +3442,21 @@ export class AIService {
           default:
             return { success: false, error: `Unknown provider: ${provider}` };
         }
+      }
+
+      // Gemini's connectivity probe is the presence of the Antigravity install.
+      // Deliberately NOT a live turn: the alternative is spawning a ~120MB
+      // language server from a settings button, and a signed-out user would
+      // still pass an install check either way -- sign-in cannot be read
+      // without a keychain prompt (see headlessAgentAvailability.ts). So the
+      // check answers exactly what it can, and says so when it fails.
+      if (provider === 'antigravity-gemini-agent') {
+        return GeminiAntigravityProvider.isInstalled()
+          ? { success: true, provider }
+          : {
+            success: false,
+            error: GeminiAntigravityProvider.NOT_INSTALLED_MESSAGE,
+          };
       }
 
       // Extension-agent providers: skip the per-provider connectivity probes
@@ -3603,6 +3657,15 @@ export class AIService {
       if (providerSettings['openai']?.enabled === true && !!apiKeys['openai']) enabledSet.add('openai');
       if (providerSettings['openai-codex']?.enabled === true) enabledSet.add('openai-codex');
       if (providerSettings['opencode']?.enabled === true) enabledSet.add('opencode');
+      // Without these the model picker stays empty for an enabled provider:
+      // the catalog is only fetched for ids in this set. Both default to
+      // "on if their CLI is installed and signed in", so they must go through
+      // resolveProviderEnabled rather than reading the flag directly.
+      if (resolveProviderEnabled('grok-build', providerSettings['grok-build'])) enabledSet.add('grok-build');
+      if (resolveProviderEnabled('cursor-agent', providerSettings['cursor-agent'])) enabledSet.add('cursor-agent');
+      if (resolveProviderEnabled('antigravity-gemini-agent', providerSettings['antigravity-gemini-agent'])) {
+        enabledSet.add('antigravity-gemini-agent');
+      }
       if (providerSettings['lmstudio']?.enabled === true) enabledSet.add('lmstudio');
 
       const modelsConfig = {
@@ -3861,6 +3924,24 @@ export class AIService {
           enabled: providerSettings['copilot-cli']?.enabled === true,
           models: providerSettings['copilot-cli']?.models,
           hiddenModels: providerSettings['copilot-cli']?.hiddenModels
+        },
+        'grok-build': {
+          enabled: resolveProviderEnabled('grok-build', providerSettings['grok-build']),
+          models: providerSettings['grok-build']?.models,
+          hiddenModels: providerSettings['grok-build']?.hiddenModels
+        },
+        'cursor-agent': {
+          enabled: resolveProviderEnabled('cursor-agent', providerSettings['cursor-agent']),
+          models: providerSettings['cursor-agent']?.models,
+          hiddenModels: providerSettings['cursor-agent']?.hiddenModels
+        },
+        'antigravity-gemini-agent': {
+          enabled: resolveProviderEnabled(
+            'antigravity-gemini-agent',
+            providerSettings['antigravity-gemini-agent'],
+          ),
+          models: providerSettings['antigravity-gemini-agent']?.models,
+          hiddenModels: providerSettings['antigravity-gemini-agent']?.hiddenModels
         },
         'lmstudio': {
           enabled: providerSettings['lmstudio']?.enabled === true,
@@ -4157,12 +4238,17 @@ export class AIService {
       }
 
       // Resolve the workspace: explicit arg wins, else the window's active
-      // project (honors the project rail selection in Multi-Project mode).
+      // project (honors the project rail selection in Multi-Project mode), else
+      // the offscreen mount's workspace when the sender is the hidden screenshot
+      // capture window, which WindowManager never registers.
       let workspacePath = options?.workspacePath;
       if (!workspacePath) {
         const browserWindow = BrowserWindow.fromWebContents(event.sender);
         const windowId = browserWindow ? getWindowId(browserWindow) : null;
-        workspacePath = resolveActiveWorkspacePathForWindowId(windowId) ?? undefined;
+        workspacePath = resolveSenderWorkspacePath({
+          windowId,
+          webContentsId: event.sender?.id,
+        });
       }
       if (!workspacePath) {
         throw new Error('No workspace path available for backend tool call');

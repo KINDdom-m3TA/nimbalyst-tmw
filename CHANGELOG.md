@@ -10,13 +10,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- The macOS menu bar shows your session fleet at a glance: it names a session for a few seconds as it starts, finishes, blocks or fails, flags one that has stopped responding, and quiets to a single mark when nothing is running. It takes the place of the menu bar icon rather than sitting beside it, and a row along the bottom of the panel switches back to the plain icon, hides the fleet status, or turns system notifications off if the two feel duplicative. Drag it onto whichever display's menu bar you want, where it sits clear of a MacBook's camera notch. The same view reaches your iPhone as a Live Activity on the Lock Screen and in the Dynamic Island, with the sessions waiting on you ranked by how long they have been waiting; tap one to open it. The phone card stands down while you are sitting at the Mac, so you never see the same counts twice.
+- Quick Track (Cmd+Shift+I) files a tracker item of any type from anywhere in the app without leaving what you were on: type a few letters to pick the type, fill the fields from the keyboard, then Enter to file another or Cmd+Enter to open the one you just made, with similar existing items offered before you add a duplicate.
+- Animations can show a spinning indicator for a running or loading state.
+- The title bar names the Git command running right now, whether you started it, the Git panel did or an agent session did, and the Git panel's Output tab marks the ones an agent ran.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- Grok Build sessions can answer questions and approve tool use while they run, reach your Nimbalyst tools, and use the model you picked.
+- An animation plays inline in the agent transcript when an agent creates or edits it, as a click-to-activate stage rather than a plain file row.
+- In the tracker table the Key cell is the open button: click it for the detail pane, or its expand icon to open the document. Clicking any other cell just selects it, and double-click always means edit.
 
 ### Fixed
 <!-- Bug fixes go here -->
-- Time trackers, screen readers, and other macOS accessibility tools now see the document you are actually viewing, instead of the last file you happened to open.
+- Sessions that were already unread when Nimbalyst started now appear in the menu bar again, up to the 25 most recent.
+- Files whose AI edits have already been committed no longer open with a leftover change count and review dot.
+- Images in a shared document now render in the web console instead of showing a broken-image placeholder.
+- Sending a message to Grok Build, Cursor Agent or Gemini no longer fails with "Unknown provider".
+- Grok Build and Cursor Agent report the tokens a session actually consumed, including cached input, instead of a fraction of it.
+- The session model picker loads ahead of opening and uses cached results instead of blocking on provider discovery.
+- Typing in a dialog while the tracker table is open no longer edits the selected cell.
+- A tracker item's body is no longer cleared when the item's metadata syncs with your team.
+- A tracker item can no longer drift onto an issue key that belongs to a different item.
+- An API key left in your shell environment is no longer handed to the Codex or Copilot coding agents; only a key you configured in Nimbalyst settings is used.
+
+### Removed
+<!-- Removed features go here -->
+
+## [0.75.5] - 2026-08-28
+
+
+### Added
+<!-- New features go here -->
+- Grok Build and Cursor Agent as coding agents, each with settings, model picker, edited-file tracking and diff review.
+- AI sessions can read and edit a shared document without it being open in a tab, including mockups, drawings and data models.
+
+### Changed
+<!-- Changes to existing functionality go here -->
+- Gemini is a built-in coding agent rather than an extension, with edited-file tracking and a model list from your account.
+
+### Fixed
+<!-- Bug fixes go here -->
+- Reopening a Gemini session shows the tool calls it made instead of only the conversation.
+- "Accept all" no longer refuses an AI edit by claiming the file changed on disk.
+- Documents with a scalar status key in frontmatter render the frontmatter card instead of falling back to the raw text editor (#1392).
+
+### Removed
+<!-- Removed features go here -->
+
+## [0.75.4] - 2026-08-28
+
+
+### Added
+<!-- New features go here -->
+- Author step-based technical animations in `.anim.json` files, with a live stage, scrubbable timeline, retiming, frames that draw real product UI under a palette the document owns, and MP4 or GIF export.
+- An AI session can now build a Project Canvas board for you from a description, placing cards that reference real workspace files and shared documents.
+- Animation and Project Canvas are now installable from the Extensions marketplace.
+- A feedback request now previews the mockups it is about, not only the ones bound to individual options, for both the recipient and the author reading results.
+- The author of a feedback request can open the session that composed it from the request's results.
+
+### Changed
+<!-- Changes to existing functionality go here -->
+- Project Canvas gains two-finger pan, Cmd+wheel zoom, click to select and double-click to activate, card resizing, and cards for existing files and shared documents.
+- A feedback request now shows where its mockups will be published before you send, and puts them in a Feedback requests folder without opening a share dialog for each one.
+- Tips in a new session's empty panel now rotate, so you work through the set over time instead of meeting the same card every launch.
+
+### Fixed
+<!-- Bug fixes go here -->
+- Images attached to a Claude Code session reach the model again; since 0.75.1 every one was dropped without warning.
+- Codex web search steps now finish in the transcript instead of sitting unresolved with empty arguments.
+- Pressing Cmd+F while the find bar is already open now returns focus to the search field instead of closing the bar.
+- iOS: tapping a notification now opens the session it was about, including on iPad and before that session has finished syncing to the device.
+- A session no longer keeps showing "waiting for your response" once you have typed a new instruction instead of answering the question it asked.
+- A mockup already shared with your team now reaches the recipient of a feedback request as the shared document, not a file path from the sender's machine.
+- Sending a feedback request now happens once: the card stays sent when you scroll away and back, and pressing send again no longer creates a second request.
+- A document link pasted into a team message or a shared document now becomes the document it names; links sent before this stay as text until you paste them again.
+- Working out which organization your projects belong to no longer runs a git command per project each time it is checked, which could block the app for a second or more.
+- A screenshot the AI takes with an explicit light or dark theme now shows an extension's editor working, instead of an error state where the extension could not reach its own tools.
 
 ### Removed
 <!-- Removed features go here -->
@@ -32,7 +102,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A tracker now shows who else is viewing it.
 - A feedback request comparing mockups now shows the designs themselves: preview every option, open one full size, and vote without leaving the request.
 - A session that orchestrates other sessions can interrupt one to deliver an instruction immediately, instead of waiting for its current turn to finish.
-- Project Canvas: an infinite canvas where every card is the real editor (mockup, spreadsheet, drawing, mindmap) live and editable in place, with sticky notes, frames, arrows, snapping, team comments and presence, agent activity, and revision pinning to compare. Works in the desktop app and the web console, and saves as an open `.canvas` file that reviews as a diff.
+- Project Canvas: an infinite canvas where every card is the real editor (markdown, mockup, spreadsheet, drawing, mindmap) live and editable in place. Drag a file or shared document from the sidebar onto the board, with sticky notes, frames, arrows, snapping, team comments and presence, agent activity, and revision pinning to compare. Works in the desktop app and the web console, and saves as an open `.canvas` file that reviews as a diff.
 
 ### Changed
 <!-- Changes to existing functionality go here -->

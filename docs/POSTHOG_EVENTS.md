@@ -122,6 +122,16 @@ The renderer resolves both from the main process rather than re-deriving them fr
 | `tip_all_tips_opened` | `InlineTipDisplay.tsx:143`<br/>`FilesEmptyTipDisplay.tsx` | User opens the All Tips dialog from an inline tip card | `from_tip_id`<br/>`surface` (inline_empty_transcript / files_empty) | v0.56.8 (2026-03-23) | (pending release as of 6ddf1d7): Added files_empty surface |
 | `tip_navigated` | `FilesEmptyTipDisplay.tsx` | User clicks "Next tip" on the Files empty-state tip card | `from_tip_id`<br/>`to_tip_id`<br/>`direction` (next)<br/>`reason` (next_button)<br/>`surface` (files_empty) | (pending release as of 6ddf1d7) |  |
 
+### Tracker Quick Create
+
+The three outcomes are instrumented together so the duplicate thresholds can be tuned from evidence: how often the strip appears, how often it is acted on, and how often an item is created anyway with suggestions on screen (`duplicatesShown > 0`).
+
+| Event Name | File(s) | Trigger | Properties | First Added (Public) | Significant Changes |
+| --- | --- | --- | --- | --- | --- |
+| `tracker_quick_create_duplicates_shown` | `TrackerQuickCreatePopup.tsx` | The duplicate strip surfaces at least one match during a quick-create run (once per run) | `matchCount`<br/>`semanticAvailable` (whether the memory engine contributed) | (pending release) |  |
+| `tracker_quick_create_duplicate_opened` | `TrackerQuickCreatePopup.tsx` | User opens a suggested existing item instead of creating a new one | `matchCount` | (pending release) |  |
+| `tracker_quick_create_item_created` | `TrackerQuickCreatePopup.tsx` | User creates a tracker item from the quick-create popup | `trackerType`<br/>`sharing` (personal/team)<br/>`duplicatesShown` (matches on screen at create time)<br/>`closedAfterCreate` (Cmd+Enter vs Enter) | (pending release) |  |
+
 ### Session Kanban Board
 
 | Event Name | File(s) | Trigger | Properties | First Added (Public) | Significant Changes |
@@ -142,9 +152,23 @@ The renderer resolves both from the main process rather than re-deriving them fr
 
 ### AI Chat & Sessions
 
+#### Session launch context
+
+`create_ai_session` carries where a session came from. The union lives in `packages/electron/src/shared/analytics/sessionLaunch.ts`; `initiator` is derived from `launchSource` through one exhaustive map rather than passed alongside it, so the two can never disagree.
+
+| `initiator` | `launchSource` values |
+| --- | --- |
+| `app` | `app_startup`, `tab_restore`, `workstream_convert`, `unknown` |
+| `user` | `new_session_button`, `launch_popup`, `session_history`, `tray`, `workspace_welcome`, `starter_prompt`, `slash_command`, `worktree`, `commit_flow`, `issue_panel`, `pull_request_panel`, `canvas`, `mobile`, `cli` |
+| `agent` | `meta_agent`, `workstream_child`, `blitz`, `automation` |
+
+`unknown` maps to `app`, not `user`. An uninstrumented path is far more likely to be one the app took on its own, and under-counting deliberate launches is the honest failure.
+
+**Not yet wired, so they will read zero:** `app_startup`, `tab_restore`, `workspace_welcome`, `starter_prompt`, `slash_command`, `blitz`, `automation`, `mobile`, `cli`. The mobile worktree path in `AIService` writes through `AISessionsRepository.create` directly and emits no `create_ai_session` at all, which is pre-existing.
+
 | Event Name | File(s) | Trigger | Properties | First Added (Public) | Significant Changes |
 | --- | --- | --- | --- | --- | --- |
-| `create_ai_session` | `AIService.ts:1860`<br/>`SessionHandlers.ts:323, 672` | User creates new AI chat session | `provider`<br/>`is_worktree_session` (boolean)<br/>`is_workstream_child` (boolean)<br/>`is_meta_agent_session` (boolean) | v0.45.25 (2025-11-14) | v0.52.14: Added is_worktree_session and is_workstream_child properties<br/>(pending release): Also emitted from SessionHandlers so Files and Agent mode session creation paths are tracked<br/>(pending release): Added is_meta_agent_session property |
+| `create_ai_session` | `sessionLaunchAnalytics.ts` (single emitter; called from `AIService.ts` and `SessionHandlers.ts`) | An agent session is created | `provider`<br/>`is_worktree_session` (boolean)<br/>`is_workstream_child` (boolean)<br/>`is_meta_agent_session` (boolean)<br/>`launchSource` (enum, see below)<br/>`initiator` (`user` \| `app` \| `agent`, derived from `launchSource`)<br/>`isFirstEverSession` (boolean)<br/>`sessionOrdinalBucket` (`1` \| `2-4` \| `5-9` \| `10+`)<br/>`hadPrefilledPrompt` (boolean) | v0.45.25 (2025-11-14) | v0.52.14: Added is_worktree_session and is_workstream_child properties<br/>(pending release): Also emitted from SessionHandlers so Files and Agent mode session creation paths are tracked<br/>(pending release): Added is_meta_agent_session property<br/>(pending release): Added launch context; consolidated the two drifted emitters into one |
 | `ai_message_sent` | `AIService.ts:1822` | User sends message in AI chat | `provider`<br/>`hasDocumentContext`<br/>`hasAttachments`<br/>`contentMode` (files/agent/unknown)<br/>`sessionMode` (optional, planning/agent)<br/>`fileExtension` (optional, when document open)<br/>`usedSlashCommand` (optional)<br/>`slashCommandName` (optional)<br/>`slashCommandPackageId` (optional) | v0.45.25 (2025-11-14) | v0.47.2 (2025-12-10): Added usedSlashCommand, slashCommandName, slashCommandPackageId properties<br/>(pending release as of 5698aa25): Added fileExtension property<br/>(pending release): Added sessionMode property |
 | `ai_message_submit_attempted` | `SessionTranscript.tsx`<br/>`SessionLaunchPopup.tsx` | User presses send. Fires at the composer **before every guard**, so it is the denominator for the send funnel — including the Claude CLI path, which returns before `ai:sendMessage` | `surface` (transcript/launch_popup)<br/>`provider`<br/>`promptLengthBucket` (short/medium/long, same scale as `ai_message_sent`)<br/>`isFirstMessageInSession`<br/>`sessionMode` | (pending release as of 9e36920c2) |  |
 | `ai_send_blocked` | `SessionTranscript.tsx`<br/>`SessionLaunchPopup.tsx`<br/>`MessageStreamingHandler.ts` | A send terminated without reaching a provider. One emitter per call path: main reports everything downstream of `ai:sendMessage`, the renderer reports its own guards and stays silent on IPC rejection so blocks are never double-counted | `surface`<br/>`reason` (closed enum: empty_draft, no_session_data, queued_cli_not_ready, cli_submit_failed, queued_while_loading, mode_switch_failed, slash_command_only, slash_command_clear, ipc_error, duplicate_prompt, no_session_id, no_workspace, session_not_found, session_mismatch, no_provider, no_api_key)<br/>`provider` | (pending release as of 9e36920c2) |  |

@@ -312,7 +312,7 @@ export async function handleAskUserQuestion(
   // Guarding it meant neither the sidebar nor the menu bar knew, and the tray
   // panel filed those sessions under "Running".
   if (sessionId) {
-    void setSessionPendingPrompt(sessionId, true);
+    void setSessionPendingPrompt(sessionId, true, "decision");
   }
   if (isCliSession && sessionId) {
     for (const w of BrowserWindow.getAllWindows()) {
@@ -587,7 +587,11 @@ function waitForToolPermissionAnswer(
       request: undefined,
       extra: { signal },
       toolName: 'ToolPermission',
-      onAbort: () => settle({ decision: 'deny', scope: 'once', cancelled: true }, 'client-abort'),
+      onAbort: () =>
+        settle(
+          { decision: 'deny', scope: 'once', cancelled: true, unansweredReason: 'client-abort' },
+          'client-abort',
+        ),
     });
 
     const POLL_INTERVAL = 1000;
@@ -612,7 +616,10 @@ function waitForToolPermissionAnswer(
       console.warn(
         `[MCP Server] ToolPermission timed out (deny): requestId=${requestId}`,
       );
-      settle({ decision: "deny", scope: "once", cancelled: true }, "timeout");
+      settle(
+        { decision: "deny", scope: "once", cancelled: true, unansweredReason: "timeout" },
+        "timeout",
+      );
     }, MAX_WAIT);
   });
 }
@@ -1569,7 +1576,7 @@ export async function handleRequestUserInput(
     });
     // Persist pending-prompt bit + push to mobile so the sidebar indicator
     // survives renderer reloads and reaches other devices.
-    void setSessionPendingPrompt(sessionId, true);
+    void setSessionPendingPrompt(sessionId, true, "decision");
   }
 
   // NIM-806: do NOT persist a synthetic nimbalyst_tool_use here (same reasoning

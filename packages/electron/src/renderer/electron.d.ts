@@ -1,3 +1,15 @@
+/** Mirrors the main-process `git:status-changed` payload. */
+interface GitStatusChangedPayload {
+  workspacePath: string;
+  revision?: number;
+  status?: {
+    branch: string;
+    ahead: number;
+    behind: number;
+    hasUncommitted: boolean;
+  };
+}
+
 interface FileTreeItem {
   name: string;
   path: string;
@@ -151,6 +163,12 @@ interface SemanticSearchResult {
   snippet: string;
   score: number;
   signals: { dense: boolean; sparse: boolean };
+  /**
+   * Raw pre-fusion scores. `score` is an RRF rank reciprocal and is not
+   * comparable across queries; a caller that needs an absolute similarity
+   * threshold reads `similarity.cosine`.
+   */
+  similarity?: { cosine?: number; bm25?: number };
 }
 
 interface ElectronAPI {
@@ -501,6 +519,13 @@ interface ElectronAPI {
   testAIConnection: (provider: 'claude' | 'claude-code' | 'openai' | 'lmstudio') => Promise<any>;
   getAIModels: () => Promise<{ success: boolean; models: any[]; grouped: Record<string, any[]> }>;
   aiGetSettings: () => Promise<any>;
+  aiGetHeadlessAgentAvailability: () => Promise<Record<string, {
+    installed: boolean;
+    signedIn: boolean;
+    defaultEnabled: boolean;
+    effectiveEnabled: boolean;
+    executablePath?: string;
+  }>>;
   aiSaveSettings: (settings: any) => Promise<void>;
   aiTestConnection: (provider: string, workspacePath?: string) => Promise<any>;
   aiGetModels: () => Promise<{ success: boolean; models: any[]; grouped: Record<string, any[]> }>;
@@ -520,7 +545,7 @@ interface ElectronAPI {
   // AI event listeners
   onAIStreamResponse: (callback: (data: any) => void) => () => void;
   onAIError: (callback: (error: any) => void) => () => void;
-  onAIApplyDiff: (callback: (data: { replacements: any[], resultChannel: string, targetFilePath?: string }) => void) => () => void;
+  onAIApplyDiff: (callback: (data: { replacements: any[], resultChannel: string, targetFilePath?: string, workspacePath?: string, agent?: { sessionId: string; sessionName: string } }) => void) => () => void;
   onAIStreamEditStart: (callback: (config: any) => void) => () => void;
   onAIStreamEditContent: (callback: (data: any) => void) => () => void;
   onAIStreamEditEnd: (callback: (data: any) => void) => () => void;
@@ -538,6 +563,11 @@ interface ElectronAPI {
 
   // CLI management
   cliCheckInstallation: (tool: string) => Promise<{ installed: boolean; version?: string; path?: string }>;
+  cliGetInstallStrategy: (tool: string) => Promise<
+    | { kind: 'npm'; package: string }
+    | { kind: 'script'; command: string; docsUrl: string }
+    | null
+  >;
   cliInstall: (tool: string, options?: any) => Promise<{ success: boolean; error?: string }>;
   cliUninstall: (tool: string) => Promise<{ success: boolean; error?: string }>;
   cliUpgrade: (tool: string) => Promise<{ success: boolean; error?: string }>;
@@ -546,10 +576,10 @@ interface ElectronAPI {
   cliCheckClaudeCodeWindowsInstallation: () => Promise<ClaudeForWindowsInstallation>;
 
   // MCP Server operations
-  onMcpApplyDiff: (callback: (data: { replacements: any[], resultChannel: string, targetFilePath?: string }) => void) => () => void;
+  onMcpApplyDiff: (callback: (data: { replacements: any[], resultChannel: string, targetFilePath?: string, workspacePath?: string, agent?: { sessionId: string; sessionName: string } }) => void) => () => void;
   onMcpStreamContent: (callback: (data: { streamId: string, content: string, position: string, insertAfter?: string, mode?: string, targetFilePath?: string, resultChannel: string }) => void) => () => void;
   onMcpNavigateTo: (callback: (data: { line: number, column: number }) => void) => () => void;
-  onMcpReadCollabDoc: (callback: (data: { targetFilePath: string, resultChannel: string }) => void) => () => void;
+  onMcpReadCollabDoc: (callback: (data: { targetFilePath: string, resultChannel: string, workspacePath?: string }) => void) => () => void;
   onMcpReadCollabDocComments: (callback: (data: {
     targetFilePath: string;
     input: any;
@@ -572,7 +602,7 @@ interface ElectronAPI {
   }) => void) => () => void;
   sendMcpApplyDiffResult: (resultChannel: string, result: any) => void;
   sendMcpStreamContentResult: (resultChannel: string, result: any) => void;
-  sendMcpReadCollabDocResult: (resultChannel: string, result: { success: boolean; content?: string; error?: string }) => void;
+  sendMcpReadCollabDocResult: (resultChannel: string, result: { success: boolean; content?: string; error?: string; code?: string }) => void;
   sendMcpCollabDocCommentResult: (
     resultChannel: string,
     result: { success: boolean; result?: unknown; code?: string; error?: string },
@@ -1054,7 +1084,7 @@ interface ElectronAPI {
 
   // Git operations (real-time status events)
   git?: {
-    onStatusChanged?: (callback: (data: { workspacePath: string }) => void) => () => void;
+    onStatusChanged?: (callback: (data: GitStatusChangedPayload) => void) => () => void;
     onCommitDetected?: (callback: (data: {
       workspacePath: string;
       commitHash: string;
