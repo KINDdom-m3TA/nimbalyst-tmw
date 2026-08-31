@@ -172,6 +172,7 @@ import { TrayPanelApp } from './components/TrayPanel/TrayPanelApp';
 import { MenuBarIslandApp } from './components/MenuBarIsland/MenuBarIslandApp';
 import { TerminalBottomPanel } from './components/TerminalBottomPanel';
 import { SessionLaunchPopup } from './components/UnifiedAI/SessionLaunchPopup';
+import { TrackerQuickCreatePopup } from './components/TrackerQuickCreate/TrackerQuickCreatePopup';
 import { ProjectRail } from './components/ProjectRail';
 import {
   WindowTopBar,
@@ -3153,6 +3154,7 @@ export default function App() {
       {/* KeyboardShortcutsDialog, ApiKeyDialog, ProjectSelectionDialog, ErrorDialog are now managed by DialogProvider */}
       <GlobalHistoryDialog theme={theme === 'auto' ? 'dark' : theme} workspacePath={workspacePath || undefined} />
       <SessionLaunchPopup workspacePath={workspacePath} />
+      <TrackerQuickCreatePopup workspacePath={workspacePath} />
       <ConfirmDialog
         isOpen={confirmDialog.isOpen}
         title={confirmDialog.options.title}
