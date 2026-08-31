@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reopening a Gemini session shows the tool calls it made instead of only the conversation.
 - "Accept all" no longer refuses an AI edit by claiming the file changed on disk.
 - Documents with a scalar status key in frontmatter render the frontmatter card instead of falling back to the raw text editor (#1392).
+- Time trackers, screen readers, and other macOS accessibility tools now see the document you are actually viewing, instead of the last file you happened to open (#1375).
 
 ### Removed
 <!-- Removed features go here -->
