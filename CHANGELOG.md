@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A tracker item's body is no longer cleared when the item's metadata syncs with your team.
 - A tracker item can no longer drift onto an issue key that belongs to a different item.
 - An API key left in your shell environment is no longer handed to the Codex or Copilot coding agents; only a key you configured in Nimbalyst settings is used.
+- The Git panel's Refresh button now reloads the Changes tab's file list, instead of refreshing only the commit log and branch.
 
 ### Removed
 <!-- Removed features go here -->
