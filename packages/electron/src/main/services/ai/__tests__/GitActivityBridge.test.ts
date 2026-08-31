@@ -4,7 +4,11 @@ vi.mock('../../../utils/logger', () => ({
   logger: { main: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } },
 }));
 
-import { GitActivityBridge, interpretToolResult } from '../GitActivityBridge';
+import {
+  GitActivityBridge,
+  bashCommandObservation,
+  interpretToolResult,
+} from '../GitActivityBridge';
 import type { GitOperationLogService } from '../../GitOperationLogService';
 
 function fakeLog() {
@@ -119,6 +123,65 @@ describe('GitActivityBridge', () => {
     await bridge.interruptOutstanding();
 
     expect(log.interruptExternal).not.toHaveBeenCalled();
+  });
+});
+
+describe('bashCommandObservation', () => {
+  it('addresses one entry across a Claude Code tool_use and its later tool_result', async () => {
+    // ClaudeCodeProvider yields `tool_call` once, at tool_use, then attaches the
+    // result by mutating that same object. Both stream events must resolve to
+    // the same journal entry, or the command spins for the rest of the turn and
+    // lands as `interrupted` even when it succeeded.
+    const toolCall: Record<string, unknown> = {
+      id: 'toolu_01AkNL',
+      name: 'Bash',
+      arguments: { command: 'git log --oneline -5' },
+    };
+
+    const started = bashCommandObservation(toolCall);
+    expect(started).toEqual({
+      command: 'git log --oneline -5',
+      providerToolCallId: 'toolu_01AkNL',
+      result: undefined,
+    });
+
+    toolCall.result = 'eba36a4f8 fix: something\n';
+    expect(bashCommandObservation(toolCall)).toEqual({
+      command: 'git log --oneline -5',
+      providerToolCallId: 'toolu_01AkNL',
+      result: 'eba36a4f8 fix: something\n',
+    });
+
+    const claudeBridge = new GitActivityBridge(
+      log as unknown as GitOperationLogService,
+      'session-1',
+      'claude-code',
+    );
+    for (const observation of [started!, bashCommandObservation(toolCall)!]) {
+      await claudeBridge.observe({ ...observation, workspacePath: '/repo' });
+    }
+    await claudeBridge.interruptOutstanding();
+
+    expect(log.finishExternal.mock.calls[0][0]).toMatchObject({ success: true });
+    expect(log.interruptExternal).not.toHaveBeenCalled();
+  });
+
+  it('accepts only the synthetic id on Codex, which reuses raw ids across turns', () => {
+    const codexCall = { id: 'item_0', name: 'Bash', arguments: { command: 'git status' } };
+    expect(
+      bashCommandObservation({ ...codexCall, toolUseId: 'nimtc|abc|1|0' }, 'openai-codex'),
+    ).toMatchObject({ providerToolCallId: 'nimtc|abc|1|0' });
+    // Without one, `item_0` would merge this turn's command into an unrelated
+    // entry from an earlier turn.
+    expect(bashCommandObservation(codexCall, 'openai-codex')).toBeNull();
+  });
+
+  it.each([
+    ['a non-shell tool', { id: 'a', name: 'Read', arguments: { file_path: '/a.ts' } }],
+    ['a shell call with no command', { id: 'a', name: 'Bash', arguments: {} }],
+    ['a call with no id', { name: 'Bash', arguments: { command: 'git status' } }],
+  ])('has nothing to observe for %s', (_label, toolCall) => {
+    expect(bashCommandObservation(toolCall)).toBeNull();
   });
 });
 

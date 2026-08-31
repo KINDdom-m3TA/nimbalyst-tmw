@@ -69,6 +69,47 @@ export function interpretToolResult(result: unknown): ToolResultOutcome {
   };
 }
 
+/** A shell tool call, reduced to what the journal needs, or null if it holds nothing to observe. */
+export interface BashCommandObservation {
+  command: string;
+  providerToolCallId: string;
+  result: unknown;
+}
+
+/**
+ * Read a provider's shell tool call into a journal observation.
+ *
+ * Both stream events for one command go through here so they address the same
+ * entry. That matters most for Claude Code, which yields `tool_call` once (at
+ * `tool_use`, with no result) and then attaches the result by mutating that
+ * same object -- so the terminal read is of an object we have already seen.
+ *
+ * Prefers the synthetic tool-use id, and on Codex accepts nothing else: Codex
+ * reuses raw ids like `item_0` across turns, which would merge unrelated
+ * commands into one entry.
+ */
+export function bashCommandObservation(
+  toolCall: unknown,
+  provider?: string,
+): BashCommandObservation | null {
+  const record = asRecord(toolCall);
+  if (!record || record.name !== 'Bash') return null;
+
+  const args = asRecord(record.arguments);
+  const command = typeof args?.command === 'string' ? args.command : undefined;
+  if (!command) return null;
+
+  const rawId = provider === 'openai-codex' ? undefined : record.id;
+  const providerToolCallId = typeof record.toolUseId === 'string'
+    ? record.toolUseId
+    : typeof rawId === 'string'
+      ? rawId
+      : undefined;
+  if (!providerToolCallId) return null;
+
+  return { command, providerToolCallId, result: record.result };
+}
+
 interface ObservedCommand {
   workspacePath: string;
   finished: boolean;

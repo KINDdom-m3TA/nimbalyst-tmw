@@ -110,7 +110,7 @@ import { sessionFileTracker } from '../SessionFileTracker';
 import { codexEditWindowRegistry, shouldOpenCodexEditWindow } from '../CodexEditWindowRegistry';
 import { toolCallMatcher, unwrapShellCommand } from '../ToolCallMatcher';
 import { getGitOperationLogService } from '../GitOperationLogService';
-import { GitActivityBridge } from './GitActivityBridge';
+import { GitActivityBridge, bashCommandObservation } from './GitActivityBridge';
 import { FeatureUsageService, FEATURES } from '../FeatureUsageService.ts';
 import { ToolUsageService } from '../ToolUsageService';
 import { historyManager } from '../../HistoryManager';
@@ -1280,6 +1280,17 @@ export class MessageStreamingHandler {
       session.id,
       session.provider,
     );
+    // Failure is isolated but logged: losing observability must not break the
+    // agent's command, and must not be silent either.
+    const recordGitActivity = async (toolCall: unknown, workspacePath: string): Promise<void> => {
+      const observation = bashCommandObservation(toolCall, session.provider);
+      if (!observation) return;
+      try {
+        await gitActivityBridge.observe({ ...observation, workspacePath });
+      } catch (gitActivityError) {
+        logger.main.error('[AIService] Failed to record agent Git activity:', gitActivityError);
+      }
+    };
 
     try {
       let fullResponse = '';
@@ -1898,21 +1909,8 @@ export class MessageStreamingHandler {
                   }
 
                   // Recorded after worktree adoption above so the entry attaches
-                  // to the repository the command actually targeted. Failure is
-                  // isolated but logged: losing observability must not break the
-                  // agent's command, and must not be silent either.
-                  if (trackToolName === 'Bash' && typeof trackArgs?.command === 'string' && toolUseId) {
-                    try {
-                      await gitActivityBridge.observe({
-                        command: trackArgs.command,
-                        workspacePath: effectiveWorkspacePath,
-                        providerToolCallId: toolUseId,
-                        result: chunk.toolCall.result,
-                      });
-                    } catch (gitActivityError) {
-                      logger.main.error('[AIService] Failed to record agent Git activity:', gitActivityError);
-                    }
-                  }
+                  // to the repository the command actually targeted.
+                  await recordGitActivity(chunk.toolCall, effectiveWorkspacePath);
 
                   await sessionFileTracker.trackToolExecution(
                     session.id,
@@ -2168,6 +2166,15 @@ export class MessageStreamingHandler {
                 }
               }
             }
+            break;
+
+          // A tool call this turn already saw as `tool_call` has finished. It is
+          // a completion signal, not a second call -- the only thing that acts on
+          // it is the Git journal, whose entry would otherwise show as running
+          // for the rest of the turn and then settle as `interrupted` even when
+          // the command succeeded.
+          case 'tool_result':
+            await recordGitActivity(chunk.toolCall, effectiveWorkspacePath);
             break;
 
           case 'tool_error':
@@ -2949,10 +2956,6 @@ export class MessageStreamingHandler {
         }
       }
 
-      // A cancelled turn or a provider that disconnected mid-command never sends
-      // the completion, so anything still open here will never settle on its own.
-      await gitActivityBridge.interruptOutstanding();
-
       // Flush any Bash commands that only emitted one observable tool event
       // so they still get pending-review tags and tool-call-linked diffs.
       for (const [commandItemId, command] of pendingBashCommands.entries()) {
@@ -2991,9 +2994,6 @@ export class MessageStreamingHandler {
 
       return { content: fullResponse };
     } catch (error) {
-      await gitActivityBridge.interruptOutstanding(
-        'The agent session failed before this command reported a final status.',
-      );
       const errorTime = Date.now() - startTime;
       const isClaudeCode = session?.provider === 'claude-code';
       const logPrefix = isClaudeCode ? '[CLAUDE-CODE-SERVICE]' : '[AIService]';
@@ -3114,6 +3114,13 @@ export class MessageStreamingHandler {
       }
 
       throw error;
+    } finally {
+      // A cancelled turn or a provider that disconnected mid-command never sends
+      // the completion, so anything still open here will never settle on its
+      // own. In a `finally` so both exits terminalize the journal. A turn whose
+      // provider generator parks and never resumes reaches neither; that case is
+      // covered by the session-level sweep in `GitOperationLogService`.
+      await gitActivityBridge.interruptOutstanding();
     }
   };
 

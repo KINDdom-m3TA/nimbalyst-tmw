@@ -247,6 +247,48 @@ describe("GitOperationLogService", () => {
     expect(entry.error).toBe("cancelled");
   });
 
+  it("interrupts every outstanding command of a session that stopped streaming", async () => {
+    // The turn that opened these entries can be abandoned without resuming --
+    // a cancelled or stalled provider generator parks while another path settles
+    // the session -- so the end-of-turn sweep never runs and the menu-bar
+    // indicator spins until the next app restart.
+    const service = new GitOperationLogService({ rootDir: tmpRoot });
+    for (const providerToolCallId of ["call-1", "call-2"]) {
+      await service.startExternal({
+        workspacePath,
+        command: "git log --oneline -5",
+        source: "agent",
+        sessionId: "session-1",
+        providerToolCallId,
+      });
+    }
+    await service.startExternal({
+      workspacePath,
+      command: "git status",
+      source: "agent",
+      sessionId: "session-2",
+      providerToolCallId: "call-3",
+    });
+    await service.finishExternal({
+      workspacePath,
+      sessionId: "session-1",
+      providerToolCallId: "call-2",
+      success: true,
+      exitCode: 0,
+    });
+
+    await service.interruptSession("session-1", "session ended");
+
+    const byId = new Map(
+      (await service.list(workspacePath)).map((entry) => [entry.id, entry])
+    );
+    expect(byId.get("ext:session-1:call-1")?.status).toBe("interrupted");
+    // Already settled: the sweep must not restate a real outcome.
+    expect(byId.get("ext:session-1:call-2")?.status).toBe("success");
+    // Another session's turn may still be live.
+    expect(byId.get("ext:session-2:call-3")?.status).toBe("running");
+  });
+
   it("redacts credentials while retaining exact structured arguments", () => {
     expect(
       formatGitCommand([

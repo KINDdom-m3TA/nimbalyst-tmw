@@ -395,6 +395,36 @@ export class GitOperationLogService {
     });
   }
 
+  /**
+   * Terminalize every command still open for a session, across all workspaces
+   * it touched.
+   *
+   * The per-turn sweep in `GitActivityBridge` only runs if the streaming
+   * function resumes; a cancelled or stalled provider generator can park while
+   * another path settles the session, leaving entries running -- and visibly
+   * spinning in the menu-bar indicator -- until the next app restart. This is
+   * the backstop, keyed on the session rather than the turn. Idempotent:
+   * already-settled entries keep their real outcome.
+   */
+  async interruptSession(sessionId: string, reason?: string): Promise<void> {
+    if (!sessionId) return;
+    for (const [workspacePath, state] of this.states) {
+      if (!state.loaded) continue;
+      const stranded = state.entries.filter(
+        (entry) => entry.sessionId === sessionId && entry.status === "running"
+      );
+      for (const entry of stranded) {
+        await this.finish(workspacePath, entry.id, {
+          success: false,
+          error:
+            reason ??
+            "The agent session ended before this command reported a final status.",
+          interrupted: true,
+        });
+      }
+    }
+  }
+
   appendOutput(
     workspacePath: string,
     id: string,
