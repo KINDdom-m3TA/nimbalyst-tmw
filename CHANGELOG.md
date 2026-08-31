@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A command an agent ran in the background was killed about five minutes after its turn ended; one can now run for up to 30 minutes.
 - Changing the theme laid a large opaque rectangle across the top of the screen behind the menu bar island, and flattened the menu bar panel's translucency.
 - Project-knowledge search now falls back to the local keyword index when semantic matching is unavailable instead of presenting a credential setup error.
+- Opening a markdown file with a pending AI edit could lock up the app for half a minute and then show no diff at all; very large files now skip the inline highlighting and go straight to the approve/reject bar.
 
 ### Removed
 <!-- Removed features go here -->
