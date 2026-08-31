@@ -20,6 +20,7 @@ const {
   syncPushChange,
   syncProvider,
   setShowTrayIconMock,
+  isShowTrayIconMock,
   isShowTrayStripMock,
   getTrayStripStyleMock,
   showMenuBarIslandMock,
@@ -51,6 +52,9 @@ const {
   syncPushChange: vi.fn(),
   syncProvider: { pushChange: vi.fn() },
   setShowTrayIconMock: vi.fn(),
+  // Off by default so `refreshMenuBar` skips creating a real Tray; the tests
+  // that need one assign `internals.tray` directly or opt in.
+  isShowTrayIconMock: vi.fn(() => false),
   // The strip is a rendered bitmap needing a real BrowserWindow; these tests
   // exercise the icon/menu path, so keep it off unless a test opts in.
   isShowTrayStripMock: vi.fn(() => false),
@@ -115,14 +119,19 @@ vi.mock('../../utils/appPaths', () => ({
 }));
 
 vi.mock('../../utils/store', () => ({
-  isShowTrayIcon: vi.fn(() => false), // skip createTray for simplicity
+  isShowTrayIcon: isShowTrayIconMock,
   setShowTrayIcon: setShowTrayIconMock,
   isShowTrayStrip: isShowTrayStripMock,
-  setShowTrayStrip: vi.fn(),
+  // Fed back into the getter: `setStripVisible` reads its own write back to
+  // decide which surface the menu bar gets, so a setter that goes nowhere makes
+  // the reconciliation untestable.
+  setShowTrayStrip: vi.fn((value: boolean) => { isShowTrayStripMock.mockReturnValue(value); }),
   getTrayStripStyle: getTrayStripStyleMock,
   setTrayStripStyle: vi.fn(),
   getSessionSyncConfig: vi.fn(() => ({})),
   setSessionSyncConfig: vi.fn(),
+  isOSNotificationsEnabled: vi.fn(() => true),
+  setOSNotificationsEnabled: vi.fn(),
   getTheme: vi.fn(() => 'dark'),
   getTrayPanelWidth: vi.fn(() => undefined),
   setTrayPanelWidth: vi.fn(),
@@ -259,6 +268,12 @@ describe('TrayManager unread actions', () => {
     resetSingleton();
     browserGetAllWindows.mockReturnValue([]);
     findWindowByWorkspaceMock.mockReturnValue(undefined);
+    // These assert on the NSMenu, which only exists when there is a tray item.
+    isShowTrayIconMock.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    isShowTrayIconMock.mockReturnValue(false);
   });
 
   it('adds a Clear All Unread menu item and clears unread sessions through the shared read-state path', async () => {
@@ -461,11 +476,10 @@ describe('menu bar island render style', () => {
 
   it('keeps pushing session rows to the island when the strip line is unchanged', () => {
     const tm = TrayManager.getInstance();
-    const internals = tm as unknown as { tray: unknown; updateIcon: () => void; teardownStrip: () => void };
-    internals.tray = trayInstance;
+    const internals = tm as unknown as { refreshMenuBar: () => void; teardownStrip: () => void };
 
-    internals.updateIcon();
-    internals.updateIcon();
+    internals.refreshMenuBar();
+    internals.refreshMenuBar();
 
     // The bitmap path deliberately skips an unchanged render via `stripViewKey`.
     // The island must not inherit that: its expanded panel shows live session
@@ -478,44 +492,58 @@ describe('menu bar island render style', () => {
     internals.teardownStrip();
   });
 
-  // An empty session cache is the idle fleet, which paints nothing at all.
-  it('paints nothing and attaches the idle summary when the fleet is quiet', () => {
+  /*
+   * The bug this style setting was supposed to prevent: the island drawing in
+   * the middle of the menu bar while the tray item sat on the right with its own
+   * state dot. Two presences for one fleet, and the style setting looking like
+   * it had done nothing.
+   */
+  it('takes the tray item away, so only one surface is in the menu bar', () => {
     const tm = TrayManager.getInstance();
-    const internals = tm as unknown as { tray: unknown; updateIcon: () => void; teardownStrip: () => void };
+    const internals = tm as unknown as { tray: unknown; refreshMenuBar: () => void; teardownStrip: () => void };
     internals.tray = trayInstance;
 
-    internals.updateIcon();
+    internals.refreshMenuBar();
 
-    const frame = showMenuBarIslandMock.mock.calls[0][0];
-    expect(frame.visible).toBe(false);
-    // The strip is gone in this state, so the panel is the only surface left
-    // that can say anything -- and it is the only labeled home the retired
-    // quiet age has.
-    expect(frame.idle).toBeDefined();
+    expect(trayInstance.destroy).toHaveBeenCalled();
+    expect(internals.tray).toBeNull();
+    expect(showMenuBarIslandMock).toHaveBeenCalled();
 
     internals.teardownStrip();
   });
 
-  // The regression the hide-when-idle change introduces: with no island in the
-  // menu bar, the tray icon is the *only* way to reach the panel. Anything that
-  // routes a plain tray click somewhere else strands the user when quiet.
-  it('leaves a plain tray click opening the panel while the island is hidden', () => {
+  // An empty session cache is the idle fleet. The island still paints -- it is
+  // the only thing left in the menu bar -- and carries the summary the panel
+  // shows instead of live rows.
+  it('still paints, and attaches the idle summary, when the fleet is quiet', () => {
     const tm = TrayManager.getInstance();
-    const internals = tm as unknown as {
-      tray: unknown;
-      updateIcon: () => void;
-      teardownStrip: () => void;
-      namedSessionId: unknown;
-      toggleSessionsPanel: () => void;
-    };
-    internals.tray = trayInstance;
+    const internals = tm as unknown as { refreshMenuBar: () => void; teardownStrip: () => void };
 
-    internals.updateIcon();
-    expect(internals.namedSessionId).toBeNull();
+    internals.refreshMenuBar();
 
-    internals.toggleSessionsPanel();
-    expect(toggleTrayPanelWindowMock).toHaveBeenCalled();
+    const frame = showMenuBarIslandMock.mock.calls[0][0];
+    expect(frame.idle).toBeDefined();
+    expect(frame.settings).toMatchObject({ style: 'island', showFleetStatus: true });
 
+    internals.teardownStrip();
+  });
+
+  /*
+   * Turning the fleet status off is the way back when the island is the only
+   * thing on screen, so it has to restore the tray item -- otherwise the setting
+   * empties the menu bar and takes its own control with it.
+   */
+  it('brings the tray item back when the fleet status is switched off', () => {
+    const tm = TrayManager.getInstance();
+    const internals = tm as unknown as { tray: unknown; teardownStrip: () => void };
+
+    isShowTrayIconMock.mockReturnValue(true);
+    tm.setStripVisible(false);
+
+    expect(internals.tray).toBe(trayInstance);
+    expect(closeMenuBarIslandMock).toHaveBeenCalled();
+
+    isShowTrayIconMock.mockReturnValue(false);
     internals.teardownStrip();
   });
 });

@@ -5,7 +5,7 @@ import * as path from 'path';
 import { RecentItem, SessionState, SessionWindow } from '../types';
 import { logger } from './logger';
 import { type EffortLevel, type ThinkingMode, parseEffortLevel, parseThinkingMode } from '@nimbalyst/runtime/ai/server/effortLevels';
-import type { IslandDisplayPreference } from '../../shared/menuBarIsland';
+import type { FleetStatusStyle, IslandDisplayPreference } from '../../shared/menuBarIsland';
 import type { OnboardingConfig } from '../../shared/types/workspace';
 import { DEFAULT_ONBOARDING_CONFIG } from '../../shared/types/workspace';
 import { AlphaFeatureTag, getDefaultAlphaFeatures, ALPHA_FEATURES } from '../../shared/alphaFeatures';
@@ -83,7 +83,7 @@ export const DEFAULT_DATABASE_MAINTENANCE: DatabaseMaintenanceSettings = {
 };
 
 /** How the macOS menu bar fleet strip is drawn. See `getTrayStripStyle`. */
-export type TrayStripStyle = 'image' | 'island';
+export type TrayStripStyle = FleetStatusStyle;
 
 interface AppStoreSchema {
   theme: AppTheme;
@@ -1721,11 +1721,18 @@ export function setShowTrayStrip(show: boolean): void {
  *
  * `image` is the bitmap composited onto the tray item; `island` is a live
  * window drawn in the menu bar row that expands into the session rows on hover.
- * Both render the same `StripView`. Defaults to `image` -- the island paints
- * over the centre of the menu bar, which is the app's menus on a narrow display.
+ * Both render the same `StripView`, and they are mutually exclusive -- island
+ * mode removes the tray item rather than sitting beside it.
+ *
+ * The default is the island on macOS and `image` everywhere else, where there
+ * is no menu bar row to draw into. Read as an unset-vs-set check rather than a
+ * defaulted `get`, because the platform decides the default and an existing
+ * install that never chose a style should move with it.
  */
 export function getTrayStripStyle(): TrayStripStyle {
-  return getAppStore().get('trayStripStyle', 'image') === 'island' ? 'island' : 'image';
+  const stored = getAppStore().get('trayStripStyle');
+  if (stored === 'island' || stored === 'image') return stored;
+  return process.platform === 'darwin' ? 'island' : 'image';
 }
 
 export function setTrayStripStyle(style: TrayStripStyle): void {

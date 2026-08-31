@@ -12,9 +12,6 @@
 
 import type { TrayIdleSummary, TrayPanelFeed } from './traySessions';
 
-/** Fade to nothing, then the window hides. Matches the expand/collapse easing. */
-export const ISLAND_FADE_MS = 260;
-
 /**
  * Width of the expanded panel.
  *
@@ -52,6 +49,39 @@ export interface IslandDisplayPreference {
   label: string;
 }
 
+/**
+ * Which surface draws the fleet status.
+ *
+ * `island` is this window; `image` is the bitmap the tray item draws. They are
+ * mutually exclusive, and in island mode there is no tray item at all -- which
+ * is why the settings below have to be reachable from inside the panel.
+ */
+export type FleetStatusStyle = 'image' | 'island';
+
+export type PreventSleepMode = 'off' | 'always' | 'pluggedIn';
+
+/**
+ * The settings the island's own gear panel controls.
+ *
+ * This is the whole of it, not a slice of app settings: in island mode the tray
+ * item is gone, so this panel is the only place these can be reached without
+ * opening a project window. Everything else still lives in app Settings.
+ */
+export interface MenuBarIslandSettings {
+  style: FleetStatusStyle;
+  /** Off falls the menu bar back to the plain tray icon. */
+  showFleetStatus: boolean;
+  osNotifications: boolean;
+  /** Null when sync is not configured -- the tray menu omits it in that case too. */
+  preventSleep: PreventSleepMode | null;
+}
+
+export type MenuBarIslandSettingChange =
+  | { key: 'style'; value: FleetStatusStyle }
+  | { key: 'showFleetStatus'; value: boolean }
+  | { key: 'osNotifications'; value: boolean }
+  | { key: 'preventSleep'; value: PreventSleepMode };
+
 /** Everything the island needs to paint one frame. */
 export interface MenuBarIslandState {
   /**
@@ -83,20 +113,13 @@ export interface MenuBarIslandState {
   /**
    * Present only when every bucket is empty, and consumed only by the panel.
    *
-   * The collapsed island is *invisible* in this state -- see `visible` -- so
-   * this is what the user gets when they open the panel from the tray icon
-   * instead.
+   * The island collapses to a bare glyph in this state rather than vanishing,
+   * because in island mode it is the only thing in the menu bar -- so this is
+   * what opening the quiet pill shows.
    */
   idle?: TrayIdleSummary;
-  /**
-   * Whether the island should be painted at all.
-   *
-   * False when the fleet is idle. The renderer fades to transparent and main
-   * hides the window `ISLAND_FADE_MS` later, so the disappearance is not a
-   * snap. Appearing needs no such treatment: it coincides with a real
-   * transition, which is the whole naming principle.
-   */
-  visible: boolean;
+  /** What the gear panel renders. Pushed with every frame so it cannot go stale. */
+  settings: MenuBarIslandSettings;
   /**
    * sessionId -> one line of what that session last said.
    *
@@ -159,6 +182,19 @@ export const MENU_BAR_ISLAND_CHANNELS = {
    * rather than to the app underneath.
    */
   dismiss: 'menu-bar-island:dismiss',
+  /**
+   * island → main: hold the panel open, or let go of it.
+   *
+   * Distinct from the pill's press/release, which *toggles* the pin. Opening the
+   * gear panel has to assert it: a settings form that collapses because the
+   * cursor drifted off the island for a quarter of a second is unusable.
+   */
+  setPinned: 'menu-bar-island:set-pinned',
+  /** island → main: one settings change, applied and echoed back on the next frame. */
+  setSetting: 'menu-bar-island:set-setting',
+  /** island → main: the footer's two app actions, same as the tray panel's. */
+  newSession: 'menu-bar-island:new-session',
+  openApp: 'menu-bar-island:open-app',
 } as const;
 
 /** Island rect in window coordinates, as the renderer measured it. */

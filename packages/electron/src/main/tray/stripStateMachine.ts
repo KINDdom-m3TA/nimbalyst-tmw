@@ -81,11 +81,14 @@ export function stripViewKey(view: StripView): string {
 /**
  * Nothing to say: no counts, no name, no age.
  *
- * The idle render is *nothing at all* -- the island hides rather than shrinking
- * to a bare glyph, because the absence of the strip is the message and it costs
- * no menu bar width in the state the fleet is in most of the day. A `named` view
- * is never idle, so the name hold is what keeps the island from snapping away
- * the instant the last session settles; the hysteresis is free.
+ * The idle render is the app glyph and nothing else. It used to be *nothing at
+ * all*, on the reasoning that the tray icon was still there to open the panel
+ * with -- which stopped being true when the island took the tray item's place.
+ * A `named` view is never idle, so the name hold is what keeps the island from
+ * shrinking the instant the last session settles; the hysteresis is free.
+ *
+ * The one remaining consumer is the idle summary: this is what decides whether
+ * the panel offers recent sessions instead of live ones.
  */
 export function isIdleView(view: StripView): boolean {
   if (view.mode === 'named') return false;

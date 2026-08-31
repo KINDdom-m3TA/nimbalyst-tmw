@@ -30,10 +30,14 @@ export function emptyMenuBarIslandState(): MenuBarIslandState {
     // Main overrides this with the real display's anchor on the first frame.
     // Centring is the safe placeholder: nothing is painted yet either way.
     anchor: 'center',
-    // Nothing has arrived yet, and an empty frame is by definition the idle
-    // state -- which is the one state that paints nothing. Starting visible
-    // would flash a bare glyph in the menu bar on every launch.
-    visible: false,
+    // Only ever on screen for the frame before main's first push. The island is
+    // by definition the live style if this renderer is running at all.
+    settings: {
+      style: 'island',
+      showFleetStatus: true,
+      osNotifications: true,
+      preventSleep: null,
+    },
   };
 }
 
@@ -49,11 +53,25 @@ export const menuBarIslandGlyphAtom = atom<string | null>(null);
  * Unlike the tray panel there is no initial pull: main creates this window only
  * once it already has a frame to draw, and sends it on `did-finish-load`.
  */
+/**
+ * Fill in anything the frame did not carry.
+ *
+ * Main and this renderer reload independently in dev, so a frame written by an
+ * older main can arrive against newer renderer code. A whole-state overwrite
+ * then leaves a field the components read as `undefined` -- the settings panel
+ * threw on exactly that. Defaults are cheap; the next real frame corrects them.
+ */
+function withDefaults(next: MenuBarIslandState | null | undefined): MenuBarIslandState {
+  const fallback = emptyMenuBarIslandState();
+  if (!next) return fallback;
+  return { ...fallback, ...next, settings: next.settings ?? fallback.settings };
+}
+
 export function initMenuBarIslandListener(): () => void {
   const unsubscribe = window.electronAPI.on(
     MENU_BAR_ISLAND_CHANNELS.state,
     (next: MenuBarIslandState) => {
-      store.set(menuBarIslandStateAtom, next ?? emptyMenuBarIslandState());
+      store.set(menuBarIslandStateAtom, withDefaults(next));
     },
   );
   // Pull the glyph and the current frame now that this listener exists. Main
@@ -64,7 +82,7 @@ export function initMenuBarIslandListener(): () => void {
     .then((init: { glyph?: string; state?: MenuBarIslandState | null } | null) => {
       if (!init) return;
       if (init.glyph) store.set(menuBarIslandGlyphAtom, init.glyph);
-      if (init.state) store.set(menuBarIslandStateAtom, init.state);
+      if (init.state) store.set(menuBarIslandStateAtom, withDefaults(init.state));
     });
 
   return () => unsubscribe?.();

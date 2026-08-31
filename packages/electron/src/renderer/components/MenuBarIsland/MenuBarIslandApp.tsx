@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAtomValue } from 'jotai';
+import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import {
   ISLAND_EXPANDED_WIDTH,
   MENU_BAR_ISLAND_CHANNELS,
@@ -13,6 +14,7 @@ import {
 import { SessionAttentionRow } from '../AgenticCoding/SessionAttentionRow';
 import { TraySessionSectionHeader, TrayStatusIndicator } from '../TrayPanel/traySessionSections';
 import { getRelativeTimeString } from '../../utils/dateFormatting';
+import { MenuBarIslandSettingsPanel } from './MenuBarIslandSettings';
 
 /**
  * The menu bar island.
@@ -26,7 +28,14 @@ import { getRelativeTimeString } from '../../utils/dateFormatting';
  * the state, this component never decides it. What this component owns is
  * publishing the island's laid-out rect back to main, which is what the cursor
  * poll tests against. Miss that and hover never fires.
+ *
+ * In island mode there is no tray item, so the footer below is the only place
+ * the tray menu's actions still live. It is pinned outside the scroll area for
+ * that reason -- scrolling a long fleet must not be able to hide the way out.
  */
+
+/** The app's focus ring. Chromium's default paints as a stray double outline. */
+const FOCUS_RING = 'focus:outline-none focus-visible:outline-2 focus-visible:outline-[var(--nim-border-focus)] focus-visible:outline-offset-[-2px]';
 
 /** Menu bar row height. The collapsed pill fills it exactly. */
 const STRIP_HEIGHT = 30;
@@ -134,11 +143,11 @@ function IslandStrip({
 /**
  * What the panel says when every bucket is empty.
  *
- * The collapsed island is invisible in this state, so a user only reaches this
- * by opening the panel from the tray icon. It exists because the strip stopped
- * carrying the quiet age: that number was never wrong, it was unlabeled and in
- * the wrong place. Here it has a sentence around it and the sessions it is
- * talking about underneath, each one clickable.
+ * The collapsed island is a bare glyph in this state, so this is what opening
+ * the quiet pill shows. It exists because the strip stopped carrying the quiet
+ * age: that number was never wrong, it was unlabeled and in the wrong place.
+ * Here it has a sentence around it and the sessions it is talking about
+ * underneath, each one clickable.
  */
 function IdlePanel({
   idle,
@@ -204,7 +213,32 @@ export function MenuBarIslandApp() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const { strip, feed, expanded, snippets, idle, visible, anchor } = state;
+  const { strip, feed, expanded, snippets, idle, settings, anchor } = state;
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  /*
+   * Settings do not survive the panel closing.
+   *
+   * Hover is the ordinary way in and out of this panel, so re-opening it a
+   * minute later on a form the user has long since finished with would be
+   * surprising. Reopening always lands on the sessions.
+   */
+  useEffect(() => {
+    if (!expanded) setSettingsOpen(false);
+  }, [expanded]);
+
+  /*
+   * Hold the panel open for as long as the gear is showing.
+   *
+   * Without this the 260ms hover grace applies to a settings form: the cursor
+   * drifts a few points off the island on the way to a toggle and the whole
+   * thing collapses. Sessions are a glance, settings are a task.
+   */
+  useEffect(() => {
+    if (!settingsOpen) return;
+    window.electronAPI.send(MENU_BAR_ISLAND_CHANNELS.setPinned, { pinned: true });
+    return () => window.electronAPI.send(MENU_BAR_ISLAND_CHANNELS.setPinned, { pinned: false });
+  }, [settingsOpen]);
 
   const sections = useMemo(() => ([
     { state: 'attention' as const, sessions: feed.needsAttention },
@@ -243,7 +277,7 @@ export function MenuBarIslandApp() {
       node.removeEventListener('transitionend', publish);
       observer.disconnect();
     };
-  }, [expanded, strip, feed]);
+  }, [expanded, strip, feed, settingsOpen]);
 
   /** Whether a press is in flight, so stray pointermove is not read as a drag. */
   const pressedRef = useRef(false);
@@ -292,23 +326,16 @@ export function MenuBarIslandApp() {
       <div
         ref={islandRef}
         /*
-         * `opacity` is in the transition list so the idle fleet can take the
-         * island away without it snapping out of the menu bar. Main pushes
-         * `visible: false`, this fades, and the window hides ISLAND_FADE_MS
-         * later. Appearing needs no such easing -- it coincides with a real
-         * transition, which is the point of every expansion here.
-         */
-        /*
          * `notch-left` pins the island to the window's right edge instead of
          * its centre. Main has already placed that edge just left of the camera
          * housing, so the island grows leftward and stays out from under it --
          * centring on a notched display hides the collapsed strip completely.
          */
-        className={`menu-bar-island absolute top-0 flex flex-col overflow-hidden rounded-b-[13px] bg-black transition-[width,height,box-shadow,opacity] duration-[260ms] ease-[cubic-bezier(.22,1,.36,1)] ${
+        className={`menu-bar-island absolute top-0 flex flex-col overflow-hidden rounded-b-[13px] bg-black transition-[width,height,box-shadow] duration-[260ms] ease-[cubic-bezier(.22,1,.36,1)] ${
           anchor === 'notch-left' ? 'right-0' : 'left-1/2 -translate-x-1/2'
         } ${
           expanded ? 'shadow-[0_10px_34px_rgba(0,0,0,0.55)]' : 'w-max'
-        } ${visible ? 'opacity-100' : 'opacity-0'}`}
+        }`}
         /*
          * The expanded width is inline rather than a `w-[420px]` utility because
          * main needs the same number to keep the open panel clear of the notch,
@@ -322,7 +349,6 @@ export function MenuBarIslandApp() {
         data-testid="menu-bar-island"
         data-component="MenuBarIslandApp"
         data-expanded={expanded}
-        data-visible={visible}
       >
         {/*
           * The pill is both the pin toggle and the drag handle for moving the
@@ -359,33 +385,86 @@ export function MenuBarIslandApp() {
         {expanded && (
           // Themed surface below the strip so the rows look like the popover's
           // rows in both light and dark, rather than riding on the pill's black.
-          <div
-            // `bg-nim` is the surface token (--nim-bg). `bg-nim-primary` is the
-            // brand accent, not a background -- it paints the panel bright blue.
-            className="menu-bar-island-body max-h-[380px] overflow-y-auto border-t border-nim bg-nim pb-1 text-nim"
-            data-testid="menu-bar-island-list"
-          >
-            {sections.length === 0 && <IdlePanel idle={idle} onSelect={handleSelect} />}
-            {sections.map(({ state: sectionState, sessions }) => (
-              <section key={sectionState} className={`menu-bar-island-group menu-bar-island-group--${sectionState}`}>
-                <TraySessionSectionHeader state={sectionState} count={sessions.length} />
-                {sessions.map((session) => (
-                  <SessionAttentionRow
-                    key={session.sessionId}
-                    sessionId={session.sessionId}
-                    title={session.title}
-                    provider={session.provider}
-                    model={session.model}
-                    updatedAt={session.updatedAt}
-                    workspaceName={session.workspaceName}
-                    snippet={snippets?.[session.sessionId]}
-                    onSelect={handleSelect}
-                    statusSlot={<TrayStatusIndicator session={session} state={sectionState} />}
-                  />
-                ))}
-              </section>
-            ))}
-          </div>
+          <>
+            <div
+              // `bg-nim` is the surface token (--nim-bg). `bg-nim-primary` is the
+              // brand accent, not a background -- it paints the panel bright blue.
+              className="menu-bar-island-body max-h-[340px] overflow-y-auto border-t border-nim bg-nim pb-1 text-nim"
+              data-testid="menu-bar-island-list"
+            >
+              {settingsOpen ? (
+                <MenuBarIslandSettingsPanel settings={settings} />
+              ) : (
+                <>
+                  {sections.length === 0 && <IdlePanel idle={idle} onSelect={handleSelect} />}
+                  {sections.map(({ state: sectionState, sessions }) => (
+                    <section key={sectionState} className={`menu-bar-island-group menu-bar-island-group--${sectionState}`}>
+                      <TraySessionSectionHeader state={sectionState} count={sessions.length} />
+                      {sessions.map((session) => (
+                        <SessionAttentionRow
+                          key={session.sessionId}
+                          sessionId={session.sessionId}
+                          title={session.title}
+                          provider={session.provider}
+                          model={session.model}
+                          updatedAt={session.updatedAt}
+                          workspaceName={session.workspaceName}
+                          snippet={snippets?.[session.sessionId]}
+                          onSelect={handleSelect}
+                          statusSlot={<TrayStatusIndicator session={session} state={sectionState} />}
+                        />
+                      ))}
+                    </section>
+                  ))}
+                </>
+              )}
+            </div>
+
+            {/*
+              * Outside the scroller on purpose. With the tray item gone this row
+              * is the whole of the old right-click menu, so a long fleet must
+              * not be able to scroll the way out of the panel off the bottom.
+              */}
+            <div
+              className="menu-bar-island-footer flex shrink-0 items-center justify-between gap-2 border-t border-nim bg-nim px-2 py-1.5 text-nim"
+              data-testid="menu-bar-island-footer"
+            >
+              <button
+                type="button"
+                aria-pressed={settingsOpen}
+                aria-label={settingsOpen ? 'Back to sessions' : 'Menu bar settings'}
+                title={settingsOpen ? 'Back to sessions' : 'Menu bar settings'}
+                className={`flex items-center gap-1 rounded px-1.5 py-1 text-[11px] font-medium transition-colors hover:bg-nim-tertiary ${
+                  settingsOpen ? 'bg-nim-tertiary text-nim' : 'text-nim-muted hover:text-nim'
+                } ${FOCUS_RING}`}
+                onClick={() => setSettingsOpen((open) => !open)}
+                data-testid="menu-bar-island-settings-toggle"
+              >
+                <MaterialSymbol icon={settingsOpen ? 'arrow_back' : 'settings'} size={15} />
+                {settingsOpen && 'Sessions'}
+              </button>
+
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  className={`flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-nim-muted transition-colors hover:bg-nim-tertiary hover:text-nim ${FOCUS_RING}`}
+                  onClick={() => window.electronAPI.send(MENU_BAR_ISLAND_CHANNELS.newSession)}
+                  data-testid="menu-bar-island-new-session"
+                >
+                  <MaterialSymbol icon="add" size={14} />
+                  New Session
+                </button>
+                <button
+                  type="button"
+                  className={`rounded px-2 py-1 text-[11px] font-medium text-nim-muted transition-colors hover:bg-nim-tertiary hover:text-nim ${FOCUS_RING}`}
+                  onClick={() => window.electronAPI.send(MENU_BAR_ISLAND_CHANNELS.openApp)}
+                  data-testid="menu-bar-island-open-app"
+                >
+                  Open Nimbalyst
+                </button>
+              </div>
+            </div>
+          </>
         )}
       </div>
     </div>

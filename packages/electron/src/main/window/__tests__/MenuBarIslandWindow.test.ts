@@ -2,14 +2,14 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 
 /**
- * The idle fleet hides the island.
+ * What only the window can be asked.
  *
- * Everything about *when* that happens is pure and covered next to the state
- * machine (`isIdleView` in fleetSnapshot.test.ts). What is only observable here
- * is what the window does about it: that it fades before it hides rather than
- * snapping out of the menu bar, that it stops polling the cursor the moment it
- * is invisible, and that it does not yank itself away from a user who has
- * deliberately pinned the panel open.
+ * The strip's content is pure and covered next to the state machine. What is
+ * only observable here is the window's own behaviour: that it stays on screen
+ * when the fleet goes quiet (in island mode it is the only thing in the menu
+ * bar, so hiding it strands the user), that the pill's press resolves into a
+ * pin or a move, and that switching the style releases the pin before the
+ * window it focused is destroyed.
  */
 
 const {
@@ -114,19 +114,19 @@ import {
   setupMenuBarIslandHandlers,
   showMenuBarIsland,
 } from '../MenuBarIslandWindow';
-import { ISLAND_FADE_MS, MENU_BAR_ISLAND_CHANNELS } from '../../../shared/menuBarIsland';
+import { MENU_BAR_ISLAND_CHANNELS } from '../../../shared/menuBarIsland';
 import { ISLAND_WINDOW_WIDTH } from '../islandGeometry';
 import { emptyTrayPanelFeed } from '../../../shared/traySessions';
 
 const win = browserWindowCtor.instance;
 
-function frame(visible: boolean) {
+function frame(running: number) {
   return {
     strip: {
       mode: 'counts' as const,
       needsApproval: 0,
       needsDecision: 0,
-      running: visible ? 1 : 0,
+      running,
       failed: 0,
       stalled: 0,
       unread: 0,
@@ -134,8 +134,24 @@ function frame(visible: boolean) {
     },
     feed: emptyTrayPanelFeed(),
     snippets: {},
-    visible,
+    settings: {
+      style: 'island' as const,
+      showFleetStatus: true,
+      osNotifications: true,
+      preventSleep: null,
+    },
   };
+}
+
+function handlers(overrides: Record<string, unknown> = {}) {
+  return {
+    onSelectSession: vi.fn(),
+    onExpandedChange: vi.fn(),
+    onNewSession: vi.fn(),
+    onOpenApp: vi.fn(),
+    onSettingChange: vi.fn(),
+    ...overrides,
+  } as Parameters<typeof setupMenuBarIslandHandlers>[0];
 }
 
 /** The window is created hidden and shown by the `did-finish-load` handler. */
@@ -145,7 +161,7 @@ function finishLoad() {
   else win.showInactive();
 }
 
-describe('MenuBarIslandWindow idle hiding', () => {
+describe('MenuBarIslandWindow', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
@@ -163,75 +179,70 @@ describe('MenuBarIslandWindow idle hiding', () => {
     vi.useRealTimers();
   });
 
-  it('fades before hiding rather than snapping out of the menu bar', () => {
-    showMenuBarIsland(frame(true));
+  /*
+   * In island mode there is no tray item, so the island is the only way to
+   * reach the panel, the gear, and the setting that switches back. Hiding it
+   * when the fleet goes quiet -- which it used to do -- leaves an idle Mac with
+   * no menu bar presence at all and no way out of the style.
+   */
+  it('stays on screen when the fleet goes quiet', () => {
+    showMenuBarIsland(frame(1));
     finishLoad();
     expect(win.isVisible()).toBe(true);
 
-    showMenuBarIsland(frame(false));
+    showMenuBarIsland(frame(0));
+    vi.advanceTimersByTime(5_000);
 
-    // The frame carrying `visible: false` goes out first, so the renderer is
-    // already animating to transparent while this timer runs.
-    const sent = win.webContents.send.mock.calls.at(-1);
-    expect(sent?.[1]).toMatchObject({ visible: false });
     expect(win.hide).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(ISLAND_FADE_MS + 1);
-    expect(win.hide).toHaveBeenCalledTimes(1);
-  });
-
-  it('comes back without rebuilding the window, and cancels a fade in flight', () => {
-    showMenuBarIsland(frame(true));
-    finishLoad();
-    showMenuBarIsland(frame(false));
-
-    // A session starts again before the fade finishes.
-    showMenuBarIsland(frame(true));
-    vi.advanceTimersByTime(ISLAND_FADE_MS + 1);
-
-    // The deferred hide must not fire after the island is wanted again -- that
-    // would leave a visible-but-hidden island until the next repaint.
-    expect(win.hide).not.toHaveBeenCalled();
+    expect(win.isVisible()).toBe(true);
     expect(browserWindowCtor).toHaveBeenCalledTimes(1);
   });
 
-  it('never builds a window just to hide it', () => {
-    showMenuBarIsland(frame(false));
-    expect(browserWindowCtor).not.toHaveBeenCalled();
+  /*
+   * Switching the style destroys this window. Pinning made it focusable and
+   * focused it, so the release has to happen while the window is still there --
+   * `closeMenuBarIsland` resetting the flag afterwards is too late.
+   */
+  it('releases the pin before handing a style switch to the owner', () => {
+    const deps = handlers();
+    setupMenuBarIslandHandlers(deps);
+    const event = { sender: win.webContents };
+
+    showMenuBarIsland(frame(1));
+    finishLoad();
+    ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.setPinned)!(event, { pinned: true });
+    expect(win.setFocusable).toHaveBeenLastCalledWith(true);
+
+    ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.setSetting)!(event, { key: 'style', value: 'image' });
+
+    expect(win.setFocusable).toHaveBeenLastCalledWith(false);
+    expect(deps.onSettingChange).toHaveBeenCalledWith({ key: 'style', value: 'image' });
   });
 
-  // Pinning is the user reading the panel on purpose. The last session
-  // finishing is not a reason to pull it out from under them mid-sentence.
-  it('defers the fade while the panel is pinned open, and takes it on release', () => {
-    setupMenuBarIslandHandlers({ onSelectSession: vi.fn(), onExpandedChange: vi.fn() });
-    const event = { sender: win.webContents };
-    // A press that does not move is the pin toggle -- the pill is both the
-    // toggle and the drag handle, and main is what tells them apart.
-    const togglePin = () => {
-      ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.dragStart)!(event);
-      ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.dragEnd)!(event);
-    };
+  it('ignores settings and actions from any other renderer', () => {
+    const deps = handlers();
+    setupMenuBarIslandHandlers(deps);
 
-    showMenuBarIsland(frame(true));
+    showMenuBarIsland(frame(1));
     finishLoad();
-    togglePin();
 
-    showMenuBarIsland(frame(false));
-    vi.advanceTimersByTime(ISLAND_FADE_MS * 4);
-    expect(win.hide).not.toHaveBeenCalled();
+    const impostor = { sender: { id: 'someone else' } };
+    ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.setSetting)!(impostor, { key: 'osNotifications', value: false });
+    ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.newSession)!(impostor);
+    ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.openApp)!(impostor);
 
-    togglePin();
-    vi.advanceTimersByTime(ISLAND_FADE_MS + 1);
-    expect(win.hide).toHaveBeenCalledTimes(1);
+    expect(deps.onSettingChange).not.toHaveBeenCalled();
+    expect(deps.onNewSession).not.toHaveBeenCalled();
+    expect(deps.onOpenApp).not.toHaveBeenCalled();
   });
 
   // The gesture that this whole drag path exists for: the island has to end up
   // on the display the user released it over, and stay there next launch.
   it('moves to the display the press was released on, and remembers it', () => {
-    setupMenuBarIslandHandlers({ onSelectSession: vi.fn(), onExpandedChange: vi.fn() });
+    setupMenuBarIslandHandlers(handlers());
     const event = { sender: win.webContents };
 
-    showMenuBarIsland(frame(true));
+    showMenuBarIsland(frame(1));
     finishLoad();
     win.setBounds.mockClear();
 
@@ -249,10 +260,10 @@ describe('MenuBarIslandWindow idle hiding', () => {
   });
 
   it('reads a press that never moved as a pin, not a move', () => {
-    setupMenuBarIslandHandlers({ onSelectSession: vi.fn(), onExpandedChange: vi.fn() });
+    setupMenuBarIslandHandlers(handlers());
     const event = { sender: win.webContents };
 
-    showMenuBarIsland(frame(true));
+    showMenuBarIsland(frame(1));
     finishLoad();
 
     ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.dragStart)!(event);

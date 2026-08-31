@@ -2018,6 +2018,9 @@ app.whenReady().then(async () => {
             TrayManager.getInstance().handleSessionClick(sessionId, workspacePath),
         onExpandedChange: (expanded) =>
             TrayManager.getInstance().onIslandExpandedChange(expanded),
+        onNewSession: () => TrayManager.getInstance().handleNewSession(),
+        onOpenApp: () => TrayManager.getInstance().handleOpenApp(),
+        onSettingChange: (change) => TrayManager.getInstance().applyIslandSetting(change),
     });
     setupSessionFileHandlers();
     setupCanvasRevisionProvenanceHandlers();

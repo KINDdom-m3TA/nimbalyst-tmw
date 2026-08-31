@@ -7,9 +7,9 @@ import { logger } from '../utils/logger';
 import { applyDockIcon } from '../utils/dockIcon';
 import { loadTrayGlyphDataUri } from '../tray/trayGlyph';
 import {
-  ISLAND_FADE_MS,
   MENU_BAR_ISLAND_CHANNELS,
   type IslandRect,
+  type MenuBarIslandSettingChange,
   type MenuBarIslandState,
 } from '../../shared/menuBarIsland';
 import {
@@ -57,9 +57,10 @@ let dragging: { origin: { x: number; y: number }; displayId: number } | null = n
 let ignoringMouse = true;
 /** The fleet's half of the frame. `expanded` and `anchor` are main's, added on push. */
 let latestState: Omit<MenuBarIslandState, 'expanded' | 'anchor'> | null = null;
-/** Set while the fade-out is in flight, so a fleet waking up mid-fade cancels it. */
-let fadeTimer: NodeJS.Timeout | null = null;
 let onSelectSession: ((sessionId: string, workspacePath: string) => void) | null = null;
+let onNewSession: (() => void) | null = null;
+let onOpenApp: (() => void) | null = null;
+let onSettingChange: ((change: MenuBarIslandSettingChange) => void) | null = null;
 /**
  * Told whenever the panel opens or closes, so the owner can fetch the per-row
  * snippets only while they are on screen. Nothing else needs them.
@@ -278,11 +279,6 @@ function setPinned(next: boolean): void {
   setIgnoreMouse(!hover.hovered);
   pushState();
   onExpandedChange?.(hover.hovered);
-
-  // The fleet may have gone idle while this was pinned open, in which case the
-  // fade was deferred rather than skipped. Releasing the pin is when it is
-  // finally safe to take the island away.
-  if (!pinned && latestState && !latestState.visible) beginFadeOut();
 }
 
 function setIgnoreMouse(ignore: boolean): void {
@@ -340,35 +336,16 @@ function handleDisplayChange(): void {
  * Created lazily so a user who never turns the island on never pays for it, and
  * so the window does not exist before the first fleet state arrives.
  *
- * `visible: false` is the idle fleet. The window is *hidden*, not destroyed --
- * it comes straight back on the next transition, and rebuilding a transparent
- * always-on-top window on every lull would be both slow and a fresh chance to
- * re-hit the `enableLargerThanScreen` clamp. Nothing reachable only through the
- * island may exist, because in this state there is no island: the tray icon is
- * how the user gets to the panel.
+ * There is no hidden state. The island used to disappear when the fleet went
+ * quiet, on the reasoning that the tray icon was still there to open the panel
+ * with -- and it is not, now that island mode removes the tray item. A quiet
+ * fleet collapses the strip to a bare glyph instead, which is the same one small
+ * mark the tray item was, in the place the user is now looking.
  */
 export function showMenuBarIsland(state: Omit<MenuBarIslandState, 'expanded' | 'anchor'>): void {
   if (!isMenuBarIslandSupported()) return;
 
-  const wasVisible = latestState?.visible ?? false;
   latestState = state;
-
-  if (!state.visible) {
-    // Never create a window just to hide it -- an install that launches quiet
-    // should not pay for one at all.
-    if (!islandWindow || islandWindow.isDestroyed()) return;
-    // Pinning is the user reading the panel on purpose, and a drag is the user
-    // holding it. The last session finishing is not a reason to pull either out
-    // from under them; `setPinned` re-checks this and fades then.
-    if (pinned || dragging) {
-      pushState();
-      return;
-    }
-    if (wasVisible) beginFadeOut();
-    return;
-  }
-
-  cancelFadeOut();
 
   if (!islandWindow || islandWindow.isDestroyed()) {
     islandWindow = createIslandWindow();
@@ -380,36 +357,9 @@ export function showMenuBarIsland(state: Omit<MenuBarIslandState, 'expanded' | '
   pushState();
 }
 
-/**
- * Let the renderer fade out, then hide the window.
- *
- * The state carrying `visible: false` has already been pushed by the caller, so
- * the renderer is animating to transparent while this timer runs. Polling stops
- * immediately: an invisible island must not expand under the cursor.
- */
-function beginFadeOut(): void {
-  cancelFadeOut();
-  stopPolling();
-  hover = { hovered: false, outsideSince: 0 };
-  setIgnoreMouse(true);
-  pushState();
-  fadeTimer = setTimeout(() => {
-    fadeTimer = null;
-    if (islandWindow && !islandWindow.isDestroyed()) islandWindow.hide();
-  }, ISLAND_FADE_MS);
-  fadeTimer.unref?.();
-}
-
-function cancelFadeOut(): void {
-  if (!fadeTimer) return;
-  clearTimeout(fadeTimer);
-  fadeTimer = null;
-}
-
-/** Tear the island down -- style switched away, strip hidden, or tray destroyed. */
+/** Tear the island down -- style switched away, or fleet status turned off. */
 export function closeMenuBarIsland(): void {
   stopPolling();
-  cancelFadeOut();
   hover = { hovered: false, outsideSince: 0 };
   pinned = false;
   dragging = null;
@@ -451,9 +401,15 @@ function isIslandWebContents(sender: Electron.WebContents): boolean {
 export function setupMenuBarIslandHandlers(dependencies: {
   onSelectSession: (sessionId: string, workspacePath: string) => void;
   onExpandedChange: (expanded: boolean) => void;
+  onNewSession: () => void;
+  onOpenApp: () => void;
+  onSettingChange: (change: MenuBarIslandSettingChange) => void;
 }): void {
   onSelectSession = dependencies.onSelectSession;
   onExpandedChange = dependencies.onExpandedChange;
+  onNewSession = dependencies.onNewSession;
+  onOpenApp = dependencies.onOpenApp;
+  onSettingChange = dependencies.onSettingChange;
 
   safeHandle(MENU_BAR_ISLAND_CHANNELS.requestInit, async (event) => {
     if (!isIslandSenderInvoke(event)) return null;
@@ -536,6 +492,32 @@ export function setupMenuBarIslandHandlers(dependencies: {
     setIgnoreMouse(true);
     pushState();
     onSelectSession?.(sessionId, workspacePath);
+  });
+
+  safeOn(MENU_BAR_ISLAND_CHANNELS.setPinned, (event, payload: { pinned?: boolean }) => {
+    if (!isIslandSender(event)) return;
+    setPinned(!!payload?.pinned);
+  });
+
+  safeOn(MENU_BAR_ISLAND_CHANNELS.setSetting, (event, change: MenuBarIslandSettingChange) => {
+    if (!isIslandSender(event) || !change?.key) return;
+    // Switching the style away destroys this very window, so the pin has to be
+    // released first -- `closeMenuBarIsland` resets the flag but the focused,
+    // focusable window would already be gone by then.
+    if (change.key === 'style' || change.key === 'showFleetStatus') setPinned(false);
+    onSettingChange?.(change);
+  });
+
+  safeOn(MENU_BAR_ISLAND_CHANNELS.newSession, (event) => {
+    if (!isIslandSender(event)) return;
+    setPinned(false);
+    onNewSession?.();
+  });
+
+  safeOn(MENU_BAR_ISLAND_CHANNELS.openApp, (event) => {
+    if (!isIslandSender(event)) return;
+    setPinned(false);
+    onOpenApp?.();
   });
 }
 

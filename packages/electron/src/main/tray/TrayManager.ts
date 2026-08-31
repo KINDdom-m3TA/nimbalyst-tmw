@@ -25,6 +25,8 @@ import {
   type TrayStripStyle,
   getSessionSyncConfig,
   setSessionSyncConfig,
+  isOSNotificationsEnabled,
+  setOSNotificationsEnabled,
 } from '../utils/store';
 import { logger } from '../utils/logger';
 import { isPreventingSleep, getSleepPreventionMode } from '../services/PowerSaveService';
@@ -42,6 +44,10 @@ import {
   type TrayPanelFeed,
   type TrayPanelSession,
 } from '../../shared/traySessions';
+import type {
+  MenuBarIslandSettingChange,
+  MenuBarIslandSettings,
+} from '../../shared/menuBarIsland';
 import {
   deriveFleetSnapshot,
   isStalled,
@@ -348,10 +354,10 @@ export class TrayManager {
     // would never appear in the tray's "Unread" section.
     await this.seedUnreadFromDatabase();
 
-    // Create the tray if setting is enabled (default: true)
-    if (isShowTrayIcon()) {
-      this.createTray();
-    }
+    // Not `createTray()` directly: which surface the menu bar gets is a decision
+    // now, and the island has to be able to paint on a launch where there is no
+    // tray item at all.
+    this.refreshMenuBar();
 
     this.startFleetActivity();
 
@@ -360,16 +366,14 @@ export class TrayManager {
 
   /**
    * Show or hide the tray icon. Persists the preference.
+   *
+   * Only the *icon*. The island is the other menu bar surface and answers to
+   * `showTrayStrip` plus the style; conflating the two is how the app ended up
+   * drawing both at once.
    */
   setVisible(visible: boolean): void {
     setShowTrayIcon(visible);
-    if (visible) {
-      if (!this.tray) {
-        this.createTray();
-      }
-    } else {
-      this.destroyTray();
-    }
+    this.refreshMenuBar();
   }
 
   private createTray(): void {
@@ -387,16 +391,24 @@ export class TrayManager {
         if (this.tray && this.appMenu) this.tray.popUpContextMenu(this.appMenu);
       });
     }
-
-    this.rebuildMenu();
   }
 
-  private destroyTray(): void {
+  /**
+   * Take the tray item away, leaving the island alone.
+   *
+   * Distinct from `teardownStrip`, which also closes the island: island mode
+   * destroys the tray item precisely so the island can keep drawing, so the two
+   * must not be the same call.
+   */
+  private destroyTrayItem(): void {
     if (this.tray) {
       this.tray.destroy();
       this.tray = null;
     }
-    this.teardownStrip();
+    this.appMenu = null;
+    this.lastStripKey = null;
+    this.stripRenderer?.destroy();
+    this.stripRenderer = null;
     closeTrayPanelWindow();
   }
 
@@ -749,14 +761,34 @@ export class TrayManager {
       // hidden. The phone's card has nothing to do with whether there is an icon
       // in this machine's menu bar.
       this.publishFleetActivity();
-      this.rebuildMenu();
+      this.refreshMenuBar();
     }, MENU_REBUILD_DEBOUNCE_MS);
   }
 
   /** Last built app-actions menu, popped up on right-click when the panel owns left-click. */
   private appMenu: Electron.Menu | null = null;
 
-  private rebuildMenu(): void {
+  /**
+   * Reconcile the menu bar: exactly one fleet-status surface, never two.
+   *
+   * The island and the tray item are alternatives, not layers. Before this was a
+   * decision the island drew in the middle of the menu bar *and* the tray item
+   * sat on the right with its own state dot, which is two presences for one
+   * fleet and made the style setting look broken. Island mode therefore takes
+   * the tray item away entirely -- and that is what the island's own gear panel
+   * exists to compensate for, because the tray's right-click menu goes with it.
+   */
+  private refreshMenuBar(): void {
+    if (this.isIslandActive()) {
+      this.destroyTrayItem();
+      void this.updateStrip();
+      this.updateDockBadge(this.buildPanelFeed().needsAttention.length);
+      return;
+    }
+
+    closeMenuBarIsland();
+    if (isShowTrayIcon()) this.createTray();
+    else this.destroyTrayItem();
     if (!this.tray) return;
 
     const feed = this.buildPanelFeed();
@@ -862,18 +894,7 @@ export class TrayManager {
     const syncConfig = getSessionSyncConfig();
     if (syncConfig?.enabled) {
       const currentMode = resolvePreventSleepMode(syncConfig);
-      const setMode = (mode: 'off' | 'always' | 'pluggedIn') => {
-        const currentConfig = getSessionSyncConfig();
-        if (currentConfig) {
-          const updated = { ...currentConfig, preventSleepMode: mode, preventSleepWhenSyncing: undefined };
-          setSessionSyncConfig(updated);
-          updateSleepPrevention();
-          this.scheduleMenuRebuild();
-          for (const win of BrowserWindow.getAllWindows()) {
-            win.webContents.send('sync:config-updated', updated);
-          }
-        }
-      };
+      const setMode = (mode: 'off' | 'always' | 'pluggedIn') => this.setPreventSleepMode(mode);
       menuItems.push({
         label: 'Prevent Sleep',
         submenu: [
@@ -976,6 +997,17 @@ export class TrayManager {
     return process.platform === 'darwin' && isShowTrayStrip();
   }
 
+  /**
+   * Whether the island owns the menu bar, and therefore whether the tray item
+   * must not exist. The one predicate `refreshMenuBar` and `paintStrip` share,
+   * so the two can never disagree about which surface is live.
+   */
+  private isIslandActive(): boolean {
+    return this.isStripEnabled()
+      && getTrayStripStyle() === 'island'
+      && isMenuBarIslandSupported();
+  }
+
   /** The current cross-workspace fleet snapshot, with a fresh revision. */
   buildFleetSnapshot(now: number = Date.now()): FleetSnapshot {
     this.snapshotRevision += 1;
@@ -1075,7 +1107,7 @@ export class TrayManager {
       ? { sessionId: view.sessionId, workspacePath: view.workspacePath }
       : null;
 
-    if (getTrayStripStyle() === 'island' && isMenuBarIslandSupported()) {
+    if (this.isIslandActive()) {
       this.paintIsland(view);
       return;
     }
@@ -1101,31 +1133,96 @@ export class TrayManager {
    * The island is a live window, so unlike the bitmap strip there is no image to
    * cache and no `stripViewKey` short-circuit -- the renderer diffs for us, and
    * the session rows have to keep arriving even when the strip line is unchanged.
-   * The tray item falls back to the plain glyph: the island already carries the
-   * counts, so a bitmap strip underneath would be a second copy of them.
+   *
+   * It paints in every state, including the quiet one, where the strip line
+   * collapses to the bare app glyph. That is not decoration: island mode removes
+   * the tray item, so a pill that vanished when the fleet went quiet would leave
+   * an idle Mac with no way to open the panel, reach the gear, or switch the
+   * style back.
    */
   private paintIsland(view: StripView): void {
     const feed = this.buildPanelFeed();
     // Refreshed here rather than on a timer: a repaint is exactly when the rows
     // changed, and the guard inside makes it a no-op while the panel is closed.
     void this.refreshSessionSnippets(feed);
-    // Idle hides the island, so the panel is the only surface left that can say
-    // anything -- and the tray icon is the only way to reach it. That is why the
-    // summary is attached even though nothing will paint it until the user
-    // opens the panel from the tray.
     const idle = isIdleView(view) ? this.buildIdleSummary() : undefined;
     showMenuBarIsland({
       strip: toIslandStrip(view),
       feed,
       snippets: Object.fromEntries(this.sessionSnippets),
-      visible: !isIdleView(view),
+      settings: this.buildIslandSettings(),
       ...(idle ? { idle } : {}),
     });
 
-    if (this.lastStripKey !== ISLAND_STRIP_KEY) {
-      this.lastStripKey = ISLAND_STRIP_KEY;
-      this.tray?.setImage(this.getIconForState(this.computeIconState()));
-      if (process.platform === 'darwin') this.tray?.setTitle('');
+    this.lastStripKey = ISLAND_STRIP_KEY;
+  }
+
+  /**
+   * What the island's gear panel shows.
+   *
+   * Read fresh on every frame rather than pushed on change: the same settings
+   * are also reachable from the tray menu and from app Settings, and a panel
+   * that cached its own copy would show a stale toggle after either.
+   */
+  private buildIslandSettings(): MenuBarIslandSettings {
+    const syncConfig = getSessionSyncConfig();
+    return {
+      style: getTrayStripStyle(),
+      showFleetStatus: isShowTrayStrip(),
+      osNotifications: isOSNotificationsEnabled(),
+      // Null, not 'off'. Sleep prevention only means anything while sync is
+      // configured, which is why the tray menu omits it in that case too.
+      preventSleep: syncConfig?.enabled ? resolvePreventSleepMode(syncConfig) : null,
+    };
+  }
+
+  /** Apply one change from the island's gear panel. */
+  applyIslandSetting(change: MenuBarIslandSettingChange): void {
+    switch (change.key) {
+      case 'style':
+        this.setStripStyle(change.value);
+        return;
+      case 'showFleetStatus':
+        this.setStripVisible(change.value);
+        return;
+      case 'osNotifications':
+        setOSNotificationsEnabled(change.value);
+        // App Settings holds its own copy of this and rewrites the whole
+        // notification block on any edit, so a window that never heard about
+        // this change would silently put the old value back.
+        this.broadcastNotificationsEnabled(change.value);
+        this.refreshMenuBar();
+        return;
+      case 'preventSleep':
+        this.setPreventSleepMode(change.value);
+        return;
+    }
+  }
+
+  private broadcastNotificationsEnabled(enabled: boolean): void {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (window.isDestroyed()) continue;
+      window.webContents.send('notifications:enabled-changed', enabled);
+    }
+  }
+
+  /**
+   * Set the sleep-prevention mode and tell everyone who caches it.
+   *
+   * Shared by the tray menu item and the island's gear panel so the two cannot
+   * apply it differently -- this was a closure inside `buildAppMenuItems`, which
+   * put it out of reach of the second caller.
+   */
+  private setPreventSleepMode(mode: 'off' | 'always' | 'pluggedIn'): void {
+    const currentConfig = getSessionSyncConfig();
+    if (!currentConfig) return;
+    const updated = { ...currentConfig, preventSleepMode: mode, preventSleepWhenSyncing: undefined };
+    setSessionSyncConfig(updated);
+    updateSleepPrevention();
+    this.scheduleMenuRebuild();
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      win.webContents.send('sync:config-updated', updated);
     }
   }
 
@@ -1214,22 +1311,31 @@ export class TrayManager {
     }
   }
 
-  /** Switch between the bitmap strip and the island. */
+  /**
+   * Switch between the bitmap strip and the island.
+   *
+   * The two surfaces are exclusive, so this is a swap rather than a toggle:
+   * `refreshMenuBar` tears down whichever one is leaving before the incoming one
+   * paints. Without the teardown the tray would keep the last bitmap forever.
+   */
   setStripStyle(style: TrayStripStyle): void {
     if (style === getTrayStripStyle()) return;
     setTrayStripStyle(style);
-    // Both styles own the tray image, so the outgoing one has to be torn down
-    // before the incoming one paints or the tray keeps the last bitmap forever.
     closeMenuBarIsland();
     this.lastStripKey = null;
-    this.updateIcon();
+    this.refreshMenuBar();
   }
 
-  /** Show or hide the menu bar strip, independently of the tray icon itself. */
+  /**
+   * Show or hide the fleet status, independently of the tray icon itself.
+   *
+   * Turning it off in island mode is what brings the tray icon back -- it is the
+   * only menu bar presence left, and the way back to this setting.
+   */
   setStripVisible(visible: boolean): void {
     setShowTrayStrip(visible);
     this.lastStripKey = null;
-    this.updateIcon();
+    this.refreshMenuBar();
   }
 
   private computeIconState(): TrayIconState {
