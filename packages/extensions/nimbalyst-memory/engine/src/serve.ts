@@ -71,7 +71,10 @@ function buildConfig(): EngineConfig {
 }
 
 function buildEmbedderConfig(): EmbedderConfig {
-  const kind = (process.env.NIMBALYST_MEMORY_EMBEDDER || 'sparse').toLowerCase();
+  // Keyword-only is the default, but an explicitly-set provider key is itself a
+  // configuration choice: honour it rather than silently serving keyword-only.
+  const defaultKind = process.env.NIMBALYST_MEMORY_OPENAI_KEY ? 'openai' : 'sparse';
+  const kind = (process.env.NIMBALYST_MEMORY_EMBEDDER || defaultKind).toLowerCase();
   if (kind === 'sparse') {
     return { kind: 'sparse' };
   }
