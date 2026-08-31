@@ -387,6 +387,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Workspace operations
   getFolderContents: (dirPath: string) => ipcRenderer.invoke('get-folder-contents', dirPath),
   refreshFolderContents: (folderPath: string) => ipcRenderer.invoke('refresh-folder-contents', folderPath),
+  getFolderFilesRecursive: (folderPath: string): Promise<{ files: string[]; truncated: boolean }> =>
+    ipcRenderer.invoke('get-folder-files-recursive', folderPath),
   createFile: (filePath: string, content: string) => ipcRenderer.invoke('create-file', filePath, content),
   createFolder: (folderPath: string) => ipcRenderer.invoke('create-folder', folderPath),
   switchWorkspaceFile: (filePath: string) => ipcRenderer.invoke('switch-workspace-file', filePath),

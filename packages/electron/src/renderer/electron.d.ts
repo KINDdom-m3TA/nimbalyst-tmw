@@ -406,6 +406,8 @@ interface ElectronAPI {
   // Workspace operations
   getFolderContents: (dirPath: string) => Promise<FileTreeItem[]>;
   refreshFolderContents: (folderPath: string) => Promise<FileTreeItem[]>;
+  /** Every file under a folder as folder-relative POSIX paths; `truncated` when the global cap was hit. */
+  getFolderFilesRecursive: (folderPath: string) => Promise<{ files: string[]; truncated: boolean }>;
   createFile: (filePath: string, content: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
   createFolder: (folderPath: string) => Promise<{ success: boolean; error?: string }>;
   switchWorkspaceFile: (filePath: string) => Promise<{ filePath: string; content: string } | { error: string } | null>;

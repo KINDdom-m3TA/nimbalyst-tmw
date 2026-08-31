@@ -18,7 +18,7 @@ const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 import { windowStates, getWindowId, createWindow, markRecentlyDeleted, clearRecentlyDeleted } from '../window/WindowManager';
 import { startFileWatcher, stopFileWatcher } from '../file/FileWatcher';
-import { getFolderContents } from '../utils/FileTree';
+import { getFolderContents, listFolderFilesRecursive } from '../utils/FileTree';
 import { decodeTextFileBuffer } from '../utils/textEncoding';
 import { RIPGREP_EXCLUDE_ARGS_ARRAY, QUICKOPEN_FILE_TYPE_ARGS } from '../utils/fileFilters';
 import {
@@ -244,6 +244,11 @@ export function registerWorkspaceHandlers() {
     // Refresh folder contents (for when user expands a folder)
     safeHandle('refresh-folder-contents', async (event, folderPath: string) => {
         return await getFolderContents(folderPath);
+    });
+
+    // Every file under a folder, uncapped per-directory, for "Share Folder to Team".
+    safeHandle('get-folder-files-recursive', async (event, folderPath: string) => {
+        return await listFolderFilesRecursive(folderPath);
     });
 
     // Create new file
