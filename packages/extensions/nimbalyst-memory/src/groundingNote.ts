@@ -15,7 +15,6 @@ export interface GroundingStatus {
   chunks?: number;
   denseChunks?: number;
   indexing?: boolean;
-  lastEmbedError?: string | null;
   embedder?: { model?: string } | null;
   retrieval?: {
     mode?: 'hybrid' | 'keyword-only';
@@ -68,8 +67,7 @@ function statusLine(status: GroundingStatus): string | null {
   const chunks = status.chunks ?? 0;
   const keywordOnly =
     status.retrieval?.mode === 'keyword-only' ||
-    status.retrieval?.semantic?.available === false ||
-    Boolean(status.lastEmbedError);
+    status.retrieval?.semantic?.available === false;
   if (status.indexing) {
     return keywordOnly
       ? `Local keyword project search is still building (${chunks} chunks so far); results improve as it finishes.`

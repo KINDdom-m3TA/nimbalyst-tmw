@@ -15,7 +15,6 @@ describe('buildGroundingNote', () => {
         chunks: 13759,
         denseChunks: 13759,
         indexing: false,
-        lastEmbedError: null,
         retrieval: {
           mode: 'hybrid',
           semantic: { available: true },
@@ -29,17 +28,30 @@ describe('buildGroundingNote', () => {
 
   it('signals when the index is still building', () => {
     const note = buildGroundingNote({
-      status: { ready: true, chunks: 120, indexing: true, lastEmbedError: null },
+      status: { ready: true, chunks: 120, indexing: true },
     });
     expect(note).toMatch(/still building|indexing/i);
     expect(note).toContain('120');
   });
 
-  it('warns when semantic search is degraded by an embed error', () => {
+  it('reports keyword-only when a configured provider is failing at runtime', () => {
+    // The backend strips lastEmbedError before status reaches here, so the only
+    // signal is retrieval: a dims-carrying embedder that is nonetheless keyword-only.
     const note = buildGroundingNote({
-      status: { ready: true, chunks: 100, indexing: false, lastEmbedError: 'fetch failed' },
+      status: {
+        ready: true,
+        chunks: 100,
+        indexing: false,
+        embedder: { model: 'text-embedding-3-small' },
+        retrieval: {
+          mode: 'keyword-only',
+          semantic: { available: false },
+          keyword: { available: true, source: 'local-project-index' },
+        },
+      },
     });
-    expect(note).toMatch(/degraded|keyword/i);
+    expect(note).toMatch(/keyword/i);
+    expect(note).not.toMatch(/api key|credential/i);
   });
 
   it('explains keyword-only fallback without credential or settings solicitation', () => {
@@ -77,7 +89,7 @@ describe('buildGroundingNote', () => {
   it('lists durable facts when present, capped to 8', () => {
     const facts = Array.from({ length: 10 }, (_, i) => ({ text: `fact number ${i}` }));
     const note = buildGroundingNote({
-      status: { ready: true, chunks: 10, indexing: false, lastEmbedError: null },
+      status: { ready: true, chunks: 10, indexing: false },
       facts,
     });
     expect(note).toContain('fact number 0');
@@ -87,7 +99,7 @@ describe('buildGroundingNote', () => {
 
   it('omits the facts section when there are no facts', () => {
     const note = buildGroundingNote({
-      status: { ready: true, chunks: 10, indexing: false, lastEmbedError: null },
+      status: { ready: true, chunks: 10, indexing: false },
       facts: [],
     });
     expect(note).not.toMatch(/durable facts to keep in mind/i);
