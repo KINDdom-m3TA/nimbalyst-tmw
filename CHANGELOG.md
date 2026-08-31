@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - Cmd+N in Shared Docs opened the local new-file dialog instead of creating a shared document, and did nothing in the tracker.
+- A command an agent ran in the background was killed about five minutes after its turn ended; one can now run for up to 30 minutes.
 
 ### Removed
 <!-- Removed features go here -->
