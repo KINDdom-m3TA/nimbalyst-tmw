@@ -54,12 +54,12 @@ describe('useRepresentedFileSync', () => {
     const { result } = renderHook(useProbe, { wrapper, initialProps: true });
     const initialRenders = result.current.renderCount.current;
 
-    let firstTabId = '';
+    let firstTabId: string | null = null;
     act(() => {
       firstTabId = result.current.actions.addTab('/ws/notes.md');
       result.current.actions.addTab('/ws/other.md');
     });
-    act(() => result.current.actions.switchTab(firstTabId));
+    act(() => result.current.actions.switchTab(firstTabId!));
 
     expect(setRepresentedFile).toHaveBeenLastCalledWith('/ws/notes.md');
     expect(result.current.renderCount.current).toBe(initialRenders);
