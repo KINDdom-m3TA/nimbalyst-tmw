@@ -26,13 +26,35 @@ export interface TrackerRelationshipType {
 
 /** Built-in relationship vocabulary. Custom keys may be added per workspace. */
 export const BUILTIN_RELATIONSHIP_TYPES: TrackerRelationshipType[] = [
-  { key: 'depends-on', displayName: 'Depends on', inverseKey: 'blocks', inverseDisplayName: 'Blocks', category: 'dependency' },
-  { key: 'blocks', displayName: 'Blocks', inverseKey: 'depends-on', inverseDisplayName: 'Depends on', category: 'dependency' },
+  {
+    key: 'depends-on',
+    displayName: 'Depends on',
+    inverseKey: 'blocks',
+    inverseDisplayName: 'Blocks',
+    category: 'dependency',
+    description: 'Work this item is waiting on.',
+  },
+  {
+    key: 'blocks',
+    displayName: 'Blocks',
+    inverseKey: 'depends-on',
+    inverseDisplayName: 'Depends on',
+    category: 'dependency',
+    description: 'Work that is waiting on this item.',
+  },
   { key: 'relates-to', displayName: 'Relates to', category: 'reference', symmetric: true },
   { key: 'duplicates', displayName: 'Duplicates', category: 'reference' },
   { key: 'supersedes', displayName: 'Supersedes', category: 'reference' },
   { key: 'parent-of', displayName: 'Parent of', inverseKey: 'child-of', inverseDisplayName: 'Child of', category: 'hierarchy' },
   { key: 'child-of', displayName: 'Child of', inverseKey: 'parent-of', inverseDisplayName: 'Parent of', category: 'hierarchy' },
+  // Collection membership: a milestone/release `has-item`, and each member is
+  // `in-collection`. Same hierarchy machinery as parent-of/child-of, but a
+  // distinct vocabulary so "belongs to a sprint" reads differently from
+  // "is a subtask of".
+  { key: 'has-item', displayName: 'Includes', inverseKey: 'in-collection', inverseDisplayName: 'In collection', category: 'hierarchy', icon: 'inventory_2' },
+  { key: 'in-collection', displayName: 'In collection', inverseKey: 'has-item', inverseDisplayName: 'Includes', category: 'hierarchy', icon: 'inventory_2' },
+  { key: 'contributes-to', displayName: 'Contributes', inverseKey: 'contributed-by', inverseDisplayName: 'Goal', category: 'hierarchy', icon: 'flag' },
+  { key: 'contributed-by', displayName: 'Goal', inverseKey: 'contributes-to', inverseDisplayName: 'Contributes', category: 'hierarchy', icon: 'flag' },
 ];
 
 const BUILTIN_BY_KEY = new Map(BUILTIN_RELATIONSHIP_TYPES.map((t) => [t.key, t]));

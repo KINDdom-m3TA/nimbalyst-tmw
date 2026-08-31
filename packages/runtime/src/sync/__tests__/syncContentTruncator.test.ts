@@ -1,6 +1,31 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment node
+import { afterEach, describe, expect, it } from 'vitest';
 
-import { shouldSyncMessageForSessionRoom, truncateContentForSync } from '../syncContentTruncator';
+import {
+  setSyncImageCompressor,
+  shouldSyncMessageForSessionRoom,
+  truncateContentForSync,
+} from '../syncContentTruncator';
+
+afterEach(() => setSyncImageCompressor(null));
+
+/** Build a claude-code tool_result message carrying one inline image block. */
+function screenshotMessage(data: string, mediaType = 'image/png'): string {
+  return JSON.stringify({
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [
+        {
+          tool_use_id: 'toolu_shot',
+          type: 'tool_result',
+          content: [{ type: 'image', source: { type: 'base64', media_type: mediaType, data } }],
+        },
+      ],
+    },
+    session_id: 'abc',
+  });
+}
 
 describe('truncateContentForSync', () => {
   it('caps oversized unknown-provider messages at a small opaque marker', () => {
@@ -155,6 +180,55 @@ describe('truncateContentForSync', () => {
     expect(parsed.params.item.result.content[0].text).toMatch(/^schemaschema/);
     expect(parsed.params.item.result.content[1].text).toContain('elided from mobile sync');
     expect(parsed.params.item.arguments).toEqual({ command: 'info execute-sql' });
+  });
+
+  describe('headless CLI agents (Grok Build, Cursor Agent)', () => {
+    // `syncContentTruncator` carries a standing "keep in sync with the parser"
+    // contract: a record type HeadlessAgentRawParser learns to render must be
+    // added to the allowlist, or mobile silently shows less than the desktop.
+    const RENDERED_BY_PARSER = ['item.completed', 'tool_call', 'tool_call_update', 'result'];
+    const DROPPED_BY_PARSER = ['thought', 'text', 'available_commands', 'usage', 'thinking'];
+
+    it('syncs exactly the record types the parser renders', () => {
+      for (const source of ['grok-build', 'cursor-agent']) {
+        for (const eventType of RENDERED_BY_PARSER) {
+          expect(shouldSyncMessageForSessionRoom(source, { eventType })).toBe(true);
+        }
+        for (const eventType of DROPPED_BY_PARSER) {
+          expect(shouldSyncMessageForSessionRoom(source, { eventType })).toBe(false);
+        }
+      }
+    });
+
+    it('syncs rows with no eventType, which are the user\'s own prompts', () => {
+      expect(shouldSyncMessageForSessionRoom('grok-build', {})).toBe(true);
+      expect(shouldSyncMessageForSessionRoom('cursor-agent', undefined)).toBe(true);
+    });
+
+    it('drops hidden rows', () => {
+      expect(
+        shouldSyncMessageForSessionRoom('cursor-agent', { eventType: 'tool_call' }, undefined, true),
+      ).toBe(false);
+    });
+  });
+
+  describe('gemini (antigravity)', () => {
+    // The same parity contract, but Gemini's answer is "all of them". Its raw
+    // log is not a vendor event stream — the host writes exactly three row
+    // kinds and `GeminiAntigravityRawParser` renders every one, so any filter
+    // added here would take something off mobile that desktop shows. Rows
+    // written while Gemini shipped as an extension carry the older source and
+    // must keep syncing too.
+    const SOURCES = ['antigravity-gemini-agent', 'gemini-antigravity/antigravity-server'];
+
+    it('syncs every row kind, on both the built-in and the legacy source', () => {
+      for (const source of SOURCES) {
+        for (const role of ['user', 'assistant', 'tool']) {
+          expect(shouldSyncMessageForSessionRoom(source, { role })).toBe(true);
+        }
+        expect(shouldSyncMessageForSessionRoom(source, undefined)).toBe(true);
+      }
+    });
   });
 
   it('skips transient Codex app-server delta events from session-room sync', () => {
@@ -500,5 +574,60 @@ describe('truncateContentForSync', () => {
         JSON.stringify({ type: 'item.completed', item: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'full text' }] } }),
       ),
     ).toBe(true);
+  });
+
+  it('syncs a screenshot tool_result to mobile instead of eliding the whole message', () => {
+    // capture_editor_screenshot returns an inline base64 image block, ~200 KB
+    // of base64 once sized for mobile -- far over MAX_SYNC_MESSAGE_BYTES.
+    // Eliding the message strips the only copy of the image the phone will ever
+    // see (there is no desktop -> mobile attachment channel), and leaves mobile
+    // a bare non-JSON marker string.
+    const imageData = 'A'.repeat(190 * 1024);
+
+    const result = truncateContentForSync(screenshotMessage(imageData), 'claude-code');
+
+    expect(result.content).not.toContain('Full claude-code message elided');
+    const parsed = JSON.parse(result.content);
+    expect(parsed.message.content[0].content[0].source.data).toBe(imageData);
+  });
+
+  it('downscales an oversized screenshot rather than dropping it', () => {
+    // Real screenshots run from 200 KB to 1.7 MB (avg ~300 KB). Anything past
+    // the per-image cap goes through the platform compressor -- the same one
+    // the MCP layer uses -- so it still reaches the phone.
+    const original = 'A'.repeat(1500 * 1024);
+    let compressorCalls = 0;
+    setSyncImageCompressor((data, mimeType) => {
+      compressorCalls++;
+      expect(data).toBe(original);
+      expect(mimeType).toBe('image/png');
+      return { data: 'J'.repeat(200 * 1024), mimeType: 'image/jpeg' };
+    });
+
+    const result = truncateContentForSync(screenshotMessage(original), 'claude-code');
+
+    expect(compressorCalls).toBe(1);
+    expect(result.content).not.toContain('Full claude-code message elided');
+    const block = JSON.parse(result.content).message.content[0].content[0];
+    expect(block.type).toBe('image');
+    expect(block.source.data).toBe('J'.repeat(200 * 1024));
+    expect(block.source.media_type).toBe('image/jpeg');
+  });
+
+  it('drops a pathologically large image block but keeps the message parseable', () => {
+    // No compressor available (or one that cannot get the image small enough):
+    // the image must not be allowed to blow up the SessionRoom. Replace the
+    // image block itself, not the whole message -- mobile still renders the
+    // tool call, and the marker explains why there is no picture.
+    const result = truncateContentForSync(
+      screenshotMessage('A'.repeat(3 * 1024 * 1024)),
+      'claude-code',
+    );
+
+    expect(result.content).not.toContain('Full claude-code message elided');
+    const parsed = JSON.parse(result.content);
+    expect(JSON.stringify(parsed).length).toBeLessThan(16 * 1024);
+    expect(parsed.message.content[0].type).toBe('tool_result');
+    expect(JSON.stringify(parsed.message.content[0].content)).toContain('elided from mobile sync');
   });
 });

@@ -187,6 +187,12 @@ export interface AgentSessionAttentionGroups {
 /**
  * Active-workspace sessions that currently need attention, classified by
  * their highest-priority state so a session appears in exactly one group.
+ *
+ * `phase` is self-reported by the agent, and an agent sets `complete` before
+ * it emits its closing output -- the very output that flags the session
+ * unread. Filtering `complete` out up front therefore hid the sessions that
+ * had *just* finished, which is the opposite of what the popover is for. Only
+ * the running bucket honours the phase; unread and awaiting-input outrank it.
  */
 export const agentSessionAttentionAtom = atom<AgentSessionAttentionGroups>((get) => {
   const registry = get(sessionRegistryAtom);
@@ -194,7 +200,6 @@ export const agentSessionAttentionAtom = atom<AgentSessionAttentionGroups>((get)
   const sessions = Array.from(registry.values())
     .filter((session) =>
       !session.isArchived &&
-      session.phase !== 'complete' &&
       (!workspacePath || session.workspaceId === workspacePath)
     )
     .sort((a, b) => b.updatedAt - a.updatedAt);
@@ -209,7 +214,9 @@ export const agentSessionAttentionAtom = atom<AgentSessionAttentionGroups>((get)
     if (get(sessionHasPendingInteractivePromptAtom(session.id))) {
       groups.awaitingInput.push(session);
     } else if (get(sessionProcessingAtom(session.id))) {
-      groups.running.push(session);
+      if (session.phase !== 'complete') {
+        groups.running.push(session);
+      }
     } else if (get(sessionUnreadAtom(session.id))) {
       groups.unread.push(session);
     }
@@ -325,22 +332,46 @@ export function isInteractivePromptTool(toolName: string): boolean {
   return !!match && INTERACTIVE_PROMPT_TOOLS.has(match[1]);
 }
 
+/**
+ * Whether any interactive prompt in this transcript is still answerable.
+ *
+ * "No result yet" is not sufficient on its own. Typing a new prompt while a
+ * prompt widget is up aborts the turn, and the abort leaves the tool_use
+ * permanently unmatched -- no tool_result is ever written for it. Deriving
+ * pending purely from the missing result pinned the amber "waiting for your
+ * response" indicator on sessions that were actively running, because the
+ * derivation re-runs from message history on every transcript mount and kept
+ * rediscovering the dead prompt. (#871 fixed the same symptom on the persisted
+ * `hasPendingPrompt` bit; this is the message-derived twin.)
+ *
+ * A `user_message` after the prompt is the abandonment signal: the user chose
+ * to type instead of answering, so the prompt can never be resolved. Nothing
+ * else is treated as abandonment -- notably not `turn_ended`, because a prompt
+ * backgrounded at the harness's 120s tool timeout outlives its turn and stays
+ * answerable (see #1341 and `isStrandedPromptAck` in TranscriptProjector).
+ */
+export function hasUnansweredInteractivePrompt(
+  messages: Array<{ type?: string; interactivePrompt?: { status?: string }; toolCall?: { toolName?: string; result?: unknown } }>
+): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    // Everything before the last user message was superseded by it.
+    if (msg.type === 'user_message') return false;
+    // Interactive prompts projected from canonical events
+    if (msg.type === 'interactive_prompt' && msg.interactivePrompt?.status === 'pending') return true;
+    // Interactive tools stored as tool_calls (from TranscriptTransformer)
+    if (msg.toolCall?.toolName && isInteractivePromptTool(msg.toolCall.toolName) && !msg.toolCall.result) return true;
+  }
+  return false;
+}
+
 export const refreshPendingPromptsAtom = atom(
   null,
   (get, set, sessionId: string) => {
     // Pending prompts are now rendered from canonical transcript events via widgets.
     // Update the unified pending interactive prompt state from session messages.
     const messages = get(sessionMessagesAtom(sessionId));
-    const hasPendingPrompt = messages.some(
-      msg => {
-        // Interactive prompts projected from canonical events
-        if (msg.type === 'interactive_prompt' && msg.interactivePrompt?.status === 'pending') return true;
-        // Interactive tools stored as tool_calls (from TranscriptTransformer)
-        if (msg.toolCall?.toolName && isInteractivePromptTool(msg.toolCall.toolName) && !msg.toolCall.result) return true;
-        return false;
-      }
-    );
-    set(sessionHasPendingInteractivePromptAtom(sessionId), hasPendingPrompt);
+    set(sessionHasPendingInteractivePromptAtom(sessionId), hasUnansweredInteractivePrompt(messages));
   }
 );
 
@@ -828,6 +859,17 @@ export const sessionTitleAtom = atomFamily((sessionId: string) =>
 );
 
 /**
+ * Derived: Session title for normalized list surfaces.
+ *
+ * Targeted `sessions:session-updated` metadata events patch the registry
+ * without reloading an already-open session store. List rows therefore read
+ * the registry first so a loaded store cannot mask a newer external rename.
+ */
+export const sessionListTitleAtom = atomFamily((sessionId: string) =>
+  atom((get) => get(sessionRegistryAtom).get(sessionId)?.title)
+);
+
+/**
  * Derived: Session provider from sessionData.
  * For use in tabs and lists where the provider icon is needed.
  * Falls back to sessionRegistryAtom when sessionStoreAtom hasn't been loaded yet.
@@ -922,6 +964,15 @@ export const sessionEffortLevelRawAtom = atomFamily((sessionId: string) =>
   atom((get) => {
     const metadata = get(sessionStoreAtom(sessionId))?.metadata as Record<string, unknown> | undefined;
     return metadata?.effortLevel ?? null;
+  })
+);
+
+/** OpenCode session role (an `app.agents` primary agent), or null for its default. */
+export const sessionOpenCodeRoleAtom = atomFamily((sessionId: string) =>
+  atom((get) => {
+    const metadata = get(sessionStoreAtom(sessionId))?.metadata as Record<string, unknown> | undefined;
+    const role = metadata?.opencodeAgent;
+    return typeof role === 'string' && role.trim().length > 0 ? role : null;
   })
 );
 
@@ -1479,6 +1530,9 @@ export const convertToWorkstreamAtom = atom(
           },
         },
         workspaceId: workspacePath,
+        // The app manufactures this root to hold sessions the user already
+        // made; nobody asked for a new session, so it must not read as one.
+        launchSource: 'workstream_convert',
       });
 
       if (!createResult.success || !createResult.id) {
@@ -2600,4 +2654,27 @@ export const workstreamTitleAtom = atomFamily((workstreamId: string) =>
     const meta = registry.get(workstreamId);
     return meta?.title || 'Untitled';
   })
+);
+
+/**
+ * Latest session pin toggle, published by whichever surface performed it.
+ *
+ * The session sidebar keeps its rendered list in local React state, so a pin
+ * toggled from another surface (the Agent mode header) has no way to reach it.
+ * Request-atom shape: each publish bumps `version`; consumers use the
+ * skip-initial-mount idiom and patch their own copy.
+ */
+export interface SessionPinnedUpdate {
+  version: number;
+  payload: { sessionId: string; isPinned: boolean };
+}
+
+export const sessionPinnedUpdateAtom = atom<SessionPinnedUpdate | null>(null);
+
+export const publishSessionPinnedUpdateAtom = atom(
+  null,
+  (get, set, payload: { sessionId: string; isPinned: boolean }) => {
+    const previous = get(sessionPinnedUpdateAtom);
+    set(sessionPinnedUpdateAtom, { version: (previous?.version ?? 0) + 1, payload });
+  }
 );

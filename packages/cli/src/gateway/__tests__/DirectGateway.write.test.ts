@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Phase 2b: offline guarded direct writes. Exercised against an on-disk SQLite
  * fixture built with the real tracker_items DDL so create/update/comment/archive
@@ -12,6 +13,7 @@ import { openDatabase } from '../../db/openDatabase.js';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { renderList, renderRecord } from '../../cli/output.js';
 import { DirectGateway } from '../DirectGateway.js';
 
 const WORKSPACE = '/tmp/fixture-write-workspace';
@@ -23,6 +25,7 @@ CREATE TABLE tracker_items (
   id TEXT PRIMARY KEY,
   issue_number INTEGER,
   issue_key TEXT,
+  local_key TEXT,
   type TEXT NOT NULL,
   data TEXT NOT NULL,
   workspace TEXT NOT NULL,
@@ -72,22 +75,23 @@ let dbPath: string;
 function seed(row: {
   id: string; issueKey?: string; issueNumber?: number; type: string;
   data: Record<string, unknown>; syncStatus?: string; syncId?: number | null;
-  bodyVersion?: number;
+  bodyVersion?: number; localKey?: string; workspace?: string;
 }): void {
   const db = openDatabase(dbPath);
   const iso = new Date().toISOString();
   db.prepare(
-    `INSERT INTO tracker_items (id, issue_key, issue_number, type, data, workspace, document_path,
+    `INSERT INTO tracker_items (id, issue_key, local_key, issue_number, type, data, workspace, document_path,
        type_tags, sync_status, sync_id, body_version, created, updated)
-     VALUES (@id, @issueKey, @issueNumber, @type, @data, @workspace, '',
+     VALUES (@id, @issueKey, @localKey, @issueNumber, @type, @data, @workspace, '',
        @typeTags, @syncStatus, @syncId, @bodyVersion, @created, @updated)`,
   ).run({
     id: row.id,
     issueKey: row.issueKey ?? null,
+    localKey: row.localKey ?? null,
     issueNumber: row.issueNumber ?? null,
     type: row.type,
     data: JSON.stringify(row.data),
-    workspace: WORKSPACE,
+    workspace: row.workspace ?? WORKSPACE,
     typeTags: JSON.stringify([row.type]),
     syncStatus: row.syncStatus ?? 'local',
     syncId: row.syncId ?? null,
@@ -126,7 +130,7 @@ afterEach(() => {
 });
 
 describe('DirectGateway offline writes', () => {
-  it('create allocates an issue key + row + body cache + activity', async () => {
+  it('creates a solo-workspace item without a key or number and explains the unassigned key', async () => {
     const gw = new DirectGateway(dbPath);
     const rec = await gw.createTracker(WORKSPACE, {
       type: 'bug',
@@ -139,14 +143,15 @@ describe('DirectGateway offline writes', () => {
     });
     gw.close();
 
-    expect(rec.issueKey).toBe('FIX-1');
+    expect(rec.issueKey).toBeUndefined();
+    expect(rec.issueNumber).toBeUndefined();
     expect(rec.primaryType).toBe('bug');
     expect(rec.fields.title).toBe('Login times out');
     expect(rec.fields.severity).toBe('critical');
 
     const row = rawRow(rec.id);
-    expect(row.issue_key).toBe('FIX-1');
-    expect(row.issue_number).toBe(1);
+    expect(row.issue_key).toBeNull();
+    expect(row.issue_number).toBeNull();
     expect(row.title).toBe('Login times out'); // generated column derived from data
     expect(row.status).toBe('to-do');
     expect(row.body_version).toBe(1);
@@ -158,14 +163,88 @@ describe('DirectGateway offline writes', () => {
     const cache = bodyCache(rec.id);
     expect(cache).toHaveLength(1);
     expect(JSON.parse(cache[0].content)).toBe('Steps to repro');
+
+    const json = JSON.parse(renderRecord(rec, undefined, { json: true }));
+    expect(json.issueKey).toBeUndefined();
+    expect(json.issueKeyStatus).toBe('unassigned');
+    expect(json.issueKeyMessage).toBe('This item has no key until it is published.');
+    expect(renderRecord(rec, undefined, {})).toContain('This item has no key until it is published.');
+    expect(renderList([rec], {})).toContain('This item has no key until it is published.');
   });
 
-  it('create increments the issue number from existing items', async () => {
-    seed({ id: 'old', issueKey: 'NIM-7', issueNumber: 7, type: 'task', data: { title: 'Old', status: 'done' } });
+  /**
+   * The CLI reads the same rows the app displays. It used to print the literal
+   * word "unassigned" in the key column for items the tracker grid labelled
+   * `NIM.75`, and refuse to resolve that number when handed back (#1346).
+   */
+  it('shows a local number as the key and resolves a dotted reference within the workspace', async () => {
+    seed({ id: 'numbered', localKey: 'NIM.75', type: 'bug', data: { title: 'Numbered', status: 'to-do' } });
+
+    const gw = new DirectGateway(dbPath);
+    const rec = await gw.getTracker(WORKSPACE, 'NIM.75');
+    gw.close();
+
+    expect(rec?.id).toBe('numbered');
+    expect(rec?.localKey).toBe('NIM.75');
+    expect(rec?.issueKey).toBeUndefined();
+
+    const json = JSON.parse(renderRecord(rec!, undefined, { json: true }));
+    expect(json.issueKeyStatus).toBe('local');
+    expect(json.localKey).toBe('NIM.75');
+    expect(json.issueKeyMessage).toMatch(/private to this project/);
+
+    // The key column, and the footnote that explains what kind of key it is.
+    expect(renderList([rec!], {})).toContain('NIM.75');
+    expect(renderList([rec!], {})).not.toContain('until it is published');
+  });
+
+  it('refuses to resolve a dotted number from another workspace', async () => {
+    // Every project on the machine has a `.4`, and this table holds them all.
+    // A cross-workspace match would confidently return the wrong item.
+    seed({
+      id: 'elsewhere', localKey: 'NIM.4', type: 'bug',
+      workspace: '/tmp/some-other-project', data: { title: 'Other project', status: 'to-do' },
+    });
+
+    const gw = new DirectGateway(dbPath);
+    const rec = await gw.getTracker(WORKSPACE, 'NIM.4');
+    gw.close();
+
+    expect(rec).toBeNull();
+  });
+
+  it('creates a room-owned workspace item without a provisional key or number', async () => {
+    seed({
+      id: 'shared', issueKey: 'NIM-7', issueNumber: 7, type: 'task',
+      data: { title: 'Shared', status: 'done' }, syncStatus: 'synced', syncId: 7,
+    });
     const gw = new DirectGateway(dbPath);
     const rec = await gw.createTracker(WORKSPACE, { type: 'bug', title: 'New' });
     gw.close();
-    expect(rec.issueKey).toBe('NIM-8'); // prefix derived from NIM-7, number = max+1
+
+    expect(rec.issueKey).toBeUndefined();
+    expect(rec.issueNumber).toBeUndefined();
+    expect(rawRow(rec.id).issue_key).toBeNull();
+    expect(rawRow(rec.id).issue_number).toBeNull();
+    expect(rawRow('shared').issue_key).toBe('NIM-7');
+    expect(rawRow('shared').issue_number).toBe(7);
+  });
+
+  it('preserves an existing legacy LC key during update without presenting it as assigned', async () => {
+    seed({ id: 'legacy', issueKey: 'LC-4', type: 'bug', data: { title: 'Legacy', status: 'to-do' } });
+    const gw = new DirectGateway(dbPath);
+    const updated = await gw.updateTracker(WORKSPACE, 'legacy', { priority: 'high' });
+    gw.close();
+
+    expect(updated.issueKey).toBe('LC-4');
+    expect(rawRow('legacy').issue_key).toBe('LC-4');
+    expect(rawRow('legacy').issue_number).toBeNull();
+    expect(JSON.parse(renderRecord(updated, undefined, { json: true }))).toMatchObject({
+      id: 'legacy',
+      issueKeyStatus: 'unassigned',
+      issueKeyMessage: 'This item has no key until it is published.',
+    });
+    expect(JSON.parse(renderRecord(updated, undefined, { json: true })).issueKey).toBeUndefined();
   });
 
   it('update merges fields, bumps updated, appends activity, and round-trips', async () => {
@@ -186,8 +265,12 @@ describe('DirectGateway offline writes', () => {
     expect(rec.fields.status).toBe('in-review');
     expect(rec.fields.priority).toBe('high');
     expect(rec.fields.severity).toBe('critical');
+    expect(rec.issueKey).toBe('NIM-1');
+    expect(rec.issueNumber).toBe(1);
 
     const row = rawRow('u1');
+    expect(row.issue_key).toBe('NIM-1');
+    expect(row.issue_number).toBe(1);
     expect(row.status).toBe('in-review'); // generated column reflects the merge
     expect(row.updated).not.toBe(before); // updated stamp advanced
     const data = JSON.parse(row.data);
@@ -287,6 +370,38 @@ describe('DirectGateway offline writes', () => {
     const data = JSON.parse(rawRow(rec.id).data);
     expect(data.title).toBe('Plain');
     expect(data.status).toBe('to-do');
+  });
+
+  it('refuses to create or update an item straight into an approved status (exit 5)', async () => {
+    seed({ id: 'r1', issueKey: 'NIM-1', issueNumber: 1, type: 'bug', data: { title: 'B', status: 'in-review' } });
+    const gw = new DirectGateway(dbPath);
+
+    // Direct status arg.
+    await expect(gw.updateTracker(WORKSPACE, 'NIM-1', { status: 'approved' }))
+      .rejects.toMatchObject({ code: 5 });
+    // Smuggled through the generic fields bag (case-insensitive).
+    await expect(gw.updateTracker(WORKSPACE, 'NIM-1', { fields: { status: 'Approved' } }))
+      .rejects.toMatchObject({ code: 5 });
+    // Create that starts an item already approved.
+    await expect(gw.createTracker(WORKSPACE, { type: 'bug', title: 'x', status: 'approved' }))
+      .rejects.toMatchObject({ code: 5 });
+
+    // Moving into review is allowed (an agent may propose).
+    const ok = await gw.updateTracker(WORKSPACE, 'NIM-1', { status: 'in-review' });
+    expect(ok.fields.status).toBe('in-review');
+    gw.close();
+  });
+
+  it('refuses approval through a custom workflow-status role field (exit 5)', async () => {
+    seedTypeDef('review', {
+      type: 'review',
+      roles: { title: 'title', workflowStatus: 'phase' },
+    });
+    seed({ id: 'rg1', issueKey: 'NIM-1', issueNumber: 1, type: 'review', data: { title: 'R', phase: 'in-review' } });
+    const gw = new DirectGateway(dbPath);
+    await expect(gw.updateTracker(WORKSPACE, 'NIM-1', { fields: { phase: 'approved' } }))
+      .rejects.toMatchObject({ code: 5 });
+    gw.close();
   });
 
   it('refuses offline writes when a live app owns the default DB (exit 5)', async () => {

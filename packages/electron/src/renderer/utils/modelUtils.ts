@@ -31,6 +31,7 @@ export {
   DEFAULT_THINKING_MODE,
   parseEffortLevel,
   parseThinkingMode,
+  resolveThinkingMode,
 } from '@nimbalyst/runtime/ai/server/effortLevels';
 
 interface ModelInfo {
@@ -38,6 +39,15 @@ interface ModelInfo {
   providerName: string;
   modelName: string;
   shortModelName: string;
+}
+
+/**
+ * Resolve the provider that owns a model id, falling back to Claude Code when the
+ * id is absent or unparseable. Session-creation paths all need this before they can
+ * pick a send route, and each hand-rolled copy is a chance for the fallback to drift.
+ */
+export function resolveProviderFromModel(modelId?: string | null): string {
+  return (modelId ? ModelIdentifier.tryParse(modelId) : null)?.provider || 'claude-code';
 }
 
 /**
@@ -171,6 +181,9 @@ export function getProviderDisplayName(provider: string): string {
     case 'openai': return 'OpenAI';
     case 'lmstudio': return 'LMStudio';
     case 'copilot-cli': return 'GitHub Copilot';
+    case 'grok-build': return 'Grok Build';
+    case 'cursor-agent': return 'Cursor Agent';
+    case 'antigravity-gemini-agent': return 'Gemini';
     default: return provider;
   }
 }

@@ -75,8 +75,10 @@ describe('buildSdkOptions env-key hardening', () => {
   let originalToolSearch: string | undefined;
   let originalDisableAutoupdater: string | undefined;
   let originalDisableUpdates: string | undefined;
+  let originalDisableGitInstructions: string | undefined;
 
   beforeEach(() => {
+    originalDisableGitInstructions = process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS;
     originalAnthropic = process.env.ANTHROPIC_API_KEY;
     originalOpenAI = process.env.OPENAI_API_KEY;
     originalEntrypoint = process.env.CLAUDE_CODE_ENTRYPOINT;
@@ -116,6 +118,11 @@ describe('buildSdkOptions env-key hardening', () => {
     } else {
       process.env.DISABLE_UPDATES = originalDisableUpdates;
     }
+    if (originalDisableGitInstructions === undefined) {
+      delete process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS;
+    } else {
+      process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS = originalDisableGitInstructions;
+    }
   });
 
   it('removes ANTHROPIC_API_KEY when no configured key is provided', async () => {
@@ -127,8 +134,8 @@ describe('buildSdkOptions env-key hardening', () => {
       makeParams({ shellEnv: { ANTHROPIC_API_KEY: 'sk-ant-leaked-shellenv' } })
     );
 
-    expect(options.env.ANTHROPIC_API_KEY).toBeUndefined();
-    expect(options.env.OPENAI_API_KEY).toBeUndefined();
+    expect(options.env!.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(options.env!.OPENAI_API_KEY).toBeUndefined();
   });
 
   it('ignores ANTHROPIC_API_KEY that settingsEnv might carry', async () => {
@@ -142,8 +149,8 @@ describe('buildSdkOptions env-key hardening', () => {
       })
     );
 
-    expect(options.env.ANTHROPIC_API_KEY).toBeUndefined();
-    expect(options.env.SOME_OTHER_FLAG).toBe('1');
+    expect(options.env!.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(options.env!.SOME_OTHER_FLAG).toBe('1');
   });
 
   it('uses the configured API key from provider config when present', async () => {
@@ -154,7 +161,7 @@ describe('buildSdkOptions env-key hardening', () => {
       makeParams()
     );
 
-    expect(options.env.ANTHROPIC_API_KEY).toBe('sk-ant-user-configured');
+    expect(options.env!.ANTHROPIC_API_KEY).toBe('sk-ant-user-configured');
   });
 
   it('sets the base env flags buildSdkOptions applies to every spawn', async () => {
@@ -167,8 +174,8 @@ describe('buildSdkOptions env-key hardening', () => {
     // 'true' = unconditional tool-search deferral: every MCP server except the
     // alwaysLoad core defers regardless of the model's context window. The old
     // 'auto:2' default meant a 20K-token eager floor on 1M-context models.
-    expect(options.env.ENABLE_TOOL_SEARCH).toBe('true');
-    expect(options.env.CLAUDE_CODE_ENTRYPOINT).toBe('cli');
+    expect(options.env!.ENABLE_TOOL_SEARCH).toBe('true');
+    expect(options.env!.CLAUDE_CODE_ENTRYPOINT).toBe('cli');
   });
 
   it('forwards an explicit high effort selection instead of using the CLI default', async () => {
@@ -177,7 +184,7 @@ describe('buildSdkOptions env-key hardening', () => {
       makeParams()
     );
 
-    expect(options.env.CLAUDE_CODE_EFFORT_LEVEL).toBe('high');
+    expect(options.env!.CLAUDE_CODE_EFFORT_LEVEL).toBe('high');
   });
 
   it('disables SDK extended thinking for supported Claude Agent models', async () => {
@@ -221,8 +228,8 @@ describe('buildSdkOptions env-key hardening', () => {
 
     const { options } = await buildSdkOptions(makeDeps(), makeParams());
 
-    expect(options.env.DISABLE_AUTOUPDATER).toBe('1');
-    expect(options.env.DISABLE_UPDATES).toBe('1');
+    expect(options.env!.DISABLE_AUTOUPDATER).toBe('1');
+    expect(options.env!.DISABLE_UPDATES).toBe('1');
   });
 
   it('lets a user-configured DISABLE_AUTOUPDATER override the default (NIM-1573)', async () => {
@@ -233,7 +240,43 @@ describe('buildSdkOptions env-key hardening', () => {
       makeParams({ settingsEnv: { DISABLE_AUTOUPDATER: '0' } })
     );
 
-    expect(options.env.DISABLE_AUTOUPDATER).toBe('0');
+    expect(options.env!.DISABLE_AUTOUPDATER).toBe('0');
+  });
+
+  it('disables the CLI git-status snapshot by default on every spawn (#1177)', async () => {
+    // Every resumed turn spawns a fresh CLI process, and each one rebuilds the
+    // "git status at the start of the conversation" block from the LIVE working
+    // tree. An agentic session edits files, so that block differs on most turns
+    // and invalidates the whole message prefix behind it: measured 62.8% full
+    // rewrite on resume turns vs 0.4% in-process. Nimbalyst supplies its own
+    // frozen snapshot instead (see buildClaudeCodeSystemPrompt gitContext).
+    delete process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS;
+
+    const { options } = await buildSdkOptions(makeDeps(), makeParams());
+
+    expect(options.env!.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS).toBe('1');
+  });
+
+  it.each(['settingsEnv', 'shellEnv'] as const)(
+    'lets a user-configured CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS in %s override the default (#1177)',
+    async (source) => {
+      delete process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS;
+
+      const { options } = await buildSdkOptions(
+        makeDeps(),
+        makeParams({ [source]: { CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: '0' } })
+      );
+
+      expect(options.env!.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS).toBe('0');
+    }
+  );
+
+  it('lets a user-configured CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS in process env override the default (#1177)', async () => {
+    process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS = '0';
+
+    const { options } = await buildSdkOptions(makeDeps(), makeParams());
+
+    expect(options.env!.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS).toBe('0');
   });
 
   it('lets a user-configured ENABLE_TOOL_SEARCH override the default', async () => {
@@ -247,6 +290,6 @@ describe('buildSdkOptions env-key hardening', () => {
       makeParams({ settingsEnv: { ENABLE_TOOL_SEARCH: 'false' } })
     );
 
-    expect(options.env.ENABLE_TOOL_SEARCH).toBe('false');
+    expect(options.env!.ENABLE_TOOL_SEARCH).toBe('false');
   });
 });

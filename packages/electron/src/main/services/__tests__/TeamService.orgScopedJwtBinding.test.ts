@@ -31,7 +31,12 @@ vi.mock('../../utils/logger', () => ({
   logger: { main: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
 }));
 
-vi.mock('../../utils/gitUtils', () => ({ getNormalizedGitRemote: vi.fn(async () => null) }));
+vi.mock('../../utils/gitUtils', () => ({
+  getNormalizedGitRemote: vi.fn(async () => null),
+  getRawGitRemote: vi.fn(async () => null),
+  normalizeGitRemote: (url: string | null) => url,
+  getGitRemoteIdentities: vi.fn(async () => null),
+}));
 vi.mock('../teamProjectResolver', () => ({ resolveTeamForRemoteHash: () => null }));
 vi.mock('../../utils/collabSyncUrl', () => ({ getCollabSyncHttpUrl: () => 'https://sync.test' }));
 
@@ -59,15 +64,19 @@ vi.mock('../StytchAuthService', () => ({
   refreshPersonalSessionForAccount: vi.fn(async () => null),
   onAuthStateChange: vi.fn(() => () => {}),
   updateSessionToken: vi.fn(),
+  updateSessionTokenForAccount: vi.fn(),
   getStytchUserId: vi.fn(() => 'user-1'),
   getUserEmail: vi.fn(() => 'sync@test.com'),
   getPersonalOrgId: vi.fn(() => SYNC_ACCOUNT),
   getPersonalUserId: vi.fn(() => 'user-1'),
+  getSyncAccount: vi.fn(() => ({ personalOrgId: SYNC_ACCOUNT, email: 'sync@test.com' })),
 }));
 
 vi.mock('@nimbalyst/runtime', () => ({
   asPersonalJwt: (jwt: string) => jwt,
+  asPersonalMemberId: (id: string) => id,
   asTeamJwt: (jwt: string) => jwt,
+  asTeamMemberId: (id: string) => id,
 }));
 
 vi.mock('../../database/initialize', () => ({ getDatabase: () => ({ query: vi.fn(async () => ({ rows: [] })) }) }));
@@ -79,15 +88,20 @@ vi.mock('../AccountOrgBindingService', () => ({
 }));
 vi.mock('../OrgProjectionService', () => ({}));
 vi.mock('../OrgAccessResolver', () => ({}));
-vi.mock('../OrgKeyService', () => ({}));
-vi.mock('../KeyRotationService', () => ({}));
 vi.mock('../TrackerSyncManager', () => ({}));
 vi.mock('../CollabBackupService', () => ({}));
-vi.mock('../SilentTeamEncryptionMigration', () => ({}));
 vi.mock('../TeamAuthBootstrap', () => ({ createTeamAuthBootstrap: (fn: unknown) => fn }));
 
-import { getOrgScopedJwt, invalidateListTeamsCache } from '../TeamService';
-import { getPersonalSessionJwtForAccount, getSessionTokenForAccount } from '../StytchAuthService';
+import {
+  getOrgScopedJwt,
+  invalidateListTeamsCache,
+} from '../TeamService';
+import {
+  getPersonalSessionJwtForAccount,
+  getSessionTokenForAccount,
+  updateSessionToken,
+  updateSessionTokenForAccount,
+} from '../StytchAuthService';
 
 const SECONDARY_ORG = 'org-owned-by-secondary';
 
@@ -114,6 +128,7 @@ describe('getOrgScopedJwt account binding (two-JWT rule)', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     invalidateListTeamsCache();
   });
 
@@ -137,10 +152,28 @@ describe('getOrgScopedJwt account binding (two-JWT rule)', () => {
     expect(JSON.parse(init.body).sessionToken).toBe(`${SECONDARY_ACCOUNT}-session-token`);
   });
 
+  // NIM-2466: the exchange revokes the token it consumed, so the replacement has
+  // to be stored against the account that owns it -- never against the singleton,
+  // which still belongs to the sync account.
+  it('persists the replacement session token against the exchanging account', async () => {
+    resolveTeamOrgAccountBindingMock.mockResolvedValue({
+      personalOrgId: SECONDARY_ACCOUNT,
+      teamMemberId: 'secondary-team-member',
+    });
+    mockSwitchExchange();
+
+    // forceRefresh: the preceding test leaves this org's JWT cached.
+    await getOrgScopedJwt(SECONDARY_ORG, undefined, true);
+
+    expect(updateSessionTokenForAccount).toHaveBeenCalledWith(SECONDARY_ACCOUNT, 'secondary-team-token');
+    expect(updateSessionToken).not.toHaveBeenCalled();
+  });
+
   it('refuses to fall back to the sync account when no binding identifies the org', async () => {
     mockSwitchExchange();
 
     await expect(getOrgScopedJwt('org-with-no-binding')).rejects.toThrow(/No signed-in account binding/);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
 });

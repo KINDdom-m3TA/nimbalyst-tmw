@@ -105,6 +105,9 @@ export {
   sessionListChatAtom,
   showArchivedSessionsAtom,
   refreshSessionListAtom,
+  // Pin toggles published across surfaces (Agent mode header -> session sidebar)
+  sessionPinnedUpdateAtom,
+  publishSessionPinnedUpdateAtom,
   initSessionList,
   addSessionFullAtom,
   updateSessionFullAtom,
@@ -128,12 +131,14 @@ export {
   sessionDocumentContextAtom,
   sessionEffortLevelRawAtom,
   sessionThinkingModeRawAtom,
+  sessionOpenCodeRoleAtom,
   sessionLoadingAtom,
   sessionModeAtom,
   sessionModelAtom,
   sessionArchivedAtom,
   sessionActiveAtom,
   sessionTitleAtom,
+  sessionListTitleAtom,
   sessionProviderAtom,
   sessionAgentRoleAtom,
   sessionPhaseAtom,
@@ -486,3 +491,14 @@ export {
   clearVoiceActiveSession,
   persistAndClearVoiceSession,
 } from './listeners/voiceModeListeners';
+
+export {
+  feedbackRequestAtomKey,
+  feedbackRequestTargetKey,
+  feedbackRequestActiveViewerAtomFamily,
+  feedbackRequestAtomFamily,
+  feedbackRequestProgressAtomFamily,
+  feedbackRequestResponsesForViewerAtomFamily,
+  feedbackRequestStateAtomFamily,
+  feedbackRequestStateForTargetAtomFamily,
+} from './atoms/feedbackRequests';

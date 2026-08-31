@@ -16,6 +16,7 @@ import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
 import type { SQLiteDatabase } from '../../database/sqlite/SQLiteDatabase';
+import type { BackupVerifier } from '../../database/sqlite/backupVerification';
 
 export type SQLiteBackupLogFn = (
   level: 'info' | 'warn' | 'error',
@@ -43,8 +44,33 @@ const BACKUP_FILENAMES = {
   oldest: 'nimbalyst.backup-oldest.sqlite',
 } as const;
 
+/** Newest to oldest. `rotateBackups` truncates this to the retention setting. */
+const BACKUP_SLOT_ORDER = ['current', 'previous', 'oldest'] as const;
+
+type BackupSlot = (typeof BACKUP_SLOT_ORDER)[number];
+
+const SLOT_METADATA_KEYS = {
+  current: 'currentBackup',
+  previous: 'previousBackup',
+  oldest: 'oldestBackup',
+} as const satisfies Record<BackupSlot, keyof BackupMetadata>;
+
+/**
+ * Generations kept, each a full copy of the database. Two keeps one older
+ * generation to fall back on if the newest backup is itself bad, at a 3x
+ * total disk multiplier instead of the 4x that prompted #1248.
+ */
+export const DEFAULT_BACKUP_COPIES_KEPT = 2;
+export const MAX_BACKUP_COPIES_KEPT = BACKUP_SLOT_ORDER.length;
+
 const METADATA_FILENAME = 'backup-metadata.json';
 const SIZE_GUARD_RATIO = 0.5;
+
+/** A bad setting must never mean "keep zero backups". */
+function clampCopiesKept(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_BACKUP_COPIES_KEPT;
+  return Math.max(1, Math.min(MAX_BACKUP_COPIES_KEPT, Math.floor(value)));
+}
 
 export interface SQLiteBackupServiceOptions {
   /** Directory holding `nimbalyst.sqlite`. */
@@ -61,6 +87,20 @@ export interface SQLiteBackupServiceOptions {
    * `electron-log` wrapper. Defaults to a no-op when not provided.
    */
   log?: SQLiteBackupLogFn;
+  /**
+   * Backup generations to keep (1-3). Defaults to
+   * `DEFAULT_BACKUP_COPIES_KEPT`. Each is a full copy, so this is a direct
+   * multiplier on disk usage.
+   */
+  copiesKept?: number;
+  /**
+   * How a candidate backup file is checked before it is promoted or restored
+   * from. Defaults to `sqlite.verifyBackup`, which runs synchronously on the
+   * calling thread — fine for tests, fatal in the worker, where a multi-GB
+   * scan stops it dequeuing `query` messages for a minute or more. The worker
+   * passes an off-thread verifier instead.
+   */
+  verify?: BackupVerifier;
 }
 
 export class SQLiteBackupService {
@@ -69,6 +109,8 @@ export class SQLiteBackupService {
   private sqlite: SQLiteDatabase;
   private metadataPath: string;
   private log: SQLiteBackupLogFn;
+  private copiesKept: number;
+  private verify: BackupVerifier;
   private metadata: BackupMetadata = {
     currentBackup: null,
     previousBackup: null,
@@ -83,6 +125,16 @@ export class SQLiteBackupService {
     this.sqlite = opts.sqlite;
     this.metadataPath = path.join(this.backupDir, METADATA_FILENAME);
     this.log = opts.log ?? (() => { /* no-op */ });
+    this.copiesKept = clampCopiesKept(opts.copiesKept);
+    this.verify = opts.verify ?? ((backupPath) => this.sqlite.verifyBackup(backupPath));
+  }
+
+  /**
+   * Change how many generations are kept. The new limit takes effect on the
+   * next rotation, which is also when slots past the limit are deleted.
+   */
+  setCopiesKept(copiesKept: number): void {
+    this.copiesKept = clampCopiesKept(copiesKept);
   }
 
   async initialize(): Promise<void> {
@@ -131,7 +183,7 @@ export class SQLiteBackupService {
       const sizeBytes = (await fs.stat(tempPath)).size;
       this.log('info', '[SQLite Backup] Online backup complete', { sizeBytes });
 
-      const verification = await this.sqlite.verifyBackup(tempPath);
+      const verification = await this.verify(tempPath);
       if (!verification.valid) {
         await this.removeTempBackup(tempPath);
         return { success: false, error: `Verification failed: ${verification.error}` };
@@ -246,18 +298,20 @@ export class SQLiteBackupService {
   }
 
   /**
-   * Rolling 3: oldest is deleted, previous → oldest, current → previous,
-   * new → current. Size-guard rejects suspicious shrinkage.
+   * Roll the backup chain, keeping `copiesKept` generations.
+   *
+   * At the default of 2 this is: previous is deleted, current → previous,
+   * new → current. Every kept copy is a FULL copy of the database, so this
+   * setting is a direct multiplier on disk: 3 copies plus the live database
+   * meant a 4.6 GiB store occupied 18.5 GiB (#1248).
+   *
+   * Size-guard rejects suspicious shrinkage before anything is moved.
    */
   private async rotateBackups(
     newPath: string,
     timestamp: string,
     sizeBytes: number,
   ): Promise<boolean> {
-    const currentPath = path.join(this.backupDir, BACKUP_FILENAMES.current);
-    const previousPath = path.join(this.backupDir, BACKUP_FILENAMES.previous);
-    const oldestPath = path.join(this.backupDir, BACKUP_FILENAMES.oldest);
-
     const currentSize = this.metadata.currentBackup?.sizeBytes ?? 0;
     if (currentSize > 0 && sizeBytes / currentSize < SIZE_GUARD_RATIO) {
       this.log('warn', '[SQLite Backup] New backup suspiciously smaller; rejecting rotation', {
@@ -269,16 +323,41 @@ export class SQLiteBackupService {
       return false;
     }
 
-    if (fsSync.existsSync(oldestPath)) {
-      await fs.rm(oldestPath, { force: true });
+    // Slots from newest to oldest, truncated to the retention setting. Slots
+    // past the limit are removed so lowering the setting actually reclaims the
+    // space rather than orphaning files in the backup directory.
+    const slots = BACKUP_SLOT_ORDER.slice(0, this.copiesKept);
+    const dropped = BACKUP_SLOT_ORDER.slice(this.copiesKept);
+    for (const slot of dropped) {
+      const p = path.join(this.backupDir, BACKUP_FILENAMES[slot]);
+      if (fsSync.existsSync(p)) {
+        await fs.rm(p, { force: true });
+        this.log('info', `[SQLite Backup] Removed ${slot} backup (retention set to ${this.copiesKept})`);
+      }
+      this.metadata[SLOT_METADATA_KEYS[slot]] = null;
     }
-    if (fsSync.existsSync(previousPath)) {
-      await fs.rename(previousPath, oldestPath);
-      this.metadata.oldestBackup = this.metadata.previousBackup;
+
+    // Shift each kept slot down one, oldest first so nothing is overwritten.
+    for (let i = slots.length - 1; i > 0; i--) {
+      const target = slots[i];
+      const sourceSlot = slots[i - 1];
+      const targetPath = path.join(this.backupDir, BACKUP_FILENAMES[target]);
+      const sourcePath = path.join(this.backupDir, BACKUP_FILENAMES[sourceSlot]);
+      if (fsSync.existsSync(targetPath)) {
+        await fs.rm(targetPath, { force: true });
+      }
+      if (fsSync.existsSync(sourcePath)) {
+        await fs.rename(sourcePath, targetPath);
+        this.metadata[SLOT_METADATA_KEYS[target]] = this.metadata[SLOT_METADATA_KEYS[sourceSlot]];
+      }
     }
-    if (fsSync.existsSync(currentPath)) {
-      await fs.rename(currentPath, previousPath);
-      this.metadata.previousBackup = this.metadata.currentBackup;
+
+    // At copiesKept === 1 there is no older generation to fall back on, so the
+    // new backup is still written to a temp file and promoted by rename --
+    // never truncated in place.
+    const currentPath = path.join(this.backupDir, BACKUP_FILENAMES.current);
+    if (this.copiesKept === 1 && fsSync.existsSync(currentPath)) {
+      await fs.rm(currentPath, { force: true });
     }
     await fs.rename(newPath, currentPath);
     this.metadata.currentBackup = { timestamp, sizeBytes, verified: true };
@@ -290,7 +369,7 @@ export class SQLiteBackupService {
     source: string,
   ): Promise<{ success: boolean; error?: string }> {
     try {
-      const verification = await this.sqlite.verifyBackup(backupPath);
+      const verification = await this.verify(backupPath);
       if (!verification.valid) {
         return { success: false, error: `${source} verification failed: ${verification.error}` };
       }

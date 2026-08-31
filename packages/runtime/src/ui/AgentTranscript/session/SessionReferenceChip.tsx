@@ -13,6 +13,8 @@ import type { JSX } from 'react';
 import * as React from 'react';
 import { useAtomValue } from 'jotai';
 
+import { MaterialSymbol } from '../../icons/MaterialSymbol';
+import { resolveProviderIcon } from '../../icons/ProviderIcons';
 import {
   sessionRefByIdAtom,
   openSessionReference,
@@ -47,13 +49,31 @@ export interface SessionReferenceChipProps {
   sessionId: string;
   /** Compact chips drop the phase label, keeping the icon + title. */
   variant?: 'default' | 'compact';
+  /**
+   * Presentation to use when the id isn't in `sessionRefMapAtom` — which the
+   * registry only covers for the current workspace. A caller that already has
+   * the session's title/provider from its own query (e.g. a session in another
+   * worktree) passes it here so the chip shows a name instead of a raw id.
+   * Live atom data always wins.
+   */
+  fallbackMeta?: Partial<SessionRefMeta>;
+  /**
+   * Host-supplied navigation. Defaults to the `open-ai-session` window event;
+   * hosts that already own an open-session action (e.g. the PR pane, which also
+   * switches window mode) pass their own here.
+   */
+  onOpen?: (sessionId: string) => void;
 }
 
 export function SessionReferenceChip({
   sessionId,
   variant = 'default',
+  fallbackMeta,
+  onOpen: onOpenOverride,
 }: SessionReferenceChipProps): JSX.Element {
-  const meta = useAtomValue(sessionRefByIdAtom(sessionId));
+  const liveMeta = useAtomValue(sessionRefByIdAtom(sessionId));
+  const meta: SessionRefMeta | null =
+    liveMeta ?? (fallbackMeta ? { id: sessionId, title: '', ...fallbackMeta } : null);
 
   const label = meta?.title?.trim() || shortSessionId(sessionId);
   const dotColor = statusDotColor(meta);
@@ -69,9 +89,10 @@ export function SessionReferenceChip({
     (event: React.MouseEvent) => {
       event.preventDefault();
       event.stopPropagation();
-      openSessionReference(sessionId);
+      if (onOpenOverride) onOpenOverride(sessionId);
+      else openSessionReference(sessionId);
     },
-    [sessionId],
+    [sessionId, onOpenOverride],
   );
 
   return (
@@ -102,11 +123,23 @@ export function SessionReferenceChip({
       }}
     >
       <span
-        className="material-symbols-outlined session-reference-chip-icon"
+        className="session-reference-chip-icon"
         aria-hidden="true"
-        style={{ fontSize: '13px', lineHeight: 1, color: 'var(--nim-text-muted)' }}
+        data-provider={meta?.provider}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          lineHeight: 1,
+          color: 'var(--nim-text-muted)',
+          flexShrink: 0,
+        }}
       >
-        forum
+        {/* Custom provider glyphs are SVGs that ignore `style`, so the color
+            lives on this wrapper and the SVG inherits it via currentColor. */}
+        <MaterialSymbol
+          icon={meta?.provider ? resolveProviderIcon(meta.provider) : 'forum'}
+          size={13}
+        />
       </span>
       <span
         aria-hidden="true"

@@ -4,14 +4,21 @@ import { existsSync } from 'fs';
 import * as path from 'path';
 import { RecentItem, SessionState, SessionWindow } from '../types';
 import { logger } from './logger';
-import { type EffortLevel, parseEffortLevel } from '@nimbalyst/runtime/ai/server/effortLevels';
+import { type EffortLevel, type ThinkingMode, parseEffortLevel, parseThinkingMode } from '@nimbalyst/runtime/ai/server/effortLevels';
+import type { FleetStatusStyle, IslandDisplayPreference } from '../../shared/menuBarIsland';
 import type { OnboardingConfig } from '../../shared/types/workspace';
 import { DEFAULT_ONBOARDING_CONFIG } from '../../shared/types/workspace';
 import { AlphaFeatureTag, getDefaultAlphaFeatures, ALPHA_FEATURES } from '../../shared/alphaFeatures';
 import { DeveloperFeatureTag, getDefaultDeveloperFeatures, DEVELOPER_FEATURES } from '../../shared/developerFeatures';
 import { BetaFeatureTag, getDefaultBetaFeatures, enableAllBetaFeatures as enableAllBetaFeaturesUtil, BETA_FEATURES } from '../../shared/betaFeatures';
 import { deriveIssueKeyPrefix } from '../../shared/trackerIssueKeyPrefix';
+import {
+  LAST_SELECTED_ORG_SETTING_KEY,
+  ORG_PROJECT_WALK_DISMISSED_SETTING_KEY,
+} from '../../shared/orgProjectWalk';
 import { normalizeCodexProviderConfig, omitModelsField } from '@nimbalyst/runtime/ai/server/utils/modelConfigUtils';
+import { planWorkstreamStatePrune } from './workstreamStatePrune';
+import type { OpenCodeModelCatalogCache } from '@nimbalyst/runtime/ai/server';
 
 // Theme can be a built-in theme or an extension theme ID (format: "extensionId:themeId")
 export type AppTheme = 'dark' | 'light' | 'system' | 'auto' | 'crystal-dark' | string;
@@ -21,10 +28,14 @@ export type CompletionSoundType = 'chime' | 'bell' | 'pop' | 'alert' | 'custom' 
 export type ReleaseChannel = 'stable' | 'alpha';
 export type PreferredTerminalShell = 'auto' | 'pwsh' | 'powershell' | 'git-bash' | 'wsl' | 'cmd';
 export type WorkspaceFileTreeFilter = 'all' | 'markdown' | 'known' | 'git-uncommitted' | 'git-worktree' | 'ai-read' | 'ai-written';
-export type TrackerSyncModeSetting = 'local' | 'shared' | 'hybrid';
-export interface TrackerSyncPolicySetting {
-  mode: TrackerSyncModeSetting;
-  scope?: 'project' | 'workspace';
+export type AttachmentStagingMode = 'temp' | 'workspace' | 'custom';
+export interface AttachmentStagingConfig {
+  mode: AttachmentStagingMode;
+  customPath?: string;
+}
+export interface TeamManagementWindowState {
+  bounds: { x: number; y: number; width: number; height: number };
+  maximized: boolean;
 }
 
 /**
@@ -42,9 +53,45 @@ export interface ExtensionSettings {
   configuration?: Record<string, unknown>;
 }
 
+/**
+ * Local database maintenance settings.
+ *
+ * Before these existed, backups were a hardcoded rolling-3 every 4 hours, so a
+ * 4.6 GiB store silently occupied 18.5 GiB on disk with no way to turn it down
+ * (#1248).
+ */
+export interface DatabaseMaintenanceSettings {
+  /** Backup generations to keep, 1-3. Each is a full copy. */
+  backupCopiesKept: number;
+  /** Hours between periodic backups. 0 means "only on quit". */
+  backupIntervalHours: number;
+  /**
+   * Days of tool output to keep at full fidelity. Older tool results are
+   * rewritten to a placeholder. 0 disables the pass entirely. User prompts and
+   * agent text are never affected at any setting.
+   */
+  toolOutputRetentionDays: number;
+}
+
+export const DEFAULT_DATABASE_MAINTENANCE: DatabaseMaintenanceSettings = {
+  backupCopiesKept: 2,
+  backupIntervalHours: 12,
+  // Opt-in for now: the pass is destructive and irreversible, so it ships
+  // behind an explicit action in the database dashboard before it becomes a
+  // default. See the rollout in the storage plan.
+  toolOutputRetentionDays: 0,
+};
+
+/** How the macOS menu bar fleet strip is drawn. See `getTrayStripStyle`. */
+export type TrayStripStyle = FleetStatusStyle;
+
 interface AppStoreSchema {
   theme: AppTheme;
   themeIsDark?: boolean; // Whether the current theme is dark (used for extension themes)
+  // The active theme's resolved --nim-bg, reported by the renderer once it has
+  // applied the theme. Lets window creation paint the real colour before CSS
+  // parses; cleared on a theme change until the new theme reports its own.
+  themeBackgroundColor?: string;
   // Set when the active theme disappeared (extension uninstalled/disabled or
   // file removed) and the runtime fell back to a base theme. Cleared when the
   // user explicitly applies a theme or dismisses the banner in the Themes panel.
@@ -62,6 +109,9 @@ interface AppStoreSchema {
   communityPopupDismissed?: boolean;
   completedSessionCount?: number;
   completedSessionsWithTools?: number;
+  // Local database maintenance. Each backup generation is a FULL copy of the
+  // database, so `copiesKept` is a direct multiplier on disk usage (#1248).
+  databaseMaintenance?: DatabaseMaintenanceSettings;
   // Sound notifications
   completionSoundEnabled?: boolean;
   completionSoundType?: CompletionSoundType;
@@ -77,11 +127,21 @@ interface AppStoreSchema {
   // Shared fallback for native file/folder dialogs outside workspace context.
   lastDialogDirectory?: string;
   // Organization the org-management window falls back to when opened without an
-  // explicit orgId (Window > Organization Manager, or the switcher's untargeted
+  // explicit orgId (Window > Organization Messages, or the switcher's untargeted
   // entries). Written whenever the selection changes.
   lastSelectedOrgId?: string;
+  // Bounds for the single global organization-management window.
+  teamManagementWindowState?: TeamManagementWindowState;
+  // Width of the tray sessions panel. Height is fixed (the list scrolls), and
+  // the position is always recomputed from the tray icon, so only width persists.
+  trayPanelWidth?: number;
   // Default AI model for new sessions (format: "provider:model" e.g., "claude-code:sonnet")
   defaultAIModel?: string;
+  // Defaults for the composer's effort / extended-thinking selectors. Both are
+  // written as a side effect of changing the selector, so the choice sticks
+  // across new sessions.
+  defaultEffortLevel?: EffortLevel;
+  defaultThinkingMode?: ThinkingMode;
   // Default GitHub CLI account login for PR review. A per-project
   // override lives on WorkspaceState.prReviewGhAccountOverride.
   prReviewDefaultGhAccount?: string;
@@ -128,6 +188,7 @@ interface AppStoreSchema {
     // content, so only loopback hosts are accepted (see setClaudeCodeApiUpstreamUrl).
     apiUpstreamUrl?: string;
   };
+  attachmentStaging?: AttachmentStagingConfig;
   // OpenAI Codex settings
   openaiCodex?: {
     // Which codex transport to use for new sessions. 'app-server' (default)
@@ -137,6 +198,18 @@ interface AppStoreSchema {
     // path retained as an escape hatch.
     transport?: 'sdk' | 'app-server';
   };
+  /**
+   * Legacy single-slot catalog from before per-workspace storage (#1382). Read
+   * once for the workspace it belongs to, never written; new writes go to
+   * openCodeModelCatalogCaches.
+   */
+  openCodeModelCatalogCache?: OpenCodeModelCatalogCache;
+  /**
+   * Live provider.list catalog per workspace, each keyed by OpenCode binary +
+   * auth identity. OpenCode resolves providers from project config, so one
+   * project's discovery is not an answer for another.
+   */
+  openCodeModelCatalogCaches?: Record<string, OpenCodeModelCatalogCache>;
   // Unified agent workflow registry source settings
   agentWorkflowSources?: {
     workspaceClaudeCompatibilityEnabled?: boolean;
@@ -197,8 +270,21 @@ interface AppStoreSchema {
   };
   // System spellchecker (enabled by default, applies to all editors and text inputs)
   spellcheckEnabled?: boolean;
+  // Spellchecker language(s) as Chromium BCP-47 codes (e.g. ["en-CA"]).
+  // Empty/unset -> derived from the OS locale at launch. Ignored on macOS,
+  // which uses the system spellchecker.
+  spellcheckLanguages?: string[];
   // System tray icon
   showTrayIcon?: boolean;
+  // macOS menu bar fleet-status strip, independent of the icon itself.
+  // A wide item is a real risk of overflowing under the notch on a laptop, so
+  // it can be turned off without losing the tray icon and its panel.
+  showTrayStrip?: boolean;
+  trayStripStyle?: TrayStripStyle;
+  // Which display the user dragged the menu bar island onto. Absent means the
+  // primary display, which is also the fallback when this names a monitor that
+  // is no longer connected.
+  islandDisplay?: IslandDisplayPreference;
   // Advanced: V8 heap memory limit in MB (default: 4096 = 4GB)
   // Increase if you experience OOM crashes with large sessions
   maxHeapSizeMB?: number;
@@ -488,7 +574,33 @@ export interface WorkspaceState {
     mergedUpdateBase64: string;
     updatedAt: number;
   }>;
-  trackerSyncPolicies?: Record<string, TrackerSyncModeSetting | TrackerSyncPolicySetting>;
+  /** Structured one-time summary consumed by the post-migration UI in a later slice. */
+  trackerSharingMigration?: {
+    version: 1;
+    migratedAt: number;
+    entries: Array<{
+      trackerType: string;
+      legacySchemaMode: 'local' | 'shared' | 'hybrid';
+      legacyItemMode: 'local' | 'shared' | 'hybrid' | null;
+      sharing: 'personal' | 'team';
+      draftByDefault: boolean;
+      diverged: boolean;
+    }>;
+    divergences: Array<{
+      trackerType: string;
+      legacySchemaMode: 'local' | 'shared' | 'hybrid';
+      legacyItemMode: 'local' | 'shared' | 'hybrid' | null;
+      sharing: 'personal' | 'team';
+      draftByDefault: boolean;
+      diverged: boolean;
+    }>;
+  };
+  /**
+   * When the user acknowledged the post-migration summary, compared against
+   * `trackerSharingMigration.migratedAt`. Kept outside the report because the
+   * report is rewritten until the legacy per-machine policies are finalized.
+   */
+  trackerSharingMigrationSeenAt?: number;
   // Per-project opt-out for agent tracker tools. When false, McpConfigService
   // omits the `nimbalyst-trackers` MCP server so the agent gets no tracker_*
   // tools in this project. Defaults to enabled (undefined === true).
@@ -496,10 +608,30 @@ export interface WorkspaceState {
   // Issue key prefix for tracker items (e.g., "NIM", "APP"). Used for local-only trackers.
   // For synced trackers, the prefix is stored server-side in TrackerRoom metadata.
   issueKeyPrefix?: string;
+  // Prefix for this project's machine-private tracker numbers (`NIM.12`).
+  // Pinned on first use and never recomputed: a number already handed out
+  // cannot change meaning, so a later project routes around this one rather
+  // than this one moving. Distinct from `issueKeyPrefix` because the room may
+  // assign the team a different prefix long after local numbers exist.
+  localKeyPrefix?: string;
+  // High-water mark for this project's local numbers. Only ever counts up, and
+  // is NEVER recomputed from existing rows -- deriving it from the rows is the
+  // exact mistake that made `LC-###` reissue numbers after items were acked or
+  // deleted. A deleted item's number stays spent.
+  localKeyCounter?: number;
   // Account identity bound to this workspace (personalOrgId).
   // Set once when the workspace is first synced. Different workspaces can use different accounts.
   // Defaults to the account selected for personal sync if not set.
   accountId?: string;
+  // Organization this project belongs to when its git remote cannot say so.
+  // A project normally resolves to its org by git-remote hash, which every
+  // machine computes identically; a folder with no remote has no such hash, so
+  // the org it was created from is recorded here instead. Local-only by
+  // definition -- without a remote there is nothing for a teammate to match.
+  // Read by TeamService.findTeamForWorkspace. `teamProjectId` names the project
+  // within the org when the workspace was added to one that already existed;
+  // absent means the org's primary project.
+  localOrgBinding?: { orgId: string; teamProjectId?: string };
   // Hidden gutter buttons (navigation sidebar)
   hiddenGutterButtons?: string[];
   // Tracker automation override for this project (undefined fields inherit from global)
@@ -591,6 +723,103 @@ function getWorkspaceStore(): Store<Record<string, WorkspaceState>> {
   return _workspaceStore;
 }
 
+/**
+ * Read-through cache over the workspace store's on-disk JSON.
+ *
+ * `conf` has no cache: its `get store()` runs `readFileSync` + `JSON.parse`
+ * on *every* `.get()`. That is ~19ms of synchronous main-thread time against
+ * a 7.5MB `workspace-settings.json`, and `getWorkspaceState` sits on the hot
+ * path for team resolution and document sync (see `getLocalOrgBinding`), so
+ * the cost lands in the event loop dozens of times per user action.
+ *
+ * The main process is the only writer of this file within a userData dir --
+ * each dev instance gets its own -- so a process-local cache cannot go stale.
+ * Every write goes through `writeWorkspaceEntry`, which keeps the two in step.
+ */
+let _workspaceStoreCache: Record<string, WorkspaceState> | null = null;
+
+function readWorkspaceStore(): Record<string, WorkspaceState> {
+  if (!_workspaceStoreCache) {
+    _workspaceStoreCache = getWorkspaceStore().store ?? {};
+  }
+  return _workspaceStoreCache;
+}
+
+function writeWorkspaceEntry(key: string, value: WorkspaceState): void {
+  getWorkspaceStore().set(key, value);
+  // Populate rather than invalidate: the next read is almost always for the
+  // key just written, and re-reading would pay the full parse again.
+  readWorkspaceStore()[key] = value;
+}
+
+/**
+ * Drop the cache so the next read comes from disk. For tests and for any
+ * path that mutates the file outside `writeWorkspaceEntry`.
+ */
+export function invalidateWorkspaceStoreCache(): void {
+  _workspaceStoreCache = null;
+}
+
+/**
+ * Workspaces still carrying legacy offline collab edits in their settings.
+ *
+ * `collabPendingUpdates` predates `CollabDocumentReplicaStore`; the migration
+ * off it only ran when the specific document was reopened, so blobs for
+ * documents nobody revisited sat here for months inflating every read and
+ * write of the settings file. This lets a startup pass find them all.
+ */
+export function listLegacyPendingUpdateWorkspaces(): Array<{
+  workspacePath: string;
+  pending: Record<string, { mergedUpdateBase64: string; updatedAt: number }>;
+}> {
+  const out: Array<{
+    workspacePath: string;
+    pending: Record<string, { mergedUpdateBase64: string; updatedAt: number }>;
+  }> = [];
+
+  for (const state of Object.values(readWorkspaceStore())) {
+    const pending = state?.collabPendingUpdates;
+    if (!pending || Object.keys(pending).length === 0) continue;
+    if (!state.workspacePath) continue;
+    out.push({ workspacePath: state.workspacePath, pending });
+  }
+
+  return out;
+}
+
+/**
+ * Evict per-workstream UI state for sessions that no longer exist.
+ *
+ * Entries accumulated one per workstream and were never removed, so the
+ * settings file carried thousands of them. `conf` rewrites the entire file on
+ * every `set`, so the dead entries were paid for on each persist. Callers pass
+ * the live session ids; an empty set is treated as no-information and prunes
+ * nothing (see `planWorkstreamStatePrune`).
+ */
+export function pruneWorkstreamStates(
+  liveSessionIds: ReadonlySet<string>
+): { workspacesTouched: number; entriesRemoved: number } {
+  let workspacesTouched = 0;
+  let entriesRemoved = 0;
+
+  for (const [key, state] of Object.entries(readWorkspaceStore())) {
+    const plan = planWorkstreamStatePrune(
+      state?.workstreamStates as Record<string, unknown> | undefined,
+      liveSessionIds
+    );
+    if (plan.remove.length === 0) continue;
+
+    const next = cloneWorkspaceState(state);
+    for (const id of plan.remove) delete (next.workstreamStates ?? {})[id];
+    writeWorkspaceEntry(key, next);
+
+    workspacesTouched++;
+    entriesRemoved += plan.remove.length;
+  }
+
+  return { workspacesTouched, entriesRemoved };
+}
+
 const DEFAULT_TAB_MANAGER_STATE: TabManagerState = {
   tabs: [],
   activeTabId: null,
@@ -680,7 +909,12 @@ function createDefaultWorkspaceState(workspacePath: string): WorkspaceState {
       customFolders: [],
     },
     collabPendingUpdates: {},
+    trackerSharingMigration: undefined,
+    trackerSharingMigrationSeenAt: undefined,
+    localOrgBinding: undefined,
     issueKeyPrefix: deriveIssueKeyPrefix(workspacePath),
+    localKeyPrefix: undefined,
+    localKeyCounter: undefined,
     lastUpdated: Date.now(),
   };
 }
@@ -760,10 +994,10 @@ function cloneWorkspaceState(state: WorkspaceState): WorkspaceState {
 
 function ensureWorkspaceState(path: string): WorkspaceState {
   const key = workspaceKey(path);
-  const raw = getWorkspaceStore().get(key);
+  const raw = readWorkspaceStore()[key];
   const normalized = normalizeWorkspaceState(raw, path);
   if (!raw) {
-    getWorkspaceStore().set(key, cloneWorkspaceState(normalized));
+    writeWorkspaceEntry(key, cloneWorkspaceState(normalized));
   }
   return normalized;
 }
@@ -771,7 +1005,7 @@ function ensureWorkspaceState(path: string): WorkspaceState {
 function persistWorkspaceState(path: string, state: WorkspaceState): WorkspaceState {
   const key = workspaceKey(path);
   const next = cloneWorkspaceState({ ...state, lastUpdated: Date.now() });
-  getWorkspaceStore().set(key, next);
+  writeWorkspaceEntry(key, next);
   return next;
 }
 
@@ -799,6 +1033,33 @@ export const store = {
   get path() { return getAppStore().path; },
   get store() { return getAppStore().store; },
 };
+
+/**
+ * Read maintenance settings, merged over defaults. Persisted state predates
+ * these fields for every existing install, so each one is defaulted
+ * individually rather than trusting the stored object to be complete.
+ */
+export function getDatabaseMaintenanceSettings(): DatabaseMaintenanceSettings {
+  const stored = getAppStore().get('databaseMaintenance') as
+    | Partial<DatabaseMaintenanceSettings>
+    | undefined;
+  return {
+    backupCopiesKept:
+      stored?.backupCopiesKept ?? DEFAULT_DATABASE_MAINTENANCE.backupCopiesKept,
+    backupIntervalHours:
+      stored?.backupIntervalHours ?? DEFAULT_DATABASE_MAINTENANCE.backupIntervalHours,
+    toolOutputRetentionDays:
+      stored?.toolOutputRetentionDays ?? DEFAULT_DATABASE_MAINTENANCE.toolOutputRetentionDays,
+  };
+}
+
+export function setDatabaseMaintenanceSettings(
+  patch: Partial<DatabaseMaintenanceSettings>,
+): DatabaseMaintenanceSettings {
+  const next = { ...getDatabaseMaintenanceSettings(), ...patch };
+  getAppStore().set('databaseMaintenance', next);
+  return next;
+}
 
 export function getRecentItems(type: 'workspaces' | 'documents'): RecentItem[] {
   const key = getRecentKey(type);
@@ -836,6 +1097,25 @@ export function clearSessionState(): void {
   getAppStore().delete('sessionState');
 }
 
+export function getTeamManagementWindowState(): TeamManagementWindowState | undefined {
+  return getAppStore().get('teamManagementWindowState');
+}
+
+export function saveTeamManagementWindowState(state: TeamManagementWindowState): void {
+  getAppStore().set('teamManagementWindowState', {
+    bounds: { ...state.bounds },
+    maximized: state.maximized,
+  });
+}
+
+export function getTrayPanelWidth(): number | undefined {
+  return getAppStore().get('trayPanelWidth');
+}
+
+export function setTrayPanelWidth(width: number): void {
+  getAppStore().set('trayPanelWidth', width);
+}
+
 export function getTheme(): AppTheme {
   return getAppStore().get('theme');
 }
@@ -850,6 +1130,23 @@ export function setTheme(theme: AppTheme, isDark?: boolean): void {
 
 export function getThemeIsDark(): boolean | undefined {
   return getAppStore().get('themeIsDark');
+}
+
+export function setThemeBackgroundColor(color: string): void {
+  getAppStore().set('themeBackgroundColor', color);
+}
+
+export function getThemeBackgroundColor(): string | undefined {
+  return getAppStore().get('themeBackgroundColor');
+}
+
+/**
+ * Drop the remembered canvas colour. Called on a theme change: until the
+ * renderer applies the new theme and reports its --nim-bg, the stored colour
+ * belongs to the theme we just left and would paint the wrong flash.
+ */
+export function clearThemeBackgroundColor(): void {
+  getAppStore().delete('themeBackgroundColor');
 }
 
 export function getPendingThemeFallback(): { missingId: string; appliedId: string } | undefined {
@@ -929,6 +1226,24 @@ export function updateWorkspaceState(
   const draft = cloneWorkspaceState(current);
   const result = updater(draft) || draft;
   return cloneWorkspaceState(persistWorkspaceState(workspacePath, result));
+}
+
+/**
+ * Local-number prefixes already pinned by other projects on this machine.
+ *
+ * A local number carries no hint of which project it came from, so two
+ * projects sharing a prefix means `NIM.4` has more than one answer on one
+ * machine -- and agents read trackers across projects in a single session.
+ * Team prefixes have the room's registry to arbitrate; local ones have only
+ * this comparison.
+ */
+export function getTakenLocalKeyPrefixes(excludeWorkspacePath?: string): string[] {
+  const excludeKey = excludeWorkspacePath ? workspaceKey(excludeWorkspacePath) : null;
+  const all = readWorkspaceStore();
+  return Object.entries(all)
+    .filter(([key]) => key.startsWith('ws:') && key !== excludeKey)
+    .map(([, state]) => state?.localKeyPrefix)
+    .filter((prefix): prefix is string => typeof prefix === 'string' && prefix.length > 0);
 }
 
 export function getWorkspaceRecentFiles(workspacePath: string): string[] {
@@ -1125,7 +1440,7 @@ export function getAIProviderOverrides(workspacePath: string): AIProviderOverrid
  * `apiKeys`). Separate from the `app-settings` store exported as `store`.
  */
 let _aiSettingsStore: Store<Record<string, unknown>> | null = null;
-function getAiSettingsStore(): Store<Record<string, unknown>> {
+export function getAiSettingsStore(): Store<Record<string, unknown>> {
   if (!_aiSettingsStore) {
     _aiSettingsStore = new Store<Record<string, unknown>>({ name: 'ai-settings' });
   }
@@ -1393,6 +1708,55 @@ export function setShowTrayIcon(show: boolean): void {
   getAppStore().set('showTrayIcon', show);
 }
 
+export function isShowTrayStrip(): boolean {
+  return getAppStore().get('showTrayStrip', true);
+}
+
+export function setShowTrayStrip(show: boolean): void {
+  getAppStore().set('showTrayStrip', show);
+}
+
+/**
+ * How the fleet strip is drawn.
+ *
+ * `image` is the bitmap composited onto the tray item; `island` is a live
+ * window drawn in the menu bar row that expands into the session rows on hover.
+ * Both render the same `StripView`, and they are mutually exclusive -- island
+ * mode removes the tray item rather than sitting beside it.
+ *
+ * The default is the island on macOS and `image` everywhere else, where there
+ * is no menu bar row to draw into. Read as an unset-vs-set check rather than a
+ * defaulted `get`, because the platform decides the default and an existing
+ * install that never chose a style should move with it.
+ */
+export function getTrayStripStyle(): TrayStripStyle {
+  const stored = getAppStore().get('trayStripStyle');
+  if (stored === 'island' || stored === 'image') return stored;
+  return process.platform === 'darwin' ? 'island' : 'image';
+}
+
+export function setTrayStripStyle(style: TrayStripStyle): void {
+  getAppStore().set('trayStripStyle', style);
+}
+
+/**
+ * The display the user dragged the island onto, if any.
+ *
+ * Null rather than a default display because "no preference" and "the primary
+ * display" are different states: the first follows the primary as the user
+ * rearranges their monitors, the second would pin the island to whatever
+ * happened to be primary the day it was saved.
+ */
+export function getIslandDisplay(): IslandDisplayPreference | null {
+  const stored = getAppStore().get('islandDisplay');
+  if (!stored || typeof stored.id !== 'number') return null;
+  return { id: stored.id, label: typeof stored.label === 'string' ? stored.label : '' };
+}
+
+export function setIslandDisplay(preference: IslandDisplayPreference): void {
+  getAppStore().set('islandDisplay', preference);
+}
+
 // Completion Sound Settings
 export function isCompletionSoundEnabled(): boolean {
   return getAppStore().get('completionSoundEnabled', true);
@@ -1540,6 +1904,41 @@ export function setDefaultAIModel(model: string): void {
   getAppStore().set('defaultAIModel', model);
 }
 
+/**
+ * Keep a bounded number of workspaces' catalogs. Each entry is a full
+ * provider.list result, so an unbounded map would grow with every project the
+ * user ever discovers in; the least recently refreshed is evicted.
+ */
+const MAX_OPENCODE_MODEL_CATALOG_WORKSPACES = 20;
+
+export function getOpenCodeModelCatalogCache(
+  workspacePath: string
+): OpenCodeModelCatalogCache | null {
+  const byWorkspace = getAppStore().get('openCodeModelCatalogCaches') ?? {};
+  const stored = byWorkspace[workspacePath];
+  if (stored) return stored;
+
+  // Installs that discovered before per-workspace storage have one global slot.
+  // Honor it for the workspace it was actually recorded against (#1382).
+  const legacy = getAppStore().get('openCodeModelCatalogCache');
+  return legacy?.workspacePath === workspacePath ? legacy : null;
+}
+
+export function setOpenCodeModelCatalogCache(cache: OpenCodeModelCatalogCache): void {
+  const byWorkspace = { ...(getAppStore().get('openCodeModelCatalogCaches') ?? {}) };
+  byWorkspace[cache.workspacePath] = cache;
+
+  const entries = Object.entries(byWorkspace);
+  if (entries.length > MAX_OPENCODE_MODEL_CATALOG_WORKSPACES) {
+    entries.sort(([, a], [, b]) => b.refreshedAt - a.refreshedAt);
+    for (const [staleWorkspacePath] of entries.slice(MAX_OPENCODE_MODEL_CATALOG_WORKSPACES)) {
+      delete byWorkspace[staleWorkspacePath];
+    }
+  }
+
+  getAppStore().set('openCodeModelCatalogCaches', byWorkspace);
+}
+
 // Default Effort Level Settings (Opus 4.6 adaptive reasoning)
 export function getDefaultEffortLevel(): EffortLevel | undefined {
   const stored = getAppStore().get('defaultEffortLevel');
@@ -1549,6 +1948,17 @@ export function getDefaultEffortLevel(): EffortLevel | undefined {
 
 export function setDefaultEffortLevel(level: EffortLevel): void {
   getAppStore().set('defaultEffortLevel', level);
+}
+
+// Default extended-thinking mode for new sessions (GitHub #1034)
+export function getDefaultThinkingMode(): ThinkingMode | undefined {
+  const stored = getAppStore().get('defaultThinkingMode');
+  if (!stored) return undefined;
+  return parseThinkingMode(stored);
+}
+
+export function setDefaultThinkingMode(mode: ThinkingMode): void {
+  getAppStore().set('defaultThinkingMode', mode);
 }
 
 // Analytics Settings
@@ -1770,6 +2180,33 @@ export function getClaudeCodeSettings(): {
     userCommandsEnabled: settings.userCommandsEnabled ?? true,
     apiUpstreamUrl: settings.apiUpstreamUrl,
   };
+}
+
+export function getAttachmentStagingConfig(): AttachmentStagingConfig {
+  const stored = getAppStore().get('attachmentStaging');
+  const mode = stored?.mode === 'workspace' || stored?.mode === 'custom'
+    ? stored.mode
+    : 'temp';
+  return {
+    mode,
+    ...(mode === 'custom' && typeof stored?.customPath === 'string'
+      ? { customPath: stored.customPath }
+      : {}),
+  };
+}
+
+export function setAttachmentStagingConfig(config: AttachmentStagingConfig): void {
+  const mode: AttachmentStagingMode =
+    config.mode === 'workspace' || config.mode === 'custom' ? config.mode : 'temp';
+  if (mode === 'custom' && (!config.customPath?.trim() || !path.isAbsolute(config.customPath.trim()))) {
+    throw new Error('Custom attachment staging path must be absolute');
+  }
+  getAppStore().set('attachmentStaging', {
+    mode,
+    ...(mode === 'custom' && config.customPath?.trim()
+      ? { customPath: config.customPath.trim() }
+      : {}),
+  });
 }
 
 /**
@@ -2240,6 +2677,19 @@ export function setAppSetting<T>(key: string, value: T): void {
   getAppStore().set(key as keyof AppStoreSchema, value as any);
 }
 
+/**
+ * Forget the signed-out user's organization preferences: which org's project
+ * walk they closed, and which org the org window last opened.
+ *
+ * These are statements about one person's current session, not properties of
+ * the machine. Leaving them behind meant a single "Not now" silenced the walk
+ * for good -- including for the next person to sign in on this computer.
+ */
+export function clearOrgWalkPreferences(): void {
+  getAppStore().delete(ORG_PROJECT_WALK_DISMISSED_SETTING_KEY as keyof AppStoreSchema);
+  getAppStore().delete(LAST_SELECTED_ORG_SETTING_KEY as keyof AppStoreSchema);
+}
+
 // Preferred Agent Language
 // Preferred language for the agent. Currently used to steer the auto-generated
 // session name. Empty/undefined means no preference -- the agent picks based
@@ -2561,7 +3011,7 @@ export function runMigrations(currentVersion: string): void {
   // rather than having it silently reappear. Flag-guarded so it runs once.
   if (!getAppStore().get('gutterButtonsMigratedToGlobal')) {
     try {
-      const workspaces = getWorkspaceStore().store;
+      const workspaces = readWorkspaceStore();
       const union = new Set<string>(getAppStore().get('hiddenGutterItems') ?? []);
       for (const state of Object.values(workspaces ?? {})) {
         for (const id of state?.hiddenGutterButtons ?? []) {

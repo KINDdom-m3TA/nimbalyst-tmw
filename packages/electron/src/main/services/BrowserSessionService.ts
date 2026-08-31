@@ -20,14 +20,19 @@
  *   setBounds() / detachFromWindow() -> renderer can reflow / unmount as tab changes
  *   destroySession() -> view torn down, webContents closed
  *
- * The view is sized in CSS pixels and positioned in the host window's content
- * area; conversion to device pixels happens automatically inside Electron.
+ * Coordinate systems: the renderer measures its placeholder in *its own* CSS
+ * pixels, which shrink as the host window's zoom factor grows. A
+ * WebContentsView is a sibling native view in the window's contentView tree,
+ * so `view.setBounds` takes device-independent pixels relative to the window
+ * content area and is unaffected by that zoom factor. This service converts
+ * between the two (`dip = cssPx * zoomFactor`); callers always pass CSS pixels.
  */
 
 import { WebContentsView, BrowserWindow, session as electronSession } from 'electron';
 import { EventEmitter } from 'events';
 import { logger } from '../utils/logger';
 import { ensureNimPreviewProtocolForSession } from '../protocols/nimPreviewProtocol';
+import { PAGE_INFO_SCRIPT } from './browserPageInfoScript';
 import { installMicrophoneGate } from '../mediaPermissionGate';
 
 export interface BrowserSessionInitOptions {
@@ -60,6 +65,21 @@ export interface BrowserSessionInitOptions {
 /** Default headless viewport when the caller doesn't specify one. */
 const DEFAULT_HEADLESS_VIEWPORT = { width: 1280, height: 800 };
 
+/**
+ * How long a headless (agent-owned) session may sit unused before we reap it.
+ *
+ * Agents routinely forget to call `browser.close_session`, and a leaked headless
+ * session keeps the shared host window alive for the rest of the app run. That
+ * window has to be *shown* to paint and macOS always drags it onto a real
+ * display, so `setOpacity(0)` is the only thing standing between the user and a
+ * frameless window they cannot close. Reaping idle sessions means we are not
+ * relying on that single defence for days at a time.
+ */
+const HEADLESS_IDLE_TTL_MS = 5 * 60 * 1000;
+
+/** How often the reaper checks for idle headless sessions. */
+const HEADLESS_REAP_INTERVAL_MS = 60 * 1000;
+
 export interface BrowserSessionBounds {
   /** CSS pixels, relative to the host window's content area. */
   x: number;
@@ -84,10 +104,64 @@ interface SessionEntry {
   partitionName: string;
   view: WebContentsView;
   hostWindow: BrowserWindow | null;
+  /** Last bounds applied to the view, in device-independent pixels. */
   bounds: BrowserSessionBounds | null;
+  /**
+   * Last bounds the renderer asked for, in its CSS pixels. Kept so we can
+   * re-derive device pixels when the host window's zoom factor changes without
+   * waiting for the renderer to re-measure.
+   */
+  requestedBounds: BrowserSessionBounds | null;
   state: BrowserNavigationState;
   /** Agent-owned session parked in the shared off-screen host window. */
   headless: boolean;
+  /** `Date.now()` of the last operation on this session; drives idle reaping. */
+  lastUsedAt: number;
+}
+
+/** Minimal shape the idle reaper needs; keeps the decision unit-testable. */
+export interface ReapCandidate {
+  sessionId: string;
+  headless: boolean;
+  lastUsedAt: number;
+}
+
+/**
+ * Pure-function reaper policy. Returns the ids of headless sessions that have
+ * been idle for at least `ttlMs`. Editor-backed sessions are never reaped --
+ * the user owns those, and their host window is a real app window.
+ */
+export function selectIdleHeadlessSessions(
+  candidates: ReapCandidate[],
+  now: number,
+  ttlMs: number,
+): string[] {
+  return candidates
+    .filter((c) => c.headless && now - c.lastUsedAt >= ttlMs)
+    .map((c) => c.sessionId);
+}
+
+/**
+ * Converts renderer CSS pixels into the device-independent pixels
+ * `WebContentsView.setBounds` expects. The host renderer's zoom factor scales
+ * its own CSS pixel grid but not the window's content area, so a rect measured
+ * at 125% zoom describes a region 1.25x larger (and further from the origin)
+ * than its raw numbers suggest.
+ */
+export function scaleBoundsForZoom(
+  bounds: BrowserSessionBounds,
+  zoomFactor: number,
+): BrowserSessionBounds {
+  // A non-finite or non-positive factor means we can't trust the reading;
+  // treat it as 1 rather than collapsing the view to nothing.
+  const factor = Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1;
+  if (factor === 1) return bounds;
+  return {
+    x: bounds.x * factor,
+    y: bounds.y * factor,
+    width: bounds.width * factor,
+    height: bounds.height * factor,
+  };
 }
 
 /**
@@ -159,12 +233,16 @@ export class BrowserSessionService extends EventEmitter {
 
   /**
    * Shared host window for headless (agent-owned) sessions. Created lazily on
-   * the first headless session and positioned far off-screen but *shown* so
-   * Chromium actually composits the child views (a hidden/`show:false` window
-   * suspends painting, which empties capturePage()). Torn down when the last
-   * headless session goes away.
+   * the first headless session and *shown* so Chromium actually composits the
+   * child views (a hidden/`show:false` window suspends painting, which fails
+   * capturePage()), but held at opacity 0 so the user never sees it. Torn down
+   * when the last headless session goes away, or when the idle reaper collects
+   * the last leaked session.
    */
   private headlessHostWindow: BrowserWindow | null = null;
+
+  /** Interval that reaps idle headless sessions; only runs while any exist. */
+  private headlessReapTimer: NodeJS.Timeout | null = null;
 
   private constructor() {
     super();
@@ -253,7 +331,9 @@ export class BrowserSessionService extends EventEmitter {
       view,
       hostWindow: null,
       bounds: null,
+      requestedBounds: null,
       headless,
+      lastUsedAt: Date.now(),
       state: {
         sessionId: opts.sessionId,
         url: opts.url,
@@ -276,6 +356,7 @@ export class BrowserSessionService extends EventEmitter {
       const vp = opts.viewport ?? DEFAULT_HEADLESS_VIEWPORT;
       const host = this.getOrCreateHeadlessHostWindow(vp);
       this.attachToWindow(opts.sessionId, host, { x: 0, y: 0, width: vp.width, height: vp.height });
+      this.startHeadlessReaper();
     }
 
     // Kick off the initial load. We intentionally do not await -- the renderer
@@ -373,16 +454,37 @@ export class BrowserSessionService extends EventEmitter {
     }
     entry.hostWindow = null;
     entry.bounds = null;
+    entry.requestedBounds = null;
   }
 
+  /** `bounds` are the renderer's CSS pixels; see the coordinate note up top. */
   public setBounds(sessionId: string, bounds: BrowserSessionBounds): void {
     const entry = this.sessions.get(sessionId);
     if (!entry || !entry.hostWindow || entry.hostWindow.isDestroyed()) return;
 
+    entry.requestedBounds = bounds;
+    const scaled = scaleBoundsForZoom(bounds, entry.hostWindow.webContents.getZoomFactor());
     const [containerWidth, containerHeight] = entry.hostWindow.getContentSize();
-    const clamped = clampBounds(bounds, { width: containerWidth, height: containerHeight });
+    const clamped = clampBounds(scaled, { width: containerWidth, height: containerHeight });
     entry.bounds = clamped;
     entry.view.setBounds(clamped);
+  }
+
+  /**
+   * Re-applies the last requested bounds for every session hosted in `window`.
+   *
+   * Zooming usually reflows the renderer, so the placeholder re-measures and
+   * pushes new bounds on its own -- but that path only fires when the CSS rect
+   * actually changes, and it never fires for a session whose renderer is not
+   * currently laying out. Called from the View menu's zoom commands so the
+   * native view tracks the new factor either way.
+   */
+  public refreshBoundsForWindow(window: BrowserWindow): void {
+    if (window.isDestroyed()) return;
+    for (const entry of this.sessions.values()) {
+      if (entry.hostWindow !== window || !entry.requestedBounds) continue;
+      this.setBounds(entry.sessionId, entry.requestedBounds);
+    }
   }
 
   // ============ NAVIGATION ============
@@ -449,40 +551,13 @@ export class BrowserSessionService extends EventEmitter {
    * indexed list of interactive elements. Each interactive element is tagged
    * in-page with `data-nim-idx` so a follow-up `click({ index })` can target it
    * without the agent needing CSS selectors.
+   *
+   * Form-control values are deliberately absent from the result -- see the
+   * header of `browserPageInfoScript.ts` for why.
    */
   public async getPageInfo(sessionId: string): Promise<unknown> {
     const entry = this.requireEntry(sessionId);
-    const script = `(() => {
-      const sel = 'a[href], button, input, textarea, select, [role=button], [role=link], [onclick], [contenteditable=""], [contenteditable="true"]';
-      const isVisible = (el) => {
-        const r = el.getBoundingClientRect();
-        if (r.width <= 0 || r.height <= 0) return false;
-        const s = getComputedStyle(el);
-        return s.visibility !== 'hidden' && s.display !== 'none';
-      };
-      const els = [...document.querySelectorAll(sel)].filter(isVisible);
-      const interactive = els.slice(0, 200).map((el, i) => {
-        el.setAttribute('data-nim-idx', String(i));
-        const r = el.getBoundingClientRect();
-        return {
-          index: i,
-          tag: el.tagName.toLowerCase(),
-          type: el.getAttribute('type') || undefined,
-          role: el.getAttribute('role') || undefined,
-          text: (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim().slice(0, 120),
-          href: el.getAttribute('href') || undefined,
-          rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
-        };
-      });
-      return {
-        url: location.href,
-        title: document.title,
-        text: (document.body ? document.body.innerText : '').trim().slice(0, 5000),
-        interactive,
-        truncated: els.length > 200,
-      };
-    })()`;
-    return await entry.view.webContents.executeJavaScript(script, true);
+    return await entry.view.webContents.executeJavaScript(PAGE_INFO_SCRIPT, true);
   }
 
   /**
@@ -616,27 +691,41 @@ export class BrowserSessionService extends EventEmitter {
     const win = new BrowserWindow({
       width: viewport.width,
       height: viewport.height,
-      // Far off any real display so the user never sees it.
+      // Requested off-display. macOS does NOT honour this: AppKit constrains the
+      // frame back onto a real screen the moment the window is ordered in, even
+      // when it is frameless. Measured on a two-display Mac: a window asking for
+      // (-32000, -32000) lands at (-1352, 304) -- i.e. squarely on the second
+      // monitor. The request is kept because it is honoured on Windows/Linux;
+      // `setOpacity(0)` below is what actually hides it on macOS.
       x: -32000,
       y: -32000,
       show: false,
       focusable: false,
       skipTaskbar: true,
-      // Frameless keeps the OS from clamping the title bar onto a visible
-      // display, which would otherwise drag the window into view.
       frame: false,
     });
-    // showInactive() forces compositing (so child views paint) without stealing
-    // focus from the user's real window.
+    // The window must be *shown* for its child views to composite -- a window
+    // that is never shown fails capturePage() outright with "Current display
+    // surface not available for capture". showInactive() forces compositing
+    // without stealing focus from the user's real window.
     win.showInactive();
     win.setContentSize(viewport.width, viewport.height);
+    // Since macOS insists on placing it on a display, make it invisible there.
+    // Opacity 0 does not suppress compositing: child views keep painting and
+    // capturePage() still returns full-fidelity pixels.
+    win.setOpacity(0);
+    // Belt and braces -- a frameless, non-focusable window has no close button
+    // and no Cmd+W, so it must never be able to swallow the user's clicks.
+    win.setIgnoreMouseEvents(true);
 
     win.once('closed', () => {
       if (this.headlessHostWindow === win) this.headlessHostWindow = null;
     });
 
     this.headlessHostWindow = win;
-    logger.main.info('[BrowserSessionService] Created off-screen headless host window');
+    logger.main.info(
+      `[BrowserSessionService] Created headless host window at ${JSON.stringify(win.getBounds())} (opacity 0)`,
+    );
     return win;
   }
 
@@ -645,10 +734,53 @@ export class BrowserSessionService extends EventEmitter {
     if (!this.headlessHostWindow) return;
     const stillHeadless = [...this.sessions.values()].some((e) => e.headless);
     if (stillHeadless) return;
+    this.stopHeadlessReaper();
     if (!this.headlessHostWindow.isDestroyed()) {
       this.headlessHostWindow.destroy();
     }
     this.headlessHostWindow = null;
+  }
+
+  /**
+   * Start the idle reaper if it isn't already running. Every operation routes
+   * through `requireEntry`, which refreshes `lastUsedAt`, so an actively-driven
+   * session is never reaped mid-use.
+   */
+  private startHeadlessReaper(): void {
+    if (this.headlessReapTimer) return;
+    this.headlessReapTimer = setInterval(() => {
+      this.reapIdleHeadlessSessions();
+    }, HEADLESS_REAP_INTERVAL_MS);
+    // Don't hold the event loop open on our account.
+    this.headlessReapTimer.unref?.();
+  }
+
+  private stopHeadlessReaper(): void {
+    if (!this.headlessReapTimer) return;
+    clearInterval(this.headlessReapTimer);
+    this.headlessReapTimer = null;
+  }
+
+  /** Destroy headless sessions that have gone untouched for the idle TTL. */
+  private reapIdleHeadlessSessions(): void {
+    const expired = selectIdleHeadlessSessions(
+      [...this.sessions.values()].map((e) => ({
+        sessionId: e.sessionId,
+        headless: e.headless,
+        lastUsedAt: e.lastUsedAt,
+      })),
+      Date.now(),
+      HEADLESS_IDLE_TTL_MS,
+    );
+    for (const sessionId of expired) {
+      logger.main.info(
+        `[BrowserSessionService] Reaping idle headless session ${sessionId} (unused for >${HEADLESS_IDLE_TTL_MS}ms)`,
+      );
+      this.destroySession(sessionId);
+    }
+    if (![...this.sessions.values()].some((e) => e.headless)) {
+      this.stopHeadlessReaper();
+    }
   }
 
   private requireEntry(sessionId: string): SessionEntry {
@@ -656,6 +788,8 @@ export class BrowserSessionService extends EventEmitter {
     if (!entry) {
       throw new Error(`No browser session: ${sessionId}`);
     }
+    // Any operation counts as use and pushes back the idle deadline.
+    entry.lastUsedAt = Date.now();
     return entry;
   }
 
@@ -752,6 +886,7 @@ export class BrowserSessionService extends EventEmitter {
   }
 
   public cleanup(): void {
+    this.stopHeadlessReaper();
     for (const sessionId of [...this.sessions.keys()]) {
       this.destroySession(sessionId);
     }

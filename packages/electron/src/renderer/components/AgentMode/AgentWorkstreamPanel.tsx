@@ -30,11 +30,29 @@ import {
   useRole,
   useInteractions,
 } from '@floating-ui/react';
-import { ProviderIcon, MaterialSymbol, SearchReplaceStateManager } from '@nimbalyst/runtime';
+import {
+  ProviderIcon,
+  MaterialSymbol,
+  SearchReplaceStateManager,
+} from '@nimbalyst/runtime';
+import { ModelIdentifier } from '@nimbalyst/runtime/ai/server/types';
+import type { TranscriptFileLocation } from '@nimbalyst/runtime/ui/AgentTranscript/components/MarkdownRenderer';
 import { WorkstreamEditorTabs, type WorkstreamEditorTabsRef } from './WorkstreamEditorTabs';
+import { usePushRepresentedFile } from '../../hooks/useRepresentedFileSync';
+import { resolveRepresentedFile } from '../../utils/representedFile';
 import { WorkstreamSessionTabs } from './WorkstreamSessionTabs';
 import { FilesEditedSidebar } from './FilesEditedSidebar';
+import { AgentReviewPanel } from './AgentReviewPanel';
+import { ChatSidebar } from '../ChatSidebar/ChatSidebar';
 import { LayoutControls } from '../UnifiedAI/LayoutControls';
+import { ActiveSessionMcpStatusChip } from '../AgenticCoding/McpSessionStatusChip';
+import { WorktreeIcon } from '../common/WorktreeIcon';
+import { toggleWorkstreamHeaderPin } from './workstreamHeaderPin';
+import {
+  worktreeRecordAtom,
+  setWorktreeRecordAtom,
+  patchWorktreeRecordAtom,
+} from '../../store/atoms/worktrees';
 import {
   workstreamSessionsAtom,
   workstreamTitleAtom,
@@ -49,6 +67,8 @@ import {
   loadSessionDataAtom,
   updateSessionStoreAtom,
   setActiveSessionInWorkstreamAtom,
+  refreshSessionListAtom,
+  publishSessionPinnedUpdateAtom,
   type WorkstreamType,
 } from '../../store';
 import {
@@ -57,9 +77,12 @@ import {
   workstreamLayoutModeAtom,
   workstreamSplitRatioAtom,
   workstreamFilesSidebarVisibleAtom,
+  workstreamRightPanelModeAtom,
+  workstreamSessionChatIdsAtom,
   workstreamHasOpenResourcesAtom,
   setWorkstreamLayoutModeAtom,
   setWorkstreamSplitRatioAtom,
+  setWorkstreamSessionChatIdAtom,
   toggleWorkstreamFilesSidebarAtom,
   loadWorkstreamState,
   workstreamStatesLoadedAtom,
@@ -70,6 +93,8 @@ import {
 import {
   filesEditedWidthAtom,
   setFilesEditedWidthAtom,
+  clampAgentRightPanelWidth,
+  MIN_AGENT_MAIN_PANEL_WIDTH,
   sessionHistoryCollapsedAtom,
   toggleSessionHistoryCollapsedAtom,
 } from '../../store/atoms/agentMode';
@@ -84,9 +109,11 @@ import {
   sessionKanbanTagsAtom,
   setSessionTagsAtom,
 } from '../../store/atoms/sessionKanban';
+import { defaultAgentModelAtom } from '../../store/atoms/appSettings';
 
 export interface AgentWorkstreamPanelRef {
   closeActiveTab: () => void;
+  toggleEditorMaximized: () => void;
 }
 
 export interface AgentWorkstreamPanelProps {
@@ -105,6 +132,56 @@ export interface AgentWorkstreamPanelProps {
   onSwitchToAgentMode?: (planDocumentPath?: string, sessionId?: string) => void;
   /** Open a session in the chat sidebar */
   onOpenSessionInChat?: (sessionId: string) => void;
+}
+
+const pairedChatCreationPromises = new Map<string, Promise<string | null>>();
+
+function sessionMentionDraft(sessionId: string, sessionTitle: string): string {
+  const safeTitle = (sessionTitle.trim() || 'Session')
+    .replace(/[\r\n[\]]+/g, ' ')
+    .trim();
+  return `Regarding @@[${safeTitle}](${sessionId}): `;
+}
+
+async function createPairedStandardChat({
+  workspacePath,
+  targetSessionId,
+  targetSessionTitle,
+  defaultModel,
+}: {
+  workspacePath: string;
+  targetSessionId: string;
+  targetSessionTitle: string;
+  defaultModel: string | null;
+}): Promise<string | null> {
+  const chatSessionId = crypto.randomUUID();
+  const modelId = defaultModel ? ModelIdentifier.tryParse(defaultModel) : null;
+  const provider = modelId?.provider || 'claude-code';
+  const cleanTitle = targetSessionTitle.trim() || 'Session';
+  const result = await window.electronAPI.invoke('sessions:create', {
+    session: {
+      id: chatSessionId,
+      provider,
+      model: defaultModel,
+      title: `Chat with ${cleanTitle}`.slice(0, 120),
+    },
+    workspaceId: workspacePath,
+  });
+
+  if (!result?.success) return null;
+
+  try {
+    await window.electronAPI.invoke(
+      'sessions:update-draft-input',
+      chatSessionId,
+      sessionMentionDraft(targetSessionId, cleanTitle),
+    );
+  } catch (error) {
+    // The session already exists. Preserve its pairing even if draft seeding
+    // races a reconnect; creating a replacement would leave duplicate chats.
+    console.warn('[AgentWorkstreamPanel] Failed to seed paired chat draft:', error);
+  }
+  return chatSessionId;
 }
 
 /**
@@ -211,7 +288,7 @@ const WorkstreamHeaderTagsRow: React.FC<{ workstreamId: string }> = ({ workstrea
   }, [tagInput, allTags, tags]);
 
   // Content key so the layout effect only re-runs when tag contents change.
-  const tagsKey = tags.join(' ');
+  const tagsKey = tags.join('\u0000');
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -304,7 +381,7 @@ const WorkstreamHeaderTagsRow: React.FC<{ workstreamId: string }> = ({ workstrea
   return (
     <div
       ref={containerRef}
-      className="workstream-header-tags self-stretch flex items-center gap-1 flex-nowrap overflow-hidden min-w-0 relative"
+      className="workstream-header-tags flex-1 self-stretch flex items-center gap-1 flex-nowrap overflow-hidden min-w-0 relative"
     >
       {/* Hidden measurement layer. Mirrors visible-pill sizes without taking layout space. */}
       <div
@@ -394,21 +471,32 @@ const WorkstreamHeaderTagsRow: React.FC<{ workstreamId: string }> = ({ workstrea
 };
 
 /**
+ * atomFamily key used when the workstream is not a worktree. The family needs a
+ * string, and this never resolves to a record.
+ */
+const NO_WORKTREE_KEY = '__no_worktree__';
+
+/**
  * Header showing workstream title, provider icon, processing state, and layout controls.
  * Subscribes to atoms directly for isolated re-renders.
  */
 const WorkstreamHeader: React.FC<{
   workstreamId: string;
   workspacePath: string;
+  /**
+   * The session currently in view — the workstream's active child, or the
+   * workstream itself when it is a solo session. Per-session chrome (today:
+   * the MCP status chip) keys off this rather than workstreamId, since a
+   * workstream's tabs can be on different providers.
+   */
+  activeSessionId?: string | null;
   worktreeId?: string | null;
   worktreePath?: string | null;
-  onToggleSidebar: () => void;
-  sidebarVisible: boolean;
   onArchiveStatusChange?: () => void;
   onOpenTerminal?: () => void;
   onCreateNewTerminal?: () => void;
   onShowArchiveDialog?: () => void;
-}> = React.memo(({ workstreamId, workspacePath, worktreeId, worktreePath, onToggleSidebar, sidebarVisible, onArchiveStatusChange, onOpenTerminal, onCreateNewTerminal, onShowArchiveDialog }) => {
+}> = React.memo(({ workstreamId, workspacePath, activeSessionId, worktreeId, worktreePath, onArchiveStatusChange, onOpenTerminal, onCreateNewTerminal, onShowArchiveDialog }) => {
   const title = useAtomValue(workstreamTitleAtom(workstreamId));
   const isProcessing = useAtomValue(workstreamProcessingAtom(workstreamId));
   const sessionData = useAtomValue(sessionStoreAtom(workstreamId));
@@ -416,8 +504,11 @@ const WorkstreamHeader: React.FC<{
   const hasTabs = useAtomValue(workstreamHasOpenResourcesAtom(workstreamId));
   const sessions = useAtomValue(workstreamSessionsAtom(workstreamId));
   const [isArchived, setIsArchived] = useAtom(sessionArchivedAtom(workstreamId));
+  const worktreeRecord = useAtomValue(worktreeRecordAtom(worktreeId ?? NO_WORKTREE_KEY));
   const setLayoutMode = useSetAtom(setWorkstreamLayoutModeAtom);
   const updateSessionStore = useSetAtom(updateSessionStoreAtom);
+  const patchWorktreeRecord = useSetAtom(patchWorktreeRecordAtom);
+  const publishSessionPinnedUpdate = useSetAtom(publishSessionPinnedUpdateAtom);
 
   // Inline editing state
   const [isEditing, setIsEditing] = useState(false);
@@ -520,12 +611,40 @@ const WorkstreamHeader: React.FC<{
     setLayoutMode({ workstreamId, mode });
   }, [workstreamId, setLayoutMode]);
 
-  // Determine session type label for archive button
+  // Determine session type label for archive and pin buttons
   const getSessionTypeLabel = useCallback(() => {
     if (worktreeId) return 'Worktree';
     if (hasChildren) return 'Workstream';
     return 'Session';
   }, [worktreeId, hasChildren]);
+
+  // The header title stays the session title, so the chip shows the worktree's
+  // own name (its directory/branch slug) — the one piece of worktree identity
+  // that appears nowhere else in Agent mode. Falls back to the cached path so
+  // the chip is populated before `worktree:get` resolves.
+  const worktreeChipName = worktreeId
+    ? (worktreeRecord?.name || (worktreePath ? getWorktreeNameFromPath(worktreePath, '') : ''))
+    : '';
+
+  // Pin state lives on the worktree record for worktrees and on the session
+  // record otherwise — the same split the sidebar context menus use.
+  const isPinned = worktreeId ? (worktreeRecord?.isPinned ?? false) : (sessionData?.isPinned ?? false);
+
+  const handlePinToggle = useCallback(async () => {
+    try {
+      await toggleWorkstreamHeaderPin({
+        workstreamId,
+        worktreeId,
+        isPinned: !isPinned,
+        invoke: window.electronAPI.invoke,
+        patchWorktreeRecord,
+        updateSessionStore,
+        publishSessionPinnedUpdate,
+      });
+    } catch (error) {
+      console.error('[WorkstreamHeader] Failed to toggle pin:', error);
+    }
+  }, [isPinned, worktreeId, workstreamId, patchWorktreeRecord, updateSessionStore, publishSessionPinnedUpdate]);
 
   const handleArchive = useCallback(async () => {
     // For worktrees, show confirmation dialog first
@@ -560,8 +679,10 @@ const WorkstreamHeader: React.FC<{
   return (
     <div className="workstream-header shrink-0 h-14 px-4 border-b border-[var(--nim-border)] bg-[var(--nim-bg)]">
       <div className="workstream-header-main flex items-center gap-3 h-full">
-        <div className="workstream-header-icon shrink-0 text-[var(--nim-text-muted)]">
-          {hasChildren ? (
+        <div className="workstream-header-icon shrink-0 text-[var(--nim-text-muted)]" title={getSessionTypeLabel()}>
+          {worktreeId ? (
+            <WorktreeIcon size={20} />
+          ) : hasChildren ? (
             <MaterialSymbol icon="account_tree" size={20} />
           ) : (
             <ProviderIcon provider={sessionData?.provider || 'claude-code'} size={20} />
@@ -588,7 +709,18 @@ const WorkstreamHeader: React.FC<{
               {title}
             </h2>
           )}
-          <WorkstreamHeaderTagsRow workstreamId={workstreamId} />
+          <div className="workstream-header-meta-row flex items-center gap-1.5 w-full min-w-0">
+            {worktreeChipName && (
+              <span
+                className="workstream-header-worktree-chip shrink-0 flex items-center gap-1 max-w-[14rem] px-1.5 py-px rounded text-[0.625rem] font-medium text-[var(--nim-text-muted)] bg-[var(--nim-bg-secondary)] whitespace-nowrap overflow-hidden text-ellipsis"
+                title={worktreePath ? `Worktree: ${worktreeChipName}\n${worktreePath}` : `Worktree: ${worktreeChipName}`}
+              >
+                <WorktreeIcon size={10} />
+                {worktreeChipName}
+              </span>
+            )}
+            <WorkstreamHeaderTagsRow workstreamId={workstreamId} />
+          </div>
         </div>
 
         {isProcessing && (
@@ -596,6 +728,11 @@ const WorkstreamHeader: React.FC<{
             <span className="workstream-header-spinner w-4 h-4 border-2 border-[var(--nim-border)] border-t-[var(--nim-primary)] rounded-full animate-spin" />
           </div>
         )}
+
+        {/* MCP servers for the session currently in view. Hides itself for
+            providers with no MCP status channel and for sessions that have not
+            run a turn yet, so a healthy or irrelevant session shows nothing. */}
+        {activeSessionId && <ActiveSessionMcpStatusChip sessionId={activeSessionId} />}
 
         {/* Terminal button - only show for worktree sessions, positioned before layout controls */}
         {worktreeId && onOpenTerminal && (
@@ -638,6 +775,18 @@ const WorkstreamHeader: React.FC<{
           onModeChange={handleLayoutChange}
         />
 
+        {/* Pin/Unpin toggle - routes to the worktree or the session per type */}
+        <button
+          className={`workstream-pin-button w-8 h-8 flex items-center justify-center rounded cursor-pointer border-none bg-transparent hover:bg-[var(--nim-bg-hover)] ${
+            isPinned ? 'text-[var(--nim-primary)]' : 'text-[var(--nim-text-faint)] hover:text-[var(--nim-text-muted)]'
+          }`}
+          onClick={handlePinToggle}
+          aria-pressed={isPinned}
+          title={`${isPinned ? 'Unpin' : 'Pin'} ${getSessionTypeLabel().toLowerCase()}`}
+        >
+          <MaterialSymbol icon="push_pin" size={18} fill={isPinned} />
+        </button>
+
         {/* Archive/Unarchive button */}
         <button
           className="workstream-archive-button flex items-center gap-1.5 h-8 px-2 rounded text-[var(--nim-text-faint)] text-[11px] font-medium cursor-pointer border-none bg-transparent hover:bg-[var(--nim-bg-hover)] hover:text-[var(--nim-text-muted)]"
@@ -648,14 +797,6 @@ const WorkstreamHeader: React.FC<{
           <span>{isArchived ? `Unarchive ${getSessionTypeLabel()}` : `Archive ${getSessionTypeLabel()}`}</span>
         </button>
 
-        {/* Toggle files sidebar */}
-        <button
-          className={`workstream-sidebar-toggle w-8 h-8 flex items-center justify-center rounded cursor-pointer border-none bg-transparent ml-2 hover:bg-[var(--nim-bg-hover)] hover:text-[var(--nim-text-muted)] ${sidebarVisible ? 'active text-[var(--nim-primary)]' : 'text-[var(--nim-text-faint)]'}`}
-          onClick={onToggleSidebar}
-          title={sidebarVisible ? 'Hide edited files' : 'Show edited files'}
-        >
-          <MaterialSymbol icon="dock_to_right" size={20} />
-        </button>
       </div>
     </div>
   );
@@ -683,6 +824,8 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
 }, ref) => {
   // Ref to the workstream editor tabs for opening files
   const editorTabsRef = useRef<WorkstreamEditorTabsRef>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const rightPanelRef = useRef<HTMLDivElement>(null);
 
   // Get sessions in this workstream
   const sessions = useAtomValue(workstreamSessionsAtom(workstreamId));
@@ -694,6 +837,8 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
   const setWorkstreamState = useSetAtom(workstreamStateAtom(workstreamId));
   const sessionParentId = useAtomValue(sessionParentIdDerivedAtom(workstreamId));
   const sessionWorktreeId = useAtomValue(sessionWorktreeIdAtom(workstreamId));
+  const worktreeRecord = useAtomValue(worktreeRecordAtom(sessionWorktreeId ?? NO_WORKTREE_KEY));
+  const setWorktreeRecord = useSetAtom(setWorktreeRecordAtom);
 
   // Debug: log when activeSessionId changes
   // useEffect(() => {
@@ -703,15 +848,108 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
   // Layout state (persisted via workstreamStateAtom)
   const layoutMode = useAtomValue(workstreamLayoutModeAtom(workstreamId));
   const sidebarVisible = useAtomValue(workstreamFilesSidebarVisibleAtom(workstreamId));
+  const rightPanelMode = useAtomValue(workstreamRightPanelModeAtom(workstreamId));
+  const sessionChatSessionIds = useAtomValue(workstreamSessionChatIdsAtom(workstreamId));
   const splitRatio = useAtomValue(workstreamSplitRatioAtom(workstreamId));
   const hasTabs = useAtomValue(workstreamHasOpenResourcesAtom(workstreamId));
   const toggleSidebar = useSetAtom(toggleWorkstreamFilesSidebarAtom);
   const setSplitRatio = useSetAtom(setWorkstreamSplitRatioAtom);
   const setLayoutMode = useSetAtom(setWorkstreamLayoutModeAtom);
+  const setSessionChatId = useSetAtom(setWorkstreamSessionChatIdAtom);
+  const refreshSessions = useSetAtom(refreshSessionListAtom);
+  const defaultModel = useAtomValue(defaultAgentModelAtom);
 
   // Files sidebar width (project-level state from agentMode)
   const sidebarWidth = useAtomValue(filesEditedWidthAtom);
   const setSidebarWidth = useSetAtom(setFilesEditedWidthAtom);
+  const chatTargetId = activeSessionId || (workstreamType === 'session' ? workstreamId : null);
+  const chatTargetSession = useAtomValue(sessionStoreAtom(chatTargetId || '__no_chat_target__'));
+  const chatTargetTitle = chatTargetSession?.title || 'Session';
+  const chatSessionId = chatTargetId ? sessionChatSessionIds[chatTargetId] ?? null : null;
+  const [chatCreationError, setChatCreationError] = useState<string | null>(null);
+  const [chatCreationAttempt, setChatCreationAttempt] = useState(0);
+
+  const handleChatSessionChange = useCallback((nextChatSessionId: string | null) => {
+    if (!chatTargetId) return;
+    setSessionChatId({
+      workstreamId,
+      targetSessionId: chatTargetId,
+      chatSessionId: nextChatSessionId,
+    });
+  }, [chatTargetId, setSessionChatId, workstreamId]);
+
+  useEffect(() => {
+    if (
+      !isActive
+      || !sidebarVisible
+      || rightPanelMode !== 'session-chat'
+      || !chatTargetId
+      || chatSessionId
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const creationKey = `${workspacePath}\0${workstreamId}\0${chatTargetId}`;
+    let creation = pairedChatCreationPromises.get(creationKey);
+    if (!creation) {
+      creation = createPairedStandardChat({
+        workspacePath,
+        targetSessionId: chatTargetId,
+        targetSessionTitle: chatTargetTitle,
+        defaultModel,
+      });
+      pairedChatCreationPromises.set(creationKey, creation);
+      const clearCreation = () => {
+        if (pairedChatCreationPromises.get(creationKey) === creation) {
+          pairedChatCreationPromises.delete(creationKey);
+        }
+      };
+      void creation.then(clearCreation, clearCreation);
+    }
+
+    setChatCreationError(null);
+    void creation
+      .then((createdSessionId) => {
+        if (!createdSessionId) {
+          if (!cancelled) {
+            setChatCreationError('Could not open a chat for this session.');
+          }
+          return;
+        }
+        // Persist the target pairing even if the panel remounted or the user
+        // switched sessions while creation was in flight.
+        setSessionChatId({
+          workstreamId,
+          targetSessionId: chatTargetId,
+          chatSessionId: createdSessionId,
+        });
+        refreshSessions();
+      })
+      .catch((error) => {
+        console.error('[AgentWorkstreamPanel] Failed to create paired chat:', error);
+        if (!cancelled) {
+          setChatCreationError('Could not open a chat for this session.');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    chatCreationAttempt,
+    chatSessionId,
+    chatTargetId,
+    chatTargetTitle,
+    defaultModel,
+    isActive,
+    refreshSessions,
+    rightPanelMode,
+    setSessionChatId,
+    sidebarVisible,
+    workspacePath,
+    workstreamId,
+  ]);
 
   // Session store for updating archived state
   const updateSessionStore = useSetAtom(updateSessionStoreAtom);
@@ -827,7 +1065,10 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
     }
   }, [workstreamId, workspacePath, sessionDataLoaded, sessionParentId, workstreamStatesLoaded, loadSessionChildren]);
 
-  // Resolve worktree path if this is a worktree session and not yet cached in atom
+  // Resolve the worktree if this is a worktree session and not yet cached.
+  // `worktreePath` is persisted with the workstream, but the record (name, pin
+  // state) is renderer-only, so a fresh launch needs the fetch even when the
+  // path is already known.
   useEffect(() => {
     if (!sessionWorktreeId) {
       if (worktreePath) {
@@ -836,23 +1077,31 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
       return;
     }
 
-    // Skip IPC if already cached in workstream state
-    if (worktreePath) return;
+    if (worktreePath && worktreeRecord) return;
 
-    // Query worktree path via IPC and cache in workstream state atom
     (async () => {
       try {
         const result = await window.electronAPI.invoke('worktree:get', sessionWorktreeId);
         if (result?.success && result.worktree) {
-          setWorkstreamState({ worktreePath: result.worktree.path });
+          const worktree = result.worktree;
+          if (!worktreePath) {
+            setWorkstreamState({ worktreePath: worktree.path });
+          }
+          setWorktreeRecord({
+            id: sessionWorktreeId,
+            name: worktree.name,
+            displayName: worktree.displayName ?? null,
+            path: worktree.path,
+            isPinned: worktree.isPinned ?? false,
+          });
         } else {
-          console.error('[AgentWorkstreamPanel] Failed to resolve worktree path:', result?.error);
+          console.error('[AgentWorkstreamPanel] Failed to resolve worktree:', result?.error);
         }
       } catch (error) {
-        console.error('[AgentWorkstreamPanel] Error resolving worktree path:', error);
+        console.error('[AgentWorkstreamPanel] Error resolving worktree:', error);
       }
     })();
-  }, [sessionWorktreeId, worktreePath, setWorkstreamState]);
+  }, [sessionWorktreeId, worktreePath, worktreeRecord, setWorkstreamState, setWorktreeRecord]);
 
   // Local state for drag states
   const [isDraggingVertical, setIsDraggingVertical] = useState(false);
@@ -869,7 +1118,11 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
   // Ref for the content container (used for resize calculations)
   const contentRef = useRef<HTMLDivElement>(null);
   const verticalResizeRef = useRef({ startY: 0, startRatio: splitRatio, containerHeight: 0 });
-  const sidebarResizeRef = useRef({ startX: 0, startWidth: sidebarWidth });
+  const sidebarResizeRef = useRef({
+    startX: 0,
+    startWidth: sidebarWidth,
+    availableWidth: 0,
+  });
 
   // Ref for the editor area to check focus
   const editorAreaRef = useRef<HTMLDivElement>(null);
@@ -935,19 +1188,20 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
     }
   }, [updateSessionStore, sessionWorktreeId, sessions.length]);
 
-  // Track pending file open when switching to split mode
-  const pendingFileOpenRef = useRef<string | null>(null);
+  // Track pending file open when switching to split mode. Carries the line
+  // location too, so a `file.md:653` link survives the layout flip.
+  const pendingFileOpenRef = useRef<{ filePath: string; location?: TranscriptFileLocation } | null>(null);
 
   // File clicks open in the workstream editor tabs
-  const handleFileClick = useCallback((filePath: string) => {
+  const handleFileClick = useCallback((filePath: string, location?: TranscriptFileLocation) => {
     if (editorTabsRef.current) {
       // Editor is mounted, open the file directly
-      editorTabsRef.current.openFile(filePath);
+      editorTabsRef.current.openFile(filePath, location);
     } else {
       // Editor not mounted (transcript mode), switch to split and queue file open
       // Set flag to prevent auto-collapse during this transition
       justOpenedFileRef.current = true;
-      pendingFileOpenRef.current = filePath;
+      pendingFileOpenRef.current = { filePath, location };
       setLayoutMode({ workstreamId, mode: 'split' });
     }
   }, [workstreamId, setLayoutMode]);
@@ -988,10 +1242,6 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
       mockupDrawing,
     };
   }, []);
-
-  const handleToggleSidebar = useCallback(() => {
-    toggleSidebar(workstreamId);
-  }, [workstreamId, toggleSidebar]);
 
   // Archive dialog handler
   const handleShowArchiveDialog = useCallback(async () => {
@@ -1104,10 +1354,19 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
     [showEditorTabs, activeEditorFile]
   );
 
+  // #1375: report the visible document to macOS as this window's AXDocument.
+  // Lives here, not in WorkstreamEditorTabs, because that unmounts entirely in
+  // the transcript-only layout and so could never clear what it had set.
+  usePushRepresentedFile(
+    isActive,
+    showEditorTabs ? resolveRepresentedFile(activeEditorFile) : null
+  );
+
   // Open pending file once editor mounts after layout mode change
   useEffect(() => {
-    if (pendingFileOpenRef.current && showEditorTabs && editorTabsRef.current) {
-      editorTabsRef.current.openFile(pendingFileOpenRef.current);
+    const pending = pendingFileOpenRef.current;
+    if (pending && showEditorTabs && editorTabsRef.current) {
+      editorTabsRef.current.openFile(pending.filePath, pending.location);
       pendingFileOpenRef.current = null;
     }
   }, [showEditorTabs]); // Re-run when editor becomes visible
@@ -1149,7 +1408,9 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
     onMove: (event) => {
       const deltaX = sidebarResizeRef.current.startX - event.clientX;
       const newWidth = sidebarResizeRef.current.startWidth + deltaX;
-      setSidebarWidth(newWidth);
+      setSidebarWidth(
+        clampAgentRightPanelWidth(newWidth, sidebarResizeRef.current.availableWidth),
+      );
     },
     onEnd: () => {
       setIsDraggingSidebar(false);
@@ -1158,7 +1419,13 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
 
   const handleSidebarResizeStart = useCallback((event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0) return;
-    sidebarResizeRef.current = { startX: event.clientX, startWidth: sidebarWidth };
+    const availableWidth = panelRef.current?.getBoundingClientRect().width ?? sidebarWidth;
+    const renderedWidth = rightPanelRef.current?.getBoundingClientRect().width ?? sidebarWidth;
+    sidebarResizeRef.current = {
+      startX: event.clientX,
+      startWidth: renderedWidth,
+      availableWidth,
+    };
     setIsDraggingSidebar(true);
     startSidebarResizeDrag(event);
   }, [sidebarWidth, startSidebarResizeDrag]);
@@ -1186,7 +1453,7 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
   // Trigger find in the active editor. Two strategies based on editor type:
   // - Monaco: dispatch synthetic Cmd+F keydown to its internal textarea, which
   //   Monaco's keybinding system processes to open its built-in find widget.
-  // - Lexical: use SearchReplaceStateManager.toggle() directly (same as Files mode).
+  // - Lexical: use SearchReplaceStateManager.openAndFocus() directly (same as Files mode).
   //   We can't use synthetic keydown because Lexical's SearchReplacePlugin checks
   //   isEditorActive (based on React state), which won't be true synchronously
   //   after focusing the contenteditable.
@@ -1210,8 +1477,8 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
       // Lexical or other editor - use SearchReplaceStateManager
       const activeFilePath = editorTabsRef.current?.getActiveFilePath();
       if (activeFilePath) {
-        console.log('[AgentWorkstreamPanel] triggerEditorFind: toggling SearchReplaceStateManager for', activeFilePath);
-        SearchReplaceStateManager.toggle(activeFilePath);
+        console.log('[AgentWorkstreamPanel] triggerEditorFind: opening SearchReplaceStateManager for', activeFilePath);
+        SearchReplaceStateManager.openAndFocus(activeFilePath);
       } else {
         console.log('[AgentWorkstreamPanel] triggerEditorFind: no active file path');
       }
@@ -1288,20 +1555,26 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
         editorTabsRef.current.closeActiveTab();
       }
       // If transcript has focus, do nothing - we don't want to close AI sessions with CMD+W
-    }
-  }), []);
+    },
+    // Menu/shortcut path for the same action as double-clicking a tab. With no
+    // editor tab open, maximizing would force layoutMode 'editor' only for the
+    // auto-collapse effect to bounce it back to the transcript, so only the
+    // restore direction stays live.
+    toggleEditorMaximized: () => {
+      if (isEditorMaximized || hasTabs) toggleEditorMaximized();
+    },
+  }), [isEditorMaximized, hasTabs, toggleEditorMaximized]);
 
   return (
-    <div className="agent-workstream-panel flex flex-row h-full overflow-hidden">
+    <div ref={panelRef} className="agent-workstream-panel flex flex-row h-full overflow-hidden">
       {/* Main column - header + content */}
       <div className="agent-workstream-panel-main flex flex-col flex-1 min-w-0 overflow-hidden">
         <WorkstreamHeader
           workstreamId={workstreamId}
           workspacePath={workspacePath}
+          activeSessionId={chatTargetId}
           worktreeId={sessionWorktreeId}
           worktreePath={worktreePath}
-          onToggleSidebar={handleToggleSidebar}
-          sidebarVisible={sidebarVisible}
           onOpenTerminal={sessionWorktreeId ? handleOpenTerminal : undefined}
           onCreateNewTerminal={sessionWorktreeId ? handleCreateNewTerminal : undefined}
           onShowArchiveDialog={sessionWorktreeId ? handleShowArchiveDialog : undefined}
@@ -1374,25 +1647,82 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
           data-testid="agent-files-sidebar-resize-handle"
           onPointerDown={handleSidebarResizeStart}
           role="separator"
-          aria-label="Resize files edited sidebar"
+          aria-label="Resize Agent right panel"
           aria-orientation="vertical"
         />
       )}
 
-      {/* Files edited sidebar - full height on the right, sibling of main column */}
+      {/* Agent right panel - full height on the right, sibling of main column */}
       {sidebarVisible && (
-        <FilesEditedSidebar
-          workstreamId={workstreamId}
-          activeSessionId={activeSessionId}
-          workspacePath={workspacePath}
-          onFileClick={handleFileClick}
-          onOpenInFilesMode={onFileOpen}
-          width={sidebarWidth}
-          worktreeId={sessionWorktreeId}
-          worktreePath={worktreePath}
-          onWorktreeArchived={onWorktreeArchived}
-          isGitRepo={isGitRepo}
-        />
+        <div
+          ref={rightPanelRef}
+          className="agent-workstream-right-panel shrink-0 min-w-0 h-full overflow-hidden"
+          style={{
+            width: sidebarWidth,
+            maxWidth: `calc(100% - ${MIN_AGENT_MAIN_PANEL_WIDTH}px)`,
+          }}
+        >
+          {rightPanelMode === 'edited-files' && (
+            <FilesEditedSidebar
+              workstreamId={workstreamId}
+              activeSessionId={activeSessionId}
+              workspacePath={workspacePath}
+              onFileClick={handleFileClick}
+              onOpenInFilesMode={onFileOpen}
+              width="100%"
+              worktreeId={sessionWorktreeId}
+              worktreePath={worktreePath}
+              onWorktreeArchived={onWorktreeArchived}
+              isGitRepo={isGitRepo}
+            />
+          )}
+          {rightPanelMode === 'review' && (
+            <AgentReviewPanel
+              workstreamId={workstreamId}
+              activeSessionId={activeSessionId}
+              workspacePath={workspacePath}
+              width="100%"
+              worktreeId={sessionWorktreeId}
+              worktreePath={worktreePath}
+            />
+          )}
+          {rightPanelMode === 'session-chat' && (
+            chatTargetId && chatSessionId ? (
+              <ChatSidebar
+                workspacePath={workspacePath}
+                isActive={isActive}
+                sessionId={chatSessionId}
+                onSessionIdChange={handleChatSessionChange}
+                autoInitializeSession={false}
+                newSessionTitle={`Chat with ${chatTargetTitle}`.slice(0, 120)}
+                newSessionDraft={sessionMentionDraft(chatTargetId, chatTargetTitle)}
+                linkedSession={{ id: chatTargetId, title: chatTargetTitle }}
+                onFileOpen={handleFileClick}
+              />
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center text-sm text-nim-muted">
+                {chatCreationError ? (
+                  <>
+                    <MaterialSymbol icon="error" size={28} className="text-nim-error" />
+                    <span>{chatCreationError}</span>
+                    <button
+                      type="button"
+                      onClick={() => setChatCreationAttempt((attempt) => attempt + 1)}
+                      className="px-3 py-1.5 rounded border border-nim bg-nim-secondary text-xs text-nim cursor-pointer hover:bg-nim-hover"
+                    >
+                      Try again
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="w-5 h-5 border-2 border-nim border-t-nim-primary rounded-full animate-spin" />
+                    <span>{chatTargetId ? 'Opening chat…' : 'Select a session to start chatting.'}</span>
+                  </>
+                )}
+              </div>
+            )
+          )}
+        </div>
       )}
 
       {/* Archive worktree confirmation dialog */}

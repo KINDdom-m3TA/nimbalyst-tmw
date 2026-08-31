@@ -139,6 +139,8 @@ import {
   SKIP_DOM_SELECTION_TAG,
 } from 'lexical';
 import {$createAutoLinkNode, $isAutoLinkNode, $isLinkNode} from '@lexical/link';
+import {$isEmbeddedFileNode} from '../../EmbedPlugin/EmbeddedFileNode';
+import {$rescanForEmbedUpgrade} from '../../../extensions/builtin/EmbedExtension';
 
 import {createHeadlessEditor} from '@lexical/headless';
 import {createNodeFromSerialized} from './createNodeFromSerialized';
@@ -337,6 +339,45 @@ function $applyAutoLinksToHeadlessEditor(editor: LexicalEditor): void {
   );
 }
 
+function $editorHasEmbeds(editor: LexicalEditor): boolean {
+  let found = false;
+  editor.getEditorState().read(() => {
+    const visit = (node: LexicalNode) => {
+      if (found) return;
+      if ($isEmbeddedFileNode(node)) {
+        found = true;
+        return;
+      }
+      if ($isElementNode(node)) {
+        for (const child of node.getChildren()) {
+          visit(child);
+          if (found) return;
+        }
+      }
+    };
+    visit($getRoot());
+  });
+  return found;
+}
+
+/**
+ * Upgrade paragraph-isolated links in the headless target editor into
+ * `EmbeddedFileNode`s, mirroring what `EmbedExtension` would have done in the
+ * live editor.
+ *
+ * Same structural-mismatch class as `$applyAutoLinksToHeadlessEditor` above.
+ * `EmbeddedFileNode` has no markdown IMPORT transformer -- it is produced by a
+ * `registerNodeTransform` on `LinkNode` that only `EmbedExtension` installs.
+ * The headless target editor runs no extensions, so an embed exported as
+ * `[label](src)` comes back as a plain `LinkNode`. TreeMatcher then cannot
+ * pair the source embed with the target link and the recursion emits the item
+ * twice, red/green marked, which is what "the embed duplicated" looks like to
+ * a user (#1744).
+ */
+function $applyEmbedUpgradeToHeadlessEditor(editor: LexicalEditor): void {
+  editor.update(() => $rescanForEmbedUpgrade(), {discrete: true});
+}
+
 // Type for text replacement edits (internal use after resolution)
 export type TextReplacement = {
   oldText: string;
@@ -411,6 +452,23 @@ function normalizeWhitespace(text: string): string {
 
   // Preserve original trailing newlines
   return normalized.trimEnd() + trailingNewlines;
+}
+
+/**
+ * Apply text replacements to a string, exact match first and whitespace-
+ * normalized match second, throwing a TEXT_REPLACEMENT_ERROR when neither
+ * lands.
+ *
+ * Also used by headless writes to codec-only shared documents (mockups,
+ * diagrams, sheets), which have no Lexical tree to reconcile into and so edit
+ * their serialized form directly. Sharing this function is the point: an
+ * agent's `oldText` matches by the same rules wherever it is applied.
+ */
+export function applyTextReplacementsToString(
+  originalText: string,
+  replacements: TextReplacement[],
+): string {
+  return _applyMarkdownEdits(originalText, replacements);
 }
 
 function _applyMarkdownEdits(
@@ -525,11 +583,29 @@ function _applyMarkdownEdits(
  * This is an alternative to applyMarkdownDiff that takes direct text replacements
  * instead of unified diff strings
  */
+export interface ApplyMarkdownReplaceOptions {
+  /**
+   * Fail instead of falling back to a structural guess when a replacement's
+   * `oldText` does not match.
+   *
+   * The fallback below reconstructs a target markdown from the replacement --
+   * for a list-shaped one it locates the FIRST list in the document and
+   * replaces that. On screen that is survivable: a human watches the wrong list
+   * get rewritten and hits undo. Applied headlessly to a shared document nobody
+   * has open, the same guess deletes content, is acknowledged by the server for
+   * every collaborator, and returns SUCCESS to the agent that asked for it.
+   *
+   * Callers with no human in the loop set this. See `headlessMarkdownEdit`.
+   */
+  exactTextMatchRequired?: boolean;
+}
+
 export function applyMarkdownReplace(
   editor: LexicalEditor,
   originalMarkdown: string,
   replacements: TextReplacement[],
   transformers: Transformer[],
+  options: ApplyMarkdownReplaceOptions = {},
 ): void {
   // console.log('[applyMarkdownReplace] CALLED with', replacements.length, 'replacements');
   const normalizedReplacements = replacements.map((replacement) => {
@@ -569,6 +645,12 @@ export function applyMarkdownReplace(
     // This is normal for structural changes like tables and lists
     console.log('[applyMarkdownReplace] Text replacement FAILED:', error);
     textReplacementError = error as Error;
+
+    // No human is watching this edit land, so a guess cannot be reviewed or
+    // undone. Fail with the real reason instead.
+    if (options.exactTextMatchRequired) {
+      throw textReplacementError;
+    }
 
     // Build the new markdown by applying replacements in a best-effort manner
     // For now, we'll use the first replacement's newText as a hint
@@ -982,6 +1064,12 @@ export function applyMarkdownDiffToDocument(
         $applyAutoLinksToHeadlessEditor(targetEditor);
       }
 
+      // Same reasoning for embeds: the target's re-imported markdown carries
+      // plain LinkNodes where the source clone has EmbeddedFileNodes (#1744).
+      if ($editorHasEmbeds(sourceEditor)) {
+        $applyEmbedUpgradeToHeadlessEditor(targetEditor);
+      }
+
 
       // DEBUG: Show what target editor contains
       // targetEditor.getEditorState().read(() => {
@@ -1056,36 +1144,37 @@ export function applyMarkdownDiffToDocument(
     // Phase 1: Match root-level nodes
     const rootMatchResult = treeMatcher.matchRootChildren();
 
-    // Calculate text diff statistics
-    const originalLines = originalMarkdown.split('\n');
-    const newLines = newMarkdown.split('\n');
-    const textStats = {
-      originalLines: originalLines.length,
-      newLines: newLines.length,
-      linesAdded: Math.max(0, newLines.length - originalLines.length),
-      linesRemoved: Math.max(0, originalLines.length - newLines.length),
-    };
-
-    // Calculate lexical node diff statistics
-    const removes = rootMatchResult.sequence.filter(d => d.changeType === 'remove').length;
-    const updates = rootMatchResult.sequence.filter(d => d.changeType === 'update').length;
-    const adds = rootMatchResult.sequence.filter(d => d.changeType === 'add').length;
-    const lexicalStats = {
-      sourceNodes: sourceNodeCount,
-      targetNodes: targetNodeCount,
-      nodesRemoved: removes,
-      nodesModified: updates,
-      nodesAdded: adds,
-      totalOperations: removes + updates + adds,
-    };
-
-    // PRODUCTION LOG: Diff statistics comparison
-    console.log('[DIFF STATS]', JSON.stringify({
-      text: textStats,
-      lexical: lexicalStats,
-      // Flag potential duplication: if lexical adds >> text line adds, might be duplication bug
-      suspectDuplication: lexicalStats.nodesAdded > (textStats.linesAdded * 2),
-    }));
+    // Diff statistics -- commented out because both the stat computation (three
+    // full passes over the match sequence) and the log ran unconditionally on
+    // every diff, in the app and in every test that exercises this path.
+    // Uncomment when investigating node duplication: `suspectDuplication` flags
+    // lexical adds far exceeding text line adds.
+    // const originalLines = originalMarkdown.split('\n');
+    // const newLines = newMarkdown.split('\n');
+    // const textStats = {
+    //   originalLines: originalLines.length,
+    //   newLines: newLines.length,
+    //   linesAdded: Math.max(0, newLines.length - originalLines.length),
+    //   linesRemoved: Math.max(0, originalLines.length - newLines.length),
+    // };
+    //
+    // const removes = rootMatchResult.sequence.filter(d => d.changeType === 'remove').length;
+    // const updates = rootMatchResult.sequence.filter(d => d.changeType === 'update').length;
+    // const adds = rootMatchResult.sequence.filter(d => d.changeType === 'add').length;
+    // const lexicalStats = {
+    //   sourceNodes: sourceNodeCount,
+    //   targetNodes: targetNodeCount,
+    //   nodesRemoved: removes,
+    //   nodesModified: updates,
+    //   nodesAdded: adds,
+    //   totalOperations: removes + updates + adds,
+    // };
+    //
+    // console.log('[DIFF STATS]', JSON.stringify({
+    //   text: textStats,
+    //   lexical: lexicalStats,
+    //   suspectDuplication: lexicalStats.nodesAdded > (textStats.linesAdded * 2),
+    // }));
 
     // Phase 2: Apply changes correctly respecting exact match positions
     try {
@@ -1383,16 +1472,16 @@ export function $applyNodeDiff(
       // Don't require similarity === 1.0 because normalized content (like table separators) may have different text
       const isExactMatch = diff.matchType === 'exact';
 
-      if (diff.sourceMarkdown?.includes('|---') || diff.targetMarkdown?.includes('|---')) {
-        console.log('[diffUtils] Table separator diff:', {
-          matchType: diff.matchType,
-          similarity: diff.similarity,
-          isExactMatch,
-          willMark: !isExactMatch,
-          source: diff.sourceMarkdown?.substring(0, 50),
-          target: diff.targetMarkdown?.substring(0, 50),
-        });
-      }
+      // if (diff.sourceMarkdown?.includes('|---') || diff.targetMarkdown?.includes('|---')) {
+      //   console.log('[diffUtils] Table separator diff:', {
+      //     matchType: diff.matchType,
+      //     similarity: diff.similarity,
+      //     isExactMatch,
+      //     willMark: !isExactMatch,
+      //     source: diff.sourceMarkdown?.substring(0, 50),
+      //     target: diff.targetMarkdown?.substring(0, 50),
+      //   });
+      // }
 
       if (!isExactMatch) {
         // Mark the node as modified using NodeState for actual content changes

@@ -1,8 +1,11 @@
 /**
  * TeamDocumentRoom wire protocol.
  *
- * Yjs-based collaborative document editing with E2E encrypted updates,
- * awareness state, and ECDH key envelope exchange.
+ * Yjs-based collaborative document editing. Update and snapshot payloads are
+ * plaintext on the wire and encrypted at rest by the server under the
+ * server-managed team DEK. Awareness state is plaintext over TLS as well --
+ * it is never persisted, and the `iv` field on `docAwareness` is the retired
+ * client-managed lane's empty sentinel, kept only for wire compatibility.
  */
 
 // ============================================================================
@@ -14,8 +17,6 @@ export type DocClientMessage =
   | DocUpdateMessage
   | DocCompactMessage
   | DocAwarenessMessage
-  | AddKeyEnvelopeMessage
-  | RequestKeyEnvelopeMessage
   | DocSetMetadataMessage;
 
 /** Request document updates since a sequence number */
@@ -30,8 +31,6 @@ export interface DocUpdateMessage {
   encryptedUpdate: string;
   iv: string;
   clientUpdateId?: string;
-  /** Org key fingerprint for epoch enforcement. Server rejects stale-key writes. */
-  orgKeyFingerprint?: string;
 }
 
 /** Send an encrypted compacted state snapshot */
@@ -42,8 +41,6 @@ export interface DocCompactMessage {
   replacesUpTo: number;
   /** Correlates the server acknowledgement with this compaction attempt. */
   clientCompactId?: string;
-  /** Org key fingerprint for epoch enforcement. Server rejects stale-key writes. */
-  orgKeyFingerprint?: string;
 }
 
 /** Send encrypted awareness state (cursor, selection) */
@@ -51,20 +48,6 @@ export interface DocAwarenessMessage {
   type: 'docAwareness';
   encryptedState: string;
   iv: string;
-}
-
-/** Upload a wrapped document key for a target user (ECDH key exchange) */
-export interface AddKeyEnvelopeMessage {
-  type: 'addKeyEnvelope';
-  targetUserId: string;
-  wrappedKey: string;
-  iv: string;
-  senderPublicKey: string;
-}
-
-/** Request the caller's key envelope */
-export interface RequestKeyEnvelopeMessage {
-  type: 'requestKeyEnvelope';
 }
 
 /** Set room-level metadata (e.g., custom TTL). Only allowlisted keys are accepted. */
@@ -83,7 +66,6 @@ export type DocServerMessage =
   | DocUpdateAckMessage
   | DocCompactAckMessage
   | DocAwarenessBroadcastMessage
-  | KeyEnvelopeMessage
   | DocRoomMovedMessage
   | DocErrorMessage;
 
@@ -125,6 +107,18 @@ export interface DocSyncResponseMessage {
    */
   lastWriterUserId?: string | null;
   lastUpdatedAt?: number | null;
+  /**
+   * Whether this connection may write, as the room resolved it while serving
+   * this request. The room re-checks TeamRoom policy before every sync, so this
+   * is a current answer rather than a connect-time snapshot.
+   *
+   * Without it a client can only learn it has write access by attempting a
+   * write and being acknowledged, which leaves a reader who never edits unable
+   * to tell "not permitted" from "not yet known". Optional only for
+   * compatibility with servers that predate the verdict; treat an absent field
+   * as unknown, never as a refusal.
+   */
+  canWrite?: boolean;
 }
 
 /** Broadcast an encrypted Yjs update to other connections */
@@ -162,16 +156,6 @@ export interface DocAwarenessBroadcastMessage {
   encryptedState: string;
   iv: string;
   fromUserId: string;
-}
-
-/** Deliver a key envelope to the requesting user */
-export interface KeyEnvelopeMessage {
-  type: 'keyEnvelope';
-  wrappedKey: string;
-  iv: string;
-  senderPublicKey: string;
-  /** User ID of the user who created this envelope */
-  senderUserId: string;
 }
 
 /** TeamDocumentRoom error response */

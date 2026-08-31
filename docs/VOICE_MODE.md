@@ -201,6 +201,7 @@ When sleeping:
 | `voice-mode:settings-changed` | Settings changed (broadcast to all windows) |
 | `voice-mode:respond-to-prompt` | Voice agent answered an interactive prompt |
 | `voice-mode:interactive-prompt` | Coding agent needs user input (forwarded to voice) |
+| `voice-mode:request-ui-context` | Request a fresh, bounded snapshot of the active renderer view, file, and coding session |
 
 ### Renderer -> Main (send, fire-and-forget)
 
@@ -210,6 +211,7 @@ When sleeping:
 | `voice-mode:update-linked-session` | User switched coding sessions while voice active |
 | `voice-mode:listen-state-changed` | Listen state transitioned (sleeping/waking) |
 | `voice-mode:editor-context-changed` | User viewing a different file |
+| Dynamic `voice-mode:ui-context-result-*` | Reply to a UI-context request; accepted only from the voice-owning window and matching workspace |
 
 ## Voice Agent Tools
 
@@ -227,6 +229,8 @@ The OpenAI Realtime API session is configured with these function-calling tools:
 | `navigate_to_session` | Switch the UI to a specific AI session |
 | `create_session` | Create a new coding session and switch to it. Repeated creation calls are deduplicated until the next coding prompt, which is pinned to the created session even if the active UI session changes. |
 | `propose_commit` | Trigger the "Commit with AI" feature. Sends `voice-mode:propose-commit` to the renderer, which runs the same logic as the Smart Commit button in `GitOperationsPanel`: pre-fetches files via `git:get-commit-context`, then dispatches an `ai:sendMessage` with the canonical `Use the developer_git_commit_proposal tool to create a commit.` prefix so the `CommitRequestCard` widget appears in the transcript. The resulting `git_commit_proposal_request` interactive prompt flows back to the voice agent through the existing interactive-prompt forwarding for verbal approve/reject. |
+| `get_ui_context` | Read a fresh, concise snapshot of the active Nimbalyst view, selected workspace file, and active coding session. Absolute paths and unrelated renderer state are omitted. |
+| `capture_ui_screenshot` | After explicit user request or confirmation, capture only the visible Nimbalyst application window and inject the bounded in-memory JPEG into the Realtime conversation as image input. |
 
 ## Extension Voice Tools & Context Providers (general core hooks)
 
@@ -339,6 +343,19 @@ While voice is active, the currently viewed file is tracked and reported to the 
 4. `VoiceModeService` calls `poc.injectContext()` with `[INTERNAL: User is now viewing {filename}]`
 5. The voice agent silently notes this for context without announcing it
 
+## On-Demand UI Context and Screenshot Capture
+
+The desktop voice agent can inspect the current application state through two built-in, read-only tools:
+
+- `get_ui_context` sends a one-shot `voice-mode:request-ui-context` request to the renderer that owns the active voice session. The centralized voice listener reads the current Jotai atoms and returns the active content view (`files`, `agent`, `tracker`, `collab`, `pr-review`, or `settings`), the active tab's file, and the selected coding session with a coarse `running` / `waiting_for_input` / `idle` status.
+- `capture_ui_screenshot` calls `BrowserWindow.webContents.capturePage()` for that same Nimbalyst window, scales the image to at most 1600×1200, encodes a JPEG capped at 2 MiB, and injects it into the Realtime conversation as `input_image` before returning concise capture metadata. The image stays in memory and is never written to disk.
+
+The UI-context response is accepted only from the expected `webContents`, must echo the active workspace path, and is normalized before it reaches the model. Files inside the workspace may include a workspace-relative path; external files and URI-backed documents expose only a basename, never an absolute host path.
+
+Screenshot capture is a higher-sensitivity operation because visible pixels are sent to OpenAI. Its tool schema requires `userConfirmed: true` plus a short reason, the handler rejects missing confirmation, and the voice system prompt instructs the model to call it only after the user explicitly requests a UI capture/inspection or explicitly confirms after disclosure. The tool cannot capture the desktop, another application, a hidden/minimized window, or an arbitrary screen region.
+
+These tools are desktop-only; the native iOS voice agent does not advertise them.
+
 ## Audio Pipeline
 
 ### Capture (Renderer)
@@ -410,7 +427,16 @@ Voice mode defaults to `gpt-realtime-2` (GPT-5-class reasoning, 128K context, mo
 
 The output voice is set once in `session.update` and intentionally **not** re-asserted on each `response.create` — gpt-realtime-2 renders a consistent voice for the whole session. The `session.updated` handler compares the server-reported voice against the requested voice and emits `voice_voice_mismatch` if they diverge, turning drift into a measurable signal.
 
-`createResponse()` guards against an already-active response (`hasActiveResponse`, set optimistically on send and on `response.created`, cleared on `response.done`/cancel). The method is invoked from several async paths (tool results, wake / task-complete messages, interactive-prompt injection); without the guard a trigger arriving mid-turn would start a **second overlapping response**, i.e. two concurrent audio renderings that — under the expressive voices (marin/cedar) — are heard as the voice "switching" mid-turn. This is distinct from the configured voice being wrong: the session and per-response voice are both correctly pinned; the perceived switch comes from overlap.
+`createResponse()` guards against an already-active response (`hasActiveResponse`, set optimistically on send and on `response.created`, cleared on `response.done`/cancel). The method is invoked from several async paths (tool results, wake / task-complete messages, interactive-prompt injection); without the guard a trigger arriving mid-turn would start a **second overlapping response**, i.e. two concurrent audio renderings heard as the voice "switching" mid-turn.
+
+### "The voice changes partway through" — the two real causes
+
+The configured voice is almost never the problem: `session.updated` echoes the requested voice for the whole session and `voice_voice_mismatch` stays silent. Two mechanisms in `RealtimeAPIClient` produce the perception anyway, and both are now guarded (NIM-2488):
+
+- **Abandoned-response audio.** Generation runs far ahead of realtime, so a barge-in cancels a response the server has already streamed past. The renderer's `AudioPlayback` queue is a flat FIFO with **no response identity**, so those late deltas landed in the queue it had just cleared and played in front of the *next* response's audio — two different utterances stitched together. Especially bad in the two cases where `cancelCurrentResponse()` deliberately does not cancel (function-call arguments still streaming; response already done) while the renderer stops playback anyway. `performBargeInInterrupt()` now records the interrupted `currentResponseId` in `abandonedResponseIds` regardless of whether the cancel goes out, and the audio-delta handler drops any delta whose `response_id` is in that set. The set is drained by that response's `response.done`.
+- **Mid-generation `session.update`.** Playback goes active a few hundred ms into a turn, so gating server VAD responses on playback used to push a `session.update` into the middle of the model's audio render, and the back half of a long answer came back in a different register. `flushOrDeferGateUpdate()` now holds any gate toggle while `hasActiveResponse` is true and flushes it on `response.done`. This costs nothing — the gate only prevents the server *starting* a response, which it cannot do while one is active — and a toggle that flips back before `response.done` collapses to no update at all (`sentGateState` tracks what the server actually has).
+
+**The invariant to preserve: never send `session.update` while a response is generating, and never forward audio for a response the user interrupted.**
 
 ## Spoken Language
 
@@ -444,5 +470,5 @@ Two mobile-specific behaviors:
 ## Prerequisites
 
 - OpenAI API key configured in Settings (uses the same key as the OpenAI chat provider)
-- Microphone permission granted in System Settings (macOS). The app cannot programmatically request mic access because the audio-input entitlement is intentionally omitted to prevent permission prompts from Claude Agent SDK subprocesses.
+- Microphone permission granted in System Settings (macOS) or Windows Settings > Privacy & security > Microphone (Windows). Windows users must enable microphone access for desktop apps.
 - Voice mode enabled in Settings (toggles visibility of the VoiceModeButton)

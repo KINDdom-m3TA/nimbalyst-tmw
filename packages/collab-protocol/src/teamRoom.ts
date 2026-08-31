@@ -1,15 +1,25 @@
 /**
  * TeamRoom wire protocol.
  *
- * Consolidated team state: members, roles, identity keys, key envelopes,
- * shared document index, and org key rotation broadcasts.
+ * Consolidated team state: members, roles, and the shared document index.
+ * Team content is encrypted at rest under the server-managed team DEK; there
+ * is no client-held org key, so no envelope or identity-key traffic.
  */
 
 import type {
-  AnnouncePersonalOrgMessage,
-  InboxEventFanoutMessage,
-  InboxEventFanoutAckMessage,
-} from './inbox.js';
+  BoundedPreview,
+  ConversationDescriptor,
+} from './conversation.js';
+import type { FeedbackRequestIndexEntry } from './feedbackRequest.js';
+
+export interface OrgSettings {
+  version: 1;
+  messaging: {
+    roomsEnabled: boolean;
+    dmsEnabled: boolean;
+    roomCreation: 'members' | 'admins';
+  };
+}
 
 // ============================================================================
 // Client -> Server Messages
@@ -17,9 +27,8 @@ import type {
 
 export type TeamClientMessage =
   | TeamSyncRequestMessage
-  | TeamUploadIdentityKeyMessage
-  | TeamRequestIdentityKeyMessage
-  | TeamRequestKeyEnvelopeMessage
+  | FeedbackIndexSyncRequestMessage
+  | TeamDocumentCommentNotifyMessage
   | TeamDocIndexSyncRequestMessage
   | TeamDocIndexRegisterMessage
   | TeamDocIndexUpdateMessage
@@ -31,30 +40,16 @@ export type TeamClientMessage =
   | TeamFolderRegisterMessage
   | TeamFolderRenameMessage
   | TeamFolderMoveMessage
-  | TeamFolderRemoveMessage
-  | AnnouncePersonalOrgMessage
-  | InboxEventFanoutMessage;
+  | TeamFolderRemoveMessage;
 
 /** Request full team state snapshot */
 export interface TeamSyncRequestMessage {
   type: 'teamSync';
 }
 
-/** Upload own ECDH public key */
-export interface TeamUploadIdentityKeyMessage {
-  type: 'uploadIdentityKey';
-  publicKeyJwk: string;
-}
-
-/** Fetch a member's public key */
-export interface TeamRequestIdentityKeyMessage {
-  type: 'requestIdentityKey';
-  targetUserId: string;
-}
-
-/** Request own key envelope */
-export interface TeamRequestKeyEnvelopeMessage {
-  type: 'requestKeyEnvelope';
+/** Request the participant-filtered feedback-request index. */
+export interface FeedbackIndexSyncRequestMessage {
+  type: 'feedbackIndexSync';
 }
 
 /** Request the full document list */
@@ -62,15 +57,7 @@ export interface TeamDocIndexSyncRequestMessage {
   type: 'docIndexSync';
 }
 
-/**
- * Register a new shared document in the index.
- *
- * `orgKeyFingerprint` echoes the client's current org key fingerprint so the
- * server can enforce epoch alignment during rotation (see
- * `TeamRoom.validateDocIndexWriteAllowed`). Optional in the type to keep the
- * Yjs-only document path lightweight, but the server rejects writes with
- * `staleKeyEpoch` once `current_org_key_fingerprint` is set.
- */
+/** Register a new shared document in the index. */
 export interface TeamDocIndexRegisterMessage {
   type: 'docIndexRegister';
   documentId: string;
@@ -96,23 +83,20 @@ export interface TeamDocIndexRegisterMessage {
    * path into `encryptedTitle` so un-upgraded clients still render the tree.
    */
   parentFolderId?: string | null;
-  orgKeyFingerprint?: string | null;
 }
 
-/** Update a document's encrypted title. See `TeamDocIndexRegisterMessage` for `orgKeyFingerprint`. */
+/** Update a document's encrypted title. */
 export interface TeamDocIndexUpdateMessage {
   type: 'docIndexUpdate';
   documentId: string;
   encryptedTitle: string;
   titleIv: string;
-  orgKeyFingerprint?: string | null;
 }
 
-/** Remove a document from the index. See `TeamDocIndexRegisterMessage` for `orgKeyFingerprint`. */
+/** Remove a document from the index. */
 export interface TeamDocIndexRemoveMessage {
   type: 'docIndexRemove';
   documentId: string;
-  orgKeyFingerprint?: string | null;
 }
 
 /** Move a document into recoverable Trash without changing its folder. */
@@ -121,27 +105,23 @@ export interface TeamDocTrashMessage {
   documentId: string;
   /** Millisecond epoch used to calculate the retention deadline. */
   trashedAt: number;
-  orgKeyFingerprint?: string | null;
 }
 
 /** Restore a trashed document to its unchanged parent folder. */
 export interface TeamDocRestoreMessage {
   type: 'docRestore';
   documentId: string;
-  orgKeyFingerprint?: string | null;
 }
 
 /**
  * Reparent a document into a different folder (first-class folders). Null
  * `newParentFolderId` = move to root. Touches only the doc's `parent_folder_id`,
- * never its content, so local-to-shared links stay intact. See
- * `TeamDocIndexRegisterMessage` for `orgKeyFingerprint`.
+ * never its content, so local-to-shared links stay intact.
  */
 export interface TeamDocMoveMessage {
   type: 'docMove';
   documentId: string;
   newParentFolderId: string | null;
-  orgKeyFingerprint?: string | null;
 }
 
 /** Request the full folder list (first-class folders). */
@@ -151,8 +131,7 @@ export interface TeamFolderIndexSyncRequestMessage {
 
 /**
  * Register a new folder node. `parentFolderId` null = root level. The folder
- * name is encrypted the same way document titles are (`orgKeyFingerprint`
- * echoes the epoch for rotation gating). See `TeamDocIndexRegisterMessage`.
+ * name is encrypted at rest the same way document titles are.
  */
 export interface TeamFolderRegisterMessage {
   type: 'folderRegister';
@@ -162,7 +141,6 @@ export interface TeamFolderRegisterMessage {
   nameIv: string;
   sortOrder: number;
   projectId?: string | null;
-  orgKeyFingerprint?: string | null;
 }
 
 /** Rename a folder in place (single-row update of `encryptedName`). */
@@ -171,7 +149,6 @@ export interface TeamFolderRenameMessage {
   folderId: string;
   encryptedName: string;
   nameIv: string;
-  orgKeyFingerprint?: string | null;
 }
 
 /**
@@ -184,7 +161,6 @@ export interface TeamFolderMoveMessage {
   folderId: string;
   newParentFolderId: string | null;
   sortOrder?: number;
-  orgKeyFingerprint?: string | null;
 }
 
 /**
@@ -195,7 +171,33 @@ export interface TeamFolderMoveMessage {
 export interface TeamFolderRemoveMessage {
   type: 'folderRemove';
   folderId: string;
-  orgKeyFingerprint?: string | null;
+}
+
+/**
+ * Announce that a document comment mentioned members or replied to one, so the
+ * server can route org-scoped inbox deliveries for it.
+ *
+ * Document comments live in the document's Y.Doc rather than a ConversationRoom,
+ * so this is the only producer for that lane. Nothing here is trusted as
+ * identity: the server derives the actor from the connection's team JWT,
+ * re-resolves every recipient's capability, and re-truncates `preview`. The
+ * client only names the source, the reason, and who it believes was addressed.
+ *
+ * Delivery is idempotent per `(recipient, commentId)`, so a client that
+ * re-sends after a reconnect does not duplicate anyone's inbox row.
+ */
+export interface TeamDocumentCommentNotifyMessage {
+  type: 'documentCommentNotify';
+  documentId: string;
+  /** Id of the comment that caused the notification. */
+  commentId: string;
+  /** Thread the comment belongs to, when it is a threaded reply. */
+  threadId?: string;
+  reason: 'mention' | 'reply';
+  /** Recipients the client believes were addressed; never includes the author. */
+  recipientUserIds: string[];
+  /** Display-only copy. Never authoritative and always re-bounded server-side. */
+  preview?: BoundedPreview;
 }
 
 // ============================================================================
@@ -204,28 +206,52 @@ export interface TeamFolderRemoveMessage {
 
 export type TeamServerMessage =
   | TeamSyncResponseMessage
+  | FeedbackIndexSyncResponseMessage
+  | FeedbackIndexBroadcastMessage
+  | TeamOrgSettingsUpdatedMessage
+  | TeamConversationDescriptorUpdatedMessage
   | TeamMemberAddedMessage
   | TeamMemberRemovedMessage
   | TeamMemberRoleChangedMessage
-  | TeamKeyEnvelopeAvailableMessage
-  | TeamKeyEnvelopeMessage
-  | TeamIdentityKeyResponseMessage
-  | TeamIdentityKeyUploadedMessage
   | TeamDocIndexSyncResponseMessage
+  | TeamDocIndexRegisteredMessage
   | TeamDocIndexBroadcastMessage
   | TeamDocIndexRemoveBroadcastMessage
   | TeamFolderIndexSyncResponseMessage
   | TeamFolderBroadcastMessage
   | TeamFolderRemoveBroadcastMessage
-  | TeamOrgKeyRotatedMessage
   | TeamProjectAccessChangedMessage
-  | InboxEventFanoutAckMessage
+  | TeamDocumentCommentNotifyAckMessage
   | TeamErrorMessage;
 
 /** Full team state snapshot */
 export interface TeamSyncResponseMessage {
   type: 'teamSyncResponse';
   team: TeamState;
+}
+
+/** Full feedback index visible to this team-scoped viewer. */
+export interface FeedbackIndexSyncResponseMessage {
+  type: 'feedbackIndexSyncResponse';
+  entries: FeedbackRequestIndexEntry[];
+}
+
+/** One participant-filtered feedback index upsert. */
+export interface FeedbackIndexBroadcastMessage {
+  type: 'feedbackIndexBroadcast';
+  entry: FeedbackRequestIndexEntry;
+}
+
+/** Broadcast: organization settings changed. */
+export interface TeamOrgSettingsUpdatedMessage {
+  type: 'orgSettingsUpdated';
+  settings: OrgSettings;
+}
+
+/** Broadcast: a conversation registry descriptor changed. */
+export interface TeamConversationDescriptorUpdatedMessage {
+  type: 'conversationDescriptorUpdated';
+  descriptor: ConversationDescriptor;
 }
 
 /** Broadcast: member added */
@@ -247,41 +273,6 @@ export interface TeamMemberRoleChangedMessage {
   role: string;
 }
 
-/** Push notification: a key envelope is now available for target user */
-export interface TeamKeyEnvelopeAvailableMessage {
-  type: 'keyEnvelopeAvailable';
-  targetUserId: string;
-}
-
-/** Delivery of a key envelope to the requesting user */
-export interface TeamKeyEnvelopeMessage {
-  type: 'keyEnvelope';
-  wrappedKey: string;
-  iv: string;
-  senderPublicKey: string;
-  /** User ID of the user who created this envelope */
-  senderUserId: string;
-}
-
-/** Response with a peer's public key */
-export interface TeamIdentityKeyResponseMessage {
-  type: 'identityKeyResponse';
-  userId: string;
-  publicKeyJwk: string;
-}
-
-/** Broadcast: a member uploaded their identity key (so others can wrap for them) */
-export interface TeamIdentityKeyUploadedMessage {
-  type: 'identityKeyUploaded';
-  userId: string;
-}
-
-/** Broadcast: the org encryption key was rotated (fingerprint changed) */
-export interface TeamOrgKeyRotatedMessage {
-  type: 'orgKeyRotated';
-  fingerprint: string;
-}
-
 /**
  * Broadcast: a member's project-scoped access changed (Epic H1).
  *
@@ -301,6 +292,20 @@ export interface TeamProjectAccessChangedMessage {
 export interface TeamDocIndexSyncResponseMessage {
   type: 'docIndexSyncResponse';
   documents: EncryptedDocIndexEntry[];
+}
+
+/**
+ * Ack: this socket's `docIndexRegister` is committed to `document_index`.
+ *
+ * Sent only to the registering socket (the index broadcast deliberately
+ * excludes it, so registration was otherwise unobservable to its author).
+ * A client that is about to write into the new document's room must wait for
+ * this: `DocumentRoom` binds the id through `document_index` and 404s an id
+ * that isn't there yet, so seeding before the ack is a race (NIM-2472).
+ */
+export interface TeamDocIndexRegisteredMessage {
+  type: 'docIndexRegistered';
+  documentId: string;
 }
 
 /** Broadcast: document registered or updated */
@@ -336,6 +341,21 @@ export interface TeamFolderRemoveBroadcastMessage {
   type: 'folderRemoveBroadcast';
   folderIds: string[];
   documentIds: string[];
+}
+
+/**
+ * Answers `documentCommentNotify`. Sent only to the requesting connection.
+ *
+ * `suppressedUserIds` covers every recipient the server declined — not an org
+ * member, no `receiveNotification` capability, or muted — without saying which,
+ * so a sender cannot probe another member's notification settings.
+ */
+export interface TeamDocumentCommentNotifyAckMessage {
+  type: 'documentCommentNotifyAck';
+  documentId: string;
+  commentId: string;
+  deliveredUserIds: string[];
+  suppressedUserIds: string[];
 }
 
 /** TeamRoom error response */
@@ -424,20 +444,13 @@ export interface TeamState {
     teamProjectId: string | null;
     createdBy: string;
     createdAt: number;
-    /** Server-authoritative fingerprint of the current org encryption key */
-    currentOrgKeyFingerprint?: string | null;
   } | null;
   members: MemberInfo[];
   documents: EncryptedDocIndexEntry[];
   /** First-class folder nodes (omitted by pre-folders servers). */
   folders?: EncryptedFolderNode[];
-  /** Caller's own key envelope (if exists) */
-  keyEnvelope?: {
-    wrappedKey: string;
-    iv: string;
-    senderPublicKey: string;
-    senderUserId?: string;
-  } | null;
+  /** Organization configuration (omitted by pre-settings servers). */
+  settings?: OrgSettings;
 }
 
 /** Information about a team member */
@@ -445,13 +458,10 @@ export interface MemberInfo {
   userId: string;
   role: string;
   email: string | null;
-  hasKeyEnvelope: boolean;
-  hasIdentityKey: boolean;
+  name?: string | null;
   /**
-   * The member's personal org id, used to address their PersonalIndexRoom
-   * (`org:{personalOrgId}:user:{userId}:index`) for inbox-event fanout.
-   * Recorded authoritatively at team create/invite acceptance. Older members
-   * may be repaired once by `announcePersonalOrg` when this value is null.
+   * The member's personal org id, recorded at team create / invite acceptance.
+   * Informational roster data; nothing routes on it any more.
    */
   personalOrgId?: string | null;
 }

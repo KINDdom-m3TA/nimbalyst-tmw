@@ -97,6 +97,14 @@ export type WorkstreamLayoutMode = 'editor' | 'split' | 'transcript';
  */
 export type FileScopeMode = 'current-changes' | 'session-files' | 'all-changes';
 
+/**
+ * Content displayed in the Agent mode right panel.
+ * - edited-files: the existing navigable file tree
+ * - review: collapsed inline diffs for the workstream's changes
+ * - session-chat: a paired conversation that can inspect and interact with the active session
+ */
+export type AgentRightPanelMode = 'edited-files' | 'review' | 'session-chat';
+
 // ============================================================
 // Workstream Resources (typed editor tabs)
 // ============================================================
@@ -105,8 +113,9 @@ export type FileScopeMode = 'current-changes' | 'session-files' | 'all-changes';
  * Kind of resource that can occupy a workstream editor tab.
  * - file: a disk-backed file (canonical absolute path is the identity)
  * - tracker: a tracker item rendered as a host resource (not a fake file)
+ * - feedbackRequest: a sent request's results, rendered as a host resource
  */
-export type WorkstreamResourceKind = 'file' | 'tracker';
+export type WorkstreamResourceKind = 'file' | 'tracker' | 'feedbackRequest';
 
 /**
  * A typed resource that can live in the shared workstream editor tab strip.
@@ -128,6 +137,13 @@ export type WorkstreamResource =
       /** `tracker://<trackerItemId>`. */
       resourceId: string;
       trackerItemId: string;
+    }
+  | {
+      kind: 'feedbackRequest';
+      /** `virtual://feedback-request/<orgId>/<requestId>`, built by the tab module. */
+      resourceId: string;
+      orgId: string;
+      requestId: string;
     };
 
 /**
@@ -170,6 +186,21 @@ export function trackerResource(trackerItemId: string): WorkstreamResource {
 }
 
 /**
+ * Build a feedback request resource descriptor.
+ *
+ * The tab uri is passed in rather than built here: its format belongs to the
+ * feedback request tab module, and this module stays free of that dependency.
+ * A distinct kind (rather than a file resource wearing a `virtual://` path)
+ * keeps the request out of the file-centric derivations below — otherwise the
+ * agent is handed the tab uri as the "current file" it is looking at.
+ */
+export function feedbackRequestResource(
+  { resourceId, orgId, requestId }: { resourceId: string; orgId: string; requestId: string }
+): WorkstreamResource {
+  return { kind: 'feedbackRequest', resourceId, orgId, requestId };
+}
+
+/**
  * Complete state for a single workstream.
  * This is the single source of truth for all workstream-related state.
  */
@@ -199,6 +230,10 @@ export interface WorkstreamState {
   splitRatio: number;
   /** Whether the files edited sidebar is visible */
   filesSidebarVisible: boolean;
+  /** Content displayed in the Agent mode right panel */
+  rightPanelMode: AgentRightPanelMode;
+  /** Normal chat session paired with each source session in the right panel. */
+  sessionChatSessionIds: Record<string, string>;
 
   // ===== Editor Tabs (within this workstream) =====
   /**
@@ -238,6 +273,8 @@ function createDefaultState(id: string): WorkstreamState {
     layoutMode: 'transcript', // Start with transcript maximized
     splitRatio: 0.5,
     filesSidebarVisible: true,
+    rightPanelMode: 'edited-files',
+    sessionChatSessionIds: {},
     openResources: [],
     activeResourceId: null,
     stagedFiles: [],
@@ -291,6 +328,16 @@ export function migrateWorkstreamResources(
       ) {
         openResources.push({
           resource: trackerResource((resource as { trackerItemId: string }).trackerItemId),
+          presentation: (entry as PersistedWorkstreamTab).presentation,
+        });
+      } else if (
+        resource.kind === 'feedbackRequest' &&
+        typeof (resource as { orgId?: unknown }).orgId === 'string' &&
+        typeof (resource as { requestId?: unknown }).requestId === 'string'
+      ) {
+        const persisted = resource as { resourceId: string; orgId: string; requestId: string };
+        openResources.push({
+          resource: feedbackRequestResource(persisted),
           presentation: (entry as PersistedWorkstreamTab).presentation,
         });
       }
@@ -440,6 +487,20 @@ export const workstreamSplitRatioAtom = atomFamily((id: string) =>
  */
 export const workstreamFilesSidebarVisibleAtom = atomFamily((id: string) =>
   atom((get) => get(workstreamStateAtom(id)).filesSidebarVisible)
+);
+
+/**
+ * Active content mode for the Agent right panel.
+ */
+export const workstreamRightPanelModeAtom = atomFamily((id: string) =>
+  atom((get) => get(workstreamStateAtom(id)).rightPanelMode)
+);
+
+/**
+ * Normal chat sessions paired with source sessions in the Agent right panel.
+ */
+export const workstreamSessionChatIdsAtom = atomFamily((id: string) =>
+  atom((get) => get(workstreamStateAtom(id)).sessionChatSessionIds)
 );
 
 /**
@@ -666,6 +727,49 @@ export const toggleWorkstreamFilesSidebarAtom = atom(
 );
 
 /**
+ * Select the content displayed in the Agent right panel.
+ */
+export const setWorkstreamRightPanelModeAtom = atom(
+  null,
+  (
+    _get,
+    set,
+    { workstreamId, mode }: { workstreamId: string; mode: AgentRightPanelMode }
+  ) => {
+    set(workstreamStateAtom(workstreamId), { rightPanelMode: mode });
+  }
+);
+
+/**
+ * Persist or clear the normal chat session paired with a source session.
+ */
+export const setWorkstreamSessionChatIdAtom = atom(
+  null,
+  (
+    get,
+    set,
+    {
+      workstreamId,
+      targetSessionId,
+      chatSessionId,
+    }: {
+      workstreamId: string;
+      targetSessionId: string;
+      chatSessionId: string | null;
+    }
+  ) => {
+    const current = get(workstreamSessionChatIdsAtom(workstreamId));
+    const next = { ...current };
+    if (chatSessionId) {
+      next[targetSessionId] = chatSessionId;
+    } else {
+      delete next[targetSessionId];
+    }
+    set(workstreamStateAtom(workstreamId), { sessionChatSessionIds: next });
+  }
+);
+
+/**
  * Add a file to the workstream's open resources (or focus it if already open).
  */
 export const addWorkstreamFileAtom = atom(
@@ -682,6 +786,29 @@ export const addWorkstreamTrackerAtom = atom(
   null,
   (get, set, { workstreamId, trackerItemId }: { workstreamId: string; trackerItemId: string }) => {
     set(openWorkstreamResourceAtom, { workstreamId, resource: trackerResource(trackerItemId) });
+  }
+);
+
+/**
+ * Open a sent request's results as a workstream resource tab (or focus it if
+ * already open). The caller supplies the tab uri as the resource id.
+ */
+export const addWorkstreamFeedbackRequestAtom = atom(
+  null,
+  (
+    get,
+    set,
+    {
+      workstreamId,
+      resourceId,
+      orgId,
+      requestId,
+    }: { workstreamId: string; resourceId: string; orgId: string; requestId: string }
+  ) => {
+    set(openWorkstreamResourceAtom, {
+      workstreamId,
+      resource: feedbackRequestResource({ resourceId, orgId, requestId }),
+    });
   }
 );
 
@@ -992,6 +1119,8 @@ export const convertToWorkstreamAtom = atom(
       layoutMode: currentState.layoutMode,
       splitRatio: currentState.splitRatio,
       filesSidebarVisible: currentState.filesSidebarVisible,
+      rightPanelMode: currentState.rightPanelMode,
+      sessionChatSessionIds: currentState.sessionChatSessionIds,
       openResources: currentState.openResources,
       activeResourceId: currentState.activeResourceId,
       // Inherit git state from original session
@@ -1013,6 +1142,8 @@ export const convertToWorkstreamAtom = atom(
       layoutMode: 'transcript',
       splitRatio: 0.5,
       filesSidebarVisible: true,
+      rightPanelMode: 'edited-files',
+      sessionChatSessionIds: {},
       openResources: [],
       activeResourceId: null,
       stagedFiles: [],
@@ -1081,20 +1212,15 @@ function schedulePersist(workstreamId: string): void {
     try {
       const state = store.get(workstreamStateAtom(workstreamId));
       // console.log(`[workstreamState] Persisting workstream ${workstreamId}:`, JSON.stringify(state));
-      const workspaceState = await window.electronAPI.invoke(
-        'workspace:get-state',
-        workspacePath
-      );
-
-      const existingStates = workspaceState?.workstreamStates ?? {};
-
-      const result = await window.electronAPI.invoke('workspace:update-state', workspacePath, {
-        workstreamStates: {
-          ...existingStates,
-          [workstreamId]: state,
-        },
+      // Send only this workstream's entry. Reading the whole workspace state
+      // here and spreading every other entry back made each persist cost a
+      // multi-megabyte round trip once enough workstreams had accumulated.
+      await window.electronAPI.invoke('workspace:set-workstream-state', {
+        workspacePath,
+        workstreamId,
+        state,
       });
-      // console.log(`[workstreamState] Persist complete for ${workstreamId}, result:`, result);
+      // console.log(`[workstreamState] Persist complete for ${workstreamId}`);
     } catch (err) {
       console.error('[workstreamState] Failed to persist state:', err);
     }
@@ -1190,6 +1316,9 @@ export async function loadWorkstreamState(workstreamId: string): Promise<void> {
         layoutMode: (saved as WorkstreamState).layoutMode ?? current.layoutMode,
         splitRatio: (saved as WorkstreamState).splitRatio ?? current.splitRatio,
         filesSidebarVisible: (saved as WorkstreamState).filesSidebarVisible ?? current.filesSidebarVisible,
+        rightPanelMode: (saved as WorkstreamState).rightPanelMode ?? current.rightPanelMode,
+        sessionChatSessionIds:
+          (saved as WorkstreamState).sessionChatSessionIds ?? current.sessionChatSessionIds,
         openResources,
         activeResourceId,
         // Cached worktree path (available synchronously on remount)

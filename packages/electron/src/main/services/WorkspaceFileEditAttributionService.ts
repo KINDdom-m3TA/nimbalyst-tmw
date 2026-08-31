@@ -11,6 +11,7 @@ import { toolCallMatcher } from './ToolCallMatcher';
 import { codexEditWindowRegistry } from './CodexEditWindowRegistry';
 import { notifySessionFilesUpdated } from './sessionFilesNotify';
 import { workspaceFileAttributionPolicy } from './WorkspaceFileAttributionPolicy';
+import { getCachedTrackedFiles, getCachedUncommittedFiles } from '../utils/gitUncommittedFiles';
 
 export interface WorkspaceFileEditEvent {
   workspacePath: string;
@@ -220,6 +221,32 @@ class WorkspaceFileEditAttributionServiceImpl {
     }
   }
 
+  /**
+   * Whether the file this event describes is tracked by git and carries no
+   * uncommitted change — i.e. what is on disk is already what is in HEAD.
+   *
+   * Both signals are required: a path absent from the uncommitted set is either
+   * tracked-and-clean or gitignored, and only the first means "landed". Any
+   * uncertainty answers `false`, so a missing git signal never suppresses a tag.
+   */
+  private async alreadyLandedInGit(event: WorkspaceFileEditEvent): Promise<boolean> {
+    try {
+      const [tracked, uncommitted] = await Promise.all([
+        getCachedTrackedFiles(event.workspacePath),
+        getCachedUncommittedFiles(event.workspacePath),
+      ]);
+      if (tracked.size === 0) return false;
+
+      const relative = path
+        .relative(event.workspacePath, event.filePath)
+        .split(path.sep)
+        .join('/');
+      return tracked.has(relative) && !uncommitted.has(relative);
+    } catch {
+      return false;
+    }
+  }
+
   private async processEvent(event: WorkspaceFileEditEvent, state: WorkspaceQueueState): Promise<void> {
     try {
       const candidateSessionIds = getSubscriberIds(event.workspacePath);
@@ -361,6 +388,23 @@ class WorkspaceFileEditAttributionServiceImpl {
           sessionId: winner.sessionId,
           toolUseId,
         });
+      } else if (await this.alreadyLandedInGit(event)) {
+        // The write we just observed left the file identical to HEAD, so there
+        // is no diff for anyone to review. This is the merge case from #1403: a
+        // `git merge` rewrites the working tree and moves the branch ref at
+        // once, GitRefWatcher's auto-approve sweep runs before this queue
+        // drains, and the tag it would create here is stale the moment it is
+        // written. Declining to write it beats cleaning it up later.
+        //
+        // Only safe on this path. `historyManager.createTag` also serves
+        // AgentToolHooks' pre-edit hook, which records its baseline BEFORE the
+        // tool writes — there the file is legitimately still clean vs HEAD and
+        // the same check would suppress every real AI diff.
+        logger.main.info('[WorkspaceFileEditAttributionService] Skipping tag creation - file already matches HEAD:', {
+          filePath: event.filePath,
+          sessionId: winner.sessionId,
+          toolUseId,
+        });
       } else {
         const tagId = `ai-edit-pending-${winner.sessionId}-${toolUseId}`;
         await historyManager.createTag(
@@ -370,6 +414,11 @@ class WorkspaceFileEditAttributionServiceImpl {
           event.beforeContent,
           winner.sessionId,
           toolUseId,
+          // Speculative: this baseline comes from scored watcher attribution,
+          // not from observing the real pre-edit moment. An authoritative
+          // writer (file_change pre_edit_snapshot, OpenCode / Codex-ACP edit
+          // tools) may replace its content.
+          { speculative: true },
         );
         counters.tagsCreated++;
       }

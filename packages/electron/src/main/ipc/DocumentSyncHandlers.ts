@@ -2,26 +2,27 @@
  * DocumentSyncHandlers
  *
  * IPC handlers for collaborative document editing.
- * Resolves auth, encryption keys, and server config from main process
- * services so the renderer can open collab:// tabs.
+ * Resolves auth and server config from main-process services so the renderer
+ * can open collab:// tabs. Team content is encrypted at rest by the server --
+ * no key material crosses this boundary.
  */
 
-import { BrowserWindow, dialog, net } from 'electron';
+import { BrowserWindow, dialog } from 'electron';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { safeHandle } from '../utils/ipcRegistry';
 import { logger } from '../utils/logger';
 import { getCollabSyncWsUrl, getCollabSyncHttpUrl } from '../utils/collabSyncUrl';
-import { isAuthenticated, getStytchUserId, getUserEmail, getAuthState, getPersonalOrgId, getPersonalUserId, getPersonalSessionJwt, refreshPersonalSession } from '../services/StytchAuthService';
-import { findTeamForWorkspace, getOrgScopedJwt } from '../services/TeamService';
-import { getOrgIdFromJwt, getJwtExp } from '../services/jwtOrg';
-import { getOrgKey, getOrgKeyFingerprint, getOrCreateIdentityKeyPair, uploadIdentityKeyToOrg, fetchAndUnwrapOrgKey, clearOrgKey, fetchTeamKeyStatus, getLastKnownTeamKeyStatus, getArchivedOrgKeys } from '../services/OrgKeyService';
+import { isAuthenticated, getStytchUserId, getUserEmail, getAuthState, getPersonalUserId, getPersonalSessionJwt, refreshPersonalSessionDetailed } from '../services/StytchAuthService';
+import { findTeamForWorkspace, resolveTeamForWorkspace, getOrgScopedJwt } from '../services/TeamService';
+import { getOrgIdFromJwt, getJwtExp, getSubFromJwt } from '../services/jwtOrg';
 import { getWorkspaceState, updateWorkspaceState } from '../utils/store';
 import { createSingleFlight } from '../utils/asyncCache';
 import { getDialogDefaultPath, rememberDialogSelection } from '../utils/dialogPaths';
 import { getPersonalDocSyncConfig, isSyncEnabled } from '../services/SyncManager';
 import { resolveCollabDocumentType } from './collabDocumentTypeResolver';
+import { drainLegacyPendingUpdates } from './legacyPendingUpdateDrain';
 import { getSyncId } from '../services/DocSyncService';
 import {
   registerCollabAssetDocument,
@@ -29,7 +30,9 @@ import {
   isCollabAssetDocumentRegisteredForSender,
   clearCollabAssetSender,
 } from '../protocols/collabAssetProtocol';
-import { encryptAndUploadCollabAsset } from '../services/CollabAssetUploader';
+import { uploadCollabAsset } from '../services/CollabAssetUploader';
+import { asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
+import { MAX_COLLAB_ASSET_BYTES } from '@nimbalyst/runtime/sync/collabAssetFormat';
 import {
   scanMarkdownImageRefs,
   resolveAssetRef,
@@ -41,6 +44,7 @@ import {
   getLocalOriginBinding,
   recordLocalOriginShare,
   relinkLocalOriginBinding,
+  pullFromSharedOrigin,
   reuploadFromLocalOrigin,
   seedSharedDocumentFromContent,
 } from '../services/CollabLocalOriginService';
@@ -99,77 +103,12 @@ function assertReplicaAccess(identity: LocalReplicaIdentity): void {
  */
 const senderDestroyedHooked = new Set<number>();
 
-// Single-flight + TTL cache for the org-key-fingerprint verify call.
-// The fingerprint endpoint is per-org, not per-document, so one check
-// per org per short window is enough. Without this, opening N tracker
-// bodies in parallel at startup fires N HTTPS calls that saturate
-// Node's HTTPS agent socket pool and produce a multi-minute event-loop
-// block (user report 2026-06-01: 162-second beachball on a workspace
-// with ~14 restored tracker tabs + a 50-item prewarm).
-type FingerprintVerifyResult = { ok: true } | { ok: false; error: string };
-const fingerprintVerifyCache: Map<string, { promise: Promise<FingerprintVerifyResult>; expiresAt: number }> = new Map();
-const FINGERPRINT_VERIFY_TTL_MS = 60_000;
-
-/** Drop the verify cache for an org (or all orgs). Called by key rotation. */
-export function invalidateFingerprintVerifyCache(orgId?: string): void {
-  if (orgId) fingerprintVerifyCache.delete(orgId);
-  else fingerprintVerifyCache.clear();
-}
-
-async function verifyOrgKeyFingerprintCached(orgId: string): Promise<FingerprintVerifyResult> {
-  const now = Date.now();
-  const cached = fingerprintVerifyCache.get(orgId);
-  if (cached && cached.expiresAt > now) return cached.promise;
-
-  const promise: Promise<FingerprintVerifyResult> = (async () => {
-    const localFingerprint = getOrgKeyFingerprint(orgId);
-    if (!localFingerprint) return { ok: true };
-    try {
-      const orgJwt = await getOrgScopedJwt(orgId);
-      const serverUrl = getCollabSyncHttpUrl();
-      const fpResp = await net.fetch(`${serverUrl}/api/teams/${orgId}/org-key-fingerprint`, {
-        headers: { 'Authorization': `Bearer ${orgJwt}` },
-      });
-      if (!fpResp.ok) return { ok: true };
-      const fpData = await fpResp.json() as { fingerprint: string | null };
-      if (fpData.fingerprint && fpData.fingerprint !== localFingerprint) {
-        logger.main.warn('[DocumentSyncHandlers] Stale key detected!', {
-          local: localFingerprint.slice(0, 12),
-          server: fpData.fingerprint.slice(0, 12),
-        });
-        clearOrgKey(orgId);
-        const freshOrgJwt = await getOrgScopedJwt(orgId);
-        const refreshed = await fetchAndUnwrapOrgKey(orgId, freshOrgJwt);
-        if (!refreshed) {
-          return { ok: false, error: 'Key rotation occurred. Unable to fetch new encryption key.' };
-        }
-      }
-      return { ok: true };
-    } catch (err) {
-      logger.main.error('[DocumentSyncHandlers] Failed to verify key fingerprint against server:', err);
-      return { ok: false, error: 'Cannot verify encryption key epoch against server. Check your network connection and try again.' };
-    }
-  })();
-
-  fingerprintVerifyCache.set(orgId, { promise, expiresAt: now + FINGERPRINT_VERIFY_TTL_MS });
-  // Drop cache on failure so a transient network blip doesn't pin a sad
-  // result for the full TTL window.
-  void promise.then((result) => {
-    if (!result.ok) {
-      const entry = fingerprintVerifyCache.get(orgId);
-      if (entry?.promise === promise) fingerprintVerifyCache.delete(orgId);
-    }
-  });
-
-  return promise;
-}
-
-/** Build a human-readable display name from Stytch user data. Falls back to email, then userId. */
-function getUserDisplayName(userId: string): string {
+/** Build a human-readable display name from Stytch user data. Falls back to email, then member id. */
+function getUserDisplayName(memberId: string): string {
   const auth = getAuthState();
   const parts = [auth.user?.name?.first_name, auth.user?.name?.last_name].filter(Boolean);
   if (parts.length > 0) return parts.join(' ');
-  return getUserEmail() || userId;
+  return getUserEmail() || memberId;
 }
 
 export function registerDocumentSyncHandlers(): void {
@@ -178,7 +117,7 @@ export function registerDocumentSyncHandlers(): void {
    * Returns the org key as raw base64 (renderer reconstructs CryptoKey).
    *
    * Payload: { workspacePath: string; documentId: string; title?: string }
-   * Returns: { success: true, config: { orgId, documentId, title, orgKeyBase64, serverUrl, userId } }
+   * Returns: { success: true, config: { orgId, documentId, title, serverUrl, teamMemberId } }
    *       | { success: false, error: string }
    */
   safeHandle('document-sync:open', async (event, payload: {
@@ -205,8 +144,8 @@ export function registerDocumentSyncHandlers(): void {
       return { success: false, error: 'Not authenticated. Sign in first.' };
     }
 
-    const userId = getStytchUserId();
-    if (!userId) {
+    const activeMemberId = getStytchUserId();
+    if (!activeMemberId) {
       return { success: false, error: 'No user ID available.' };
     }
 
@@ -218,105 +157,12 @@ export function registerDocumentSyncHandlers(): void {
       return { success: false, error: 'No team found for this workspace. Create or join a team first.' };
     }
     const orgId = team.orgId;
-
-    // Epic H2: decide the key-custody lane before touching the ECDH envelope
-    // path. In server-managed mode the server holds the per-team DEK and the
-    // doc syncs PLAINTEXT, so no org key is fetched or required.
-    let serverManaged = false;
-    try {
-      const orgJwt = await getOrgScopedJwt(orgId);
-      serverManaged = (await fetchTeamKeyStatus(orgId, orgJwt)).mode === 'server-managed';
-    } catch (err) {
-      // Offline JWT mint failure (NIM-1778): fall back to the last-known mode
-      // instead of assuming legacy-e2e, which bricks a server-managed team.
-      serverManaged = getLastKnownTeamKeyStatus(orgId)?.mode === 'server-managed';
-      logger.main.warn('[DocumentSyncHandlers] key-status resolve failed; using last-known mode (serverManaged:', serverManaged, '):', err);
+    const teamJwt = await getOrgScopedJwt(orgId);
+    const teamMemberId = getSubFromJwt(teamJwt);
+    if (!teamMemberId) {
+      return { success: false, error: 'No team member ID available.' };
     }
 
-    // Get org encryption key (legacy mode only).
-    const keyStart = Date.now();
-    let orgKeyBase64 = '';
-    let orgKeyFp: string | undefined;
-    // NIM-878/959: every candidate legacy org-key epoch for reading PRE-MIGRATION
-    // rows in server-managed mode (rows written before the flip are still AES-
-    // ciphertext, and may span multiple epochs if the org key was rotated while
-    // the team was still legacy-e2e).
-    const legacyOrgKeysBase64: string[] = [];
-    if (!serverManaged) {
-      let encryptionKey = await getOrgKey(orgId);
-      if (!encryptionKey) {
-        logger.main.info('[DocumentSyncHandlers] No org key cached, attempting to fetch envelope...');
-        try {
-          const orgJwt = await getOrgScopedJwt(orgId);
-          await getOrCreateIdentityKeyPair();
-          await uploadIdentityKeyToOrg(orgJwt);
-          encryptionKey = await fetchAndUnwrapOrgKey(orgId, orgJwt);
-        } catch (err) {
-          logger.main.warn('[DocumentSyncHandlers] Failed to fetch org key envelope:', err);
-        }
-        if (!encryptionKey) {
-          return { success: false, error: 'No encryption key available. Team admin may need to re-share keys.' };
-        }
-      }
-      logPhase('getOrgKey/fetchEnvelope', keyStart);
-
-      // Verify local key fingerprint against server to detect stale keys.
-      // Single-flight + 60s TTL per orgId; see verifyOrgKeyFingerprintCached.
-      const fpStart = Date.now();
-      const fpResult = await verifyOrgKeyFingerprintCached(orgId);
-      logPhase('verifyFingerprint', fpStart);
-      if (!fpResult.ok) return { success: false, error: fpResult.error };
-      // Re-read the key in case the cached verify rotated it for this org.
-      encryptionKey = await getOrgKey(orgId);
-      if (!encryptionKey) {
-        return { success: false, error: 'No encryption key available.' };
-      }
-
-      // Export key as raw base64 for renderer to reconstruct
-      const rawBytes = await crypto.subtle.exportKey('raw', encryptionKey);
-      orgKeyBase64 = Buffer.from(rawBytes).toString('base64');
-      orgKeyFp = getOrgKeyFingerprint(orgId) ?? undefined;
-    } else {
-      // logger.main.info('[DocumentSyncHandlers] team', orgId, 'is server-managed; skipping ECDH org-key unwrap');
-      // NIM-878/959: documents created before this team migrated to server-
-      // managed still have legacy-e2e AES-ciphertext rows on the server (passed
-      // through with their original iv), and those rows may span multiple org-
-      // key epochs if the key was rotated while the team was still legacy-e2e.
-      // Gather EVERY candidate epoch (fresh current + cached current + all
-      // archived) so the renderer can decrypt old rows regardless of which
-      // epoch wrote them -- mirroring the doc-index multi-epoch path (NIM-906/
-      // 910). If none are available, those rows simply skip on read -- never a
-      // crash.
-      const seen = new Set<string>();
-      const pushKey = async (key: CryptoKey | null | undefined) => {
-        if (!key) return;
-        const raw = Buffer.from(await crypto.subtle.exportKey('raw', key)).toString('base64');
-        if (!seen.has(raw)) { seen.add(raw); legacyOrgKeysBase64.push(raw); }
-      };
-      try {
-        // Refresh to the CURRENT org key from the server (the cached one may be
-        // a stale epoch that predates a rotation).
-        try {
-          const orgJwt = await getOrgScopedJwt(orgId);
-          await getOrCreateIdentityKeyPair();
-          await pushKey(await fetchAndUnwrapOrgKey(orgId, orgJwt));
-        } catch (fetchErr) {
-          logger.main.info('[DocumentSyncHandlers] could not refresh current org key for doc:', fetchErr);
-        }
-        // Cached current key (may differ from the freshly fetched one).
-        await pushKey(await getOrgKey(orgId));
-        // All archived epochs from prior rotations.
-        for (const archived of getArchivedOrgKeys(orgId)) {
-          if (!seen.has(archived.rawKeyBase64)) {
-            seen.add(archived.rawKeyBase64);
-            legacyOrgKeysBase64.push(archived.rawKeyBase64);
-          }
-        }
-      } catch (err) {
-        logger.main.info('[DocumentSyncHandlers] no legacy org keys for server-managed migration read (pre-migration rows may not load):', err);
-      }
-      // logger.main.info('[DocumentSyncHandlers] doc server-managed legacy key epochs available:', legacyOrgKeysBase64.length);
-    }
     logPhase('total', handlerStart);
 
     const serverUrl = getCollabSyncWsUrl();
@@ -336,22 +182,32 @@ export function registerDocumentSyncHandlers(): void {
       documentId: payload.documentId,
     });
 
-    const accountId = getPersonalUserId() ?? userId;
-    if (pendingUpdateBase64) {
-      try {
-        const legacyUpdateCommitted = await getCollabDocumentReplicaStore().migrateLegacyPendingUpdate(
-          { accountId, orgId, documentId: payload.documentId },
-          resolvedDocumentType ?? 'markdown',
-          Buffer.from(pendingUpdateBase64, 'base64'),
-        );
-        if (legacyUpdateCommitted) {
-          updateWorkspaceState(payload.workspacePath, state => {
-            delete state.collabPendingUpdates?.[pendingKey];
-          });
-          pendingUpdateBase64 = undefined;
-        }
-      } catch (error) {
-        logger.main.error('[DocumentSyncHandlers] Failed to migrate legacy pending update:', error);
+    const accountId = getPersonalUserId() ?? activeMemberId;
+    const pendingUpdates = workspaceState.collabPendingUpdates;
+    if (pendingUpdates && Object.keys(pendingUpdates).length > 0) {
+      // Drain every legacy entry, not only the document being opened. Entries for
+      // documents the user never reopens used to accumulate in workspace settings
+      // and inflate the cost of every workspace-state read in the main process.
+      const { migrated } = await drainLegacyPendingUpdates({
+        pending: pendingUpdates,
+        accountId,
+        resolveDocumentType: documentId =>
+          resolveCollabDocumentType({
+            callerDocumentType: documentId === payload.documentId ? payload.documentType : undefined,
+            workspaceState: workspaceState as unknown as { openCollabDocumentEntries?: unknown },
+            documentId,
+          }),
+        migrate: (identity, documentType, update) =>
+          getCollabDocumentReplicaStore().migrateLegacyPendingUpdate(identity, documentType, update),
+        onError: (key, error) =>
+          logger.main.error('[DocumentSyncHandlers] Failed to migrate legacy pending update:', key, error),
+      });
+
+      if (migrated.length > 0) {
+        updateWorkspaceState(payload.workspacePath, state => {
+          for (const key of migrated) delete state.collabPendingUpdates?.[key];
+        });
+        if (migrated.includes(pendingKey)) pendingUpdateBase64 = undefined;
       }
     }
 
@@ -359,7 +215,7 @@ export function registerDocumentSyncHandlers(): void {
     //   orgId,
     //   documentId: payload.documentId,
     //   serverUrl,
-    //   userId,
+    //   teamMemberId,
     // });
 
     // Authorize THIS renderer (webContents) to load this doc's encrypted
@@ -390,17 +246,10 @@ export function registerDocumentSyncHandlers(): void {
         documentId: payload.documentId,
         title: payload.title || payload.documentId,
         documentType: resolvedDocumentType,
-        keyCustody: serverManaged ? 'server-managed' : 'legacy-e2e',
-        orgKeyBase64,
-        // NIM-959: all candidate legacy epochs; keep the singular field for
-        // back-compat with any caller still reading it (first epoch).
-        legacyOrgKeyBase64: legacyOrgKeysBase64[0] ?? '',
-        legacyOrgKeysBase64,
-        orgKeyFingerprint: orgKeyFp,
         serverUrl,
         accountId,
-        userId,
-        userName: getUserDisplayName(userId),
+        teamMemberId,
+        userName: getUserDisplayName(teamMemberId),
         userEmail: getUserEmail() || undefined,
         pendingUpdateBase64,
       },
@@ -420,7 +269,14 @@ export function registerDocumentSyncHandlers(): void {
   });
 
   /**
-   * Encrypt a file and PUT it to the collab worker as a new asset.
+   * Upload a file to the collab worker as a new document asset.
+   *
+   * The bytes land in the durable asset outbox first and the network PUT is
+   * deliberately detached, so the body edit that references the new
+   * `collab-asset://` URI never waits on the upload -- and an attachment added
+   * offline drains when connectivity returns. The URI is serviceable from the
+   * local cache immediately.
+   *
    * Routed through main because the renderer's origin is blocked by the
    * worker's CORS allowlist. Authorized per-sender: a renderer can only
    * upload for a doc that THIS WebContents has opened, even if another
@@ -442,6 +298,15 @@ export function registerDocumentSyncHandlers(): void {
     if (!isCollabAssetDocumentRegisteredForSender(event.sender.id, payload.orgId, payload.documentId)) {
       return { success: false, error: 'Document not open in this window' };
     }
+    // Backstop under every caller's own cap: a blob the asset route will refuse
+    // must not occupy the durable outbox and retry against a permanent 413.
+    if (payload.fileBytes.byteLength > MAX_COLLAB_ASSET_BYTES) {
+      return {
+        success: false,
+        error: `Attachments must not exceed ${Math.round(MAX_COLLAB_ASSET_BYTES / (1024 * 1024))} MB.`,
+        errorCode: 'asset_too_large',
+      };
+    }
 
     const accountId = getPersonalUserId();
     if (!accountId) {
@@ -459,8 +324,6 @@ export function registerDocumentSyncHandlers(): void {
       mimeType: payload.mimeType || 'application/octet-stream',
       fileName: payload.fileName || assetId,
     });
-    // The URI is usable from the local cache immediately. Network upload is
-    // deliberately detached so the body edit that references it never waits.
     getCollabAssetOutboxDrainCoordinator().trigger('asset-enqueued');
     return {
       success: true,
@@ -551,7 +414,7 @@ export function registerDocumentSyncHandlers(): void {
         bytes.byteOffset + bytes.byteLength,
       ) as ArrayBuffer;
 
-      const upload = await encryptAndUploadCollabAsset({
+      const upload = await uploadCollabAsset({
         orgId: payload.orgId,
         documentId: payload.documentId,
         fileBytes: arrayBuffer,
@@ -957,6 +820,23 @@ export function registerDocumentSyncHandlers(): void {
     }
   });
 
+  safeHandle('document-sync:pull-local-origin', async (_event, payload: {
+    workspacePath: string;
+    documentId: string;
+    forceOverwriteLocal?: boolean;
+    conflictToken?: string;
+  }) => {
+    try {
+      return await pullFromSharedOrigin(payload);
+    } catch (err) {
+      return {
+        success: false,
+        status: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
+
   safeHandle('document-sync:find-local-origin-link', async (_event, payload: {
     workspacePath: string;
     sourceFilePath: string;
@@ -1120,112 +1000,41 @@ export function registerDocumentSyncHandlers(): void {
 
   /**
    * Resolve config needed to connect to the org's TeamRoom.
-   * Returns orgId, orgKeyBase64, serverUrl, userId -- the renderer
+   * Returns orgId, serverUrl, teamMemberId -- the renderer
    * creates and manages the TeamSyncProvider instance itself.
    *
    * Payload: { workspacePath: string }
-   * Returns: { success: true, config: { orgId, orgKeyBase64, serverUrl, userId } }
+   * Returns: { success: true, config: { orgId, serverUrl, teamMemberId } }
    *       | { success: false, error: string }
    */
   async function resolveIndexConfig(payload: {
     workspacePath: string;
   }) {
     if (!isAuthenticated()) {
-      return { success: false, error: 'Not authenticated. Sign in first.' };
+      return { success: false, error: 'Not authenticated. Sign in first.', retryable: false };
     }
 
-    const userId = getStytchUserId();
-    if (!userId) {
-      return { success: false, error: 'No user ID available.' };
-    }
-
-    const team = await findTeamForWorkspace(payload.workspacePath);
+    // `complete: false` means the lookup could not be carried out -- the team
+    // directory fetch timed out, or one account's fetch failed. Answering with
+    // the terminal "no team" message makes the renderer mark the scope
+    // permanently unavailable, which hides Shared Docs for the rest of the app
+    // session even though the next request would succeed.
+    const { team, complete } = await resolveTeamForWorkspace(payload.workspacePath);
     if (!team) {
-      return { success: false, error: 'No team found for this workspace.' };
+      return complete
+        ? { success: false, error: 'No team found for this workspace.', retryable: false }
+        : { success: false, error: 'Team lookup did not complete.', retryable: true };
     }
     const orgId = team.orgId;
-
-    // Epic H2: server-managed teams sync doc-index titles as PLAINTEXT (the
-    // server encrypts at rest with the team DEK), so no org key is needed.
-    let serverManaged = false;
-    try {
-      const orgJwt = await getOrgScopedJwt(orgId);
-      serverManaged = (await fetchTeamKeyStatus(orgId, orgJwt)).mode === 'server-managed';
-    } catch (err) {
-      // Offline JWT mint failure (NIM-1778): fall back to the last-known mode
-      // instead of assuming legacy-e2e -- the wrong lane makes every doc-index
-      // title fail decrypt and surface as locked until restart.
-      serverManaged = getLastKnownTeamKeyStatus(orgId)?.mode === 'server-managed';
-      logger.main.warn('[DocumentSyncHandlers] index key-status resolve failed; using last-known mode (serverManaged:', serverManaged, '):', err);
+    const teamJwt = await getOrgScopedJwt(orgId);
+    const teamMemberId = getSubFromJwt(teamJwt);
+    if (!teamMemberId) {
+      return { success: false, error: 'No team member ID available.', retryable: true };
     }
 
-    let orgKeyBase64 = '';
-    let orgKeyFingerprint: string | null = null;
-    // NIM-906/910: legacy org keys for reading PRE-MIGRATION doc-index TITLE
-    // rows in server-managed mode (titles written before the flip are still AES
-    // ciphertext, passed through by the server with their original iv). The org
-    // key may have ROTATED while the team was legacy-e2e, so titles can be under
-    // different epochs — we pass ALL candidate epochs (current + archived).
-    const legacyOrgKeysBase64: string[] = [];
-    if (!serverManaged) {
-      let encryptionKey = await getOrgKey(orgId);
-      if (!encryptionKey) {
-        logger.main.info('[DocumentSyncHandlers] No org key cached for index, attempting to fetch envelope...');
-        try {
-          const orgJwt = await getOrgScopedJwt(orgId);
-          await getOrCreateIdentityKeyPair();
-          await uploadIdentityKeyToOrg(orgJwt);
-          encryptionKey = await fetchAndUnwrapOrgKey(orgId, orgJwt);
-        } catch (err) {
-          logger.main.warn('[DocumentSyncHandlers] Failed to fetch org key envelope:', err);
-        }
-        if (!encryptionKey) {
-          return { success: false, error: 'No encryption key available. Team admin may need to re-share keys.' };
-        }
-      }
-
-      const rawBytes = await crypto.subtle.exportKey('raw', encryptionKey);
-      orgKeyBase64 = Buffer.from(rawBytes).toString('base64');
-      orgKeyFingerprint = (await getOrgKeyFingerprint(orgId)) ?? null;
-    } else {
-      // logger.main.info('[DocumentSyncHandlers] index for', orgId, 'is server-managed; skipping ECDH org-key unwrap');
-      // NIM-906/910: gather EVERY candidate legacy org-key epoch so the renderer
-      // can read (and self-heal) pre-migration ciphertext titles, even when the
-      // org key was rotated and titles span epochs. If none are available, those
-      // titles surface as locked entries rather than raw base64 -- never a crash.
-      const seen = new Set<string>();
-      const pushKey = async (key: CryptoKey | null | undefined) => {
-        if (!key) return;
-        const raw = Buffer.from(await crypto.subtle.exportKey('raw', key)).toString('base64');
-        if (!seen.has(raw)) { seen.add(raw); legacyOrgKeysBase64.push(raw); }
-      };
-      const pushRaw = (rawBase64: string) => {
-        if (rawBase64 && !seen.has(rawBase64)) { seen.add(rawBase64); legacyOrgKeysBase64.push(rawBase64); }
-      };
-      try {
-        // Refresh to the CURRENT org key from the server (the cached one may be a
-        // stale epoch that predates a rotation -- the bug behind NIM-910).
-        try {
-          const orgJwt = await getOrgScopedJwt(orgId);
-          await getOrCreateIdentityKeyPair();
-          await pushKey(await fetchAndUnwrapOrgKey(orgId, orgJwt));
-        } catch (fetchErr) {
-          logger.main.info('[DocumentSyncHandlers] could not refresh current org key for index:', fetchErr);
-        }
-        // Cached current key (may differ from the freshly fetched one).
-        await pushKey(await getOrgKey(orgId));
-        // All archived epochs from prior rotations.
-        for (const archived of getArchivedOrgKeys(orgId)) {
-          pushRaw(archived.rawKeyBase64);
-        }
-      } catch (err) {
-        logger.main.info('[DocumentSyncHandlers] no legacy org keys for server-managed index (pre-migration titles may show as locked):', err);
-      }
-      // logger.main.info('[DocumentSyncHandlers] index server-managed legacy key epochs available:', legacyOrgKeysBase64.length);
-    }
     const serverUrl = getCollabSyncWsUrl();
 
-    // logger.main.info('[DocumentSyncHandlers] Resolved doc index config', { orgId, serverUrl, userId });
+    // logger.main.info('[DocumentSyncHandlers] Resolved doc index config', { orgId, serverUrl, teamMemberId });
 
     return {
       success: true,
@@ -1236,18 +1045,9 @@ export function registerDocumentSyncHandlers(): void {
         // the TeamSyncProvider tags every docIndexRegister with it so the
         // server's project-partitioned doc index attributes docs correctly.
         teamProjectId: team.teamProjectId ?? null,
-        keyCustody: serverManaged ? 'server-managed' : 'legacy-e2e',
-        orgKeyBase64,
-        // NIM-906/910: every candidate legacy org-key epoch (current + archived),
-        // present only in server-managed mode; empty when none are recoverable.
-        legacyOrgKeysBase64,
-        orgKeyFingerprint,
         serverUrl,
-        userId,
-        // Personal org id (stable across team session exchanges) so the
-        // TeamSyncProvider can announce it for inbox-event fanout routing.
-        personalOrgId: getPersonalOrgId() || undefined,
-        userName: getUserDisplayName(userId),
+        teamMemberId,
+        userName: getUserDisplayName(teamMemberId),
         userEmail: getUserEmail() || undefined,
       },
     };
@@ -1325,10 +1125,10 @@ export function registerDocumentSyncHandlers(): void {
         config: {
           serverUrl: syncConfig.serverUrl,
           orgId: syncConfig.orgId,
-          userId: syncConfig.userId,
+          personalMemberId: syncConfig.personalMemberId,
           encryptionKeyBase64,
           syncId,
-          userName: getUserDisplayName(syncConfig.userId),
+          userName: getUserDisplayName(syncConfig.personalMemberId),
         },
       };
     } catch (err) {
@@ -1339,16 +1139,45 @@ export function registerDocumentSyncHandlers(): void {
   /**
    * Get a fresh personal JWT for document sync WebSocket reconnects.
    * Personal docs use the personal JWT (not team JWT).
+   *
+   * The refresh outcome is not optional information. Ignoring it meant this
+   * handler happily returned whatever JWT was already cached after BOTH a
+   * server rejection and an unreachable sync server -- including an expired
+   * one, which guarantees the reconnect is refused again and the loop never
+   * escapes. Classify instead: a still-valid token is worth returning after a
+   * transport failure, an expired one is not, and the error says which
+   * happened.
    */
   safeHandle('document-sync:get-personal-jwt', async () => {
     try {
       const serverUrl = getCollabSyncWsUrl();
-      await refreshPersonalSession(serverUrl);
+      const outcome = await refreshPersonalSessionDetailed(serverUrl);
       const jwt = getPersonalSessionJwt();
-      if (!jwt) {
-        return { success: false, error: 'No personal JWT available' };
+
+      if (outcome.ok) {
+        return jwt
+          ? { success: true, jwt }
+          : { success: false, error: 'No personal JWT available' };
       }
-      return { success: true, jwt };
+
+      const expSeconds = jwt ? getJwtExp(jwt) : null;
+      const stillValid = expSeconds !== null && expSeconds * 1000 > Date.now();
+      if (stillValid) {
+        // Transport blips must not invalidate a token that has not expired.
+        return { success: true, jwt };
+      }
+
+      if (outcome.reason === 'network') {
+        const detail = outcome.detail ? ` (${outcome.detail})` : '';
+        return {
+          success: false,
+          error: `Sync server ${serverUrl} is unreachable${detail} - the personal session could not be refreshed`,
+        };
+      }
+      return {
+        success: false,
+        error: 'Personal session refresh was rejected - sign in again to resume personal document sync',
+      };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
@@ -1358,10 +1187,10 @@ export function registerDocumentSyncHandlers(): void {
     safeHandle('document-sync:open-test', async (_event, payload: {
       serverUrl: string;
       orgId: string;
-      userId: string;
+      // identity-scope-allow: Playwright IPC payload is branded at the test-only handler boundary
+      teamMemberId: string;
       documentId: string;
       title?: string;
-      encryptionKeyBase64: string;
     }) => {
       try {
         return {
@@ -1370,10 +1199,9 @@ export function registerDocumentSyncHandlers(): void {
             orgId: payload.orgId,
             documentId: payload.documentId,
             title: payload.title || payload.documentId,
-            orgKeyBase64: payload.encryptionKeyBase64,
             serverUrl: payload.serverUrl,
-            accountId: payload.userId,
-            userId: payload.userId,
+            accountId: payload.teamMemberId,
+            teamMemberId: asTeamMemberId(payload.teamMemberId),
             userName: 'Test User',
             userEmail: 'test@test.com',
           },

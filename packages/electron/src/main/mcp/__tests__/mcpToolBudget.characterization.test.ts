@@ -14,10 +14,13 @@ import {
 import { getInteractiveToolSchemas } from '../tools/interactiveToolHandlers';
 import { displayToolSchemas } from '../tools/displayToolHandler';
 import { getEditorToolSchemas } from '../tools/editorToolHandlers';
+import { CANVAS_WORKING_SET_TOOL_SCHEMAS } from '../tools/canvasWorkingSetToolHandlers';
 import { trackerToolSchemas } from '../tools/trackerToolHandlers';
 import { feedbackToolSchemas } from '../tools/feedbackToolHandlers';
 import { voiceToolSchemas } from '../tools/voiceToolHandlers';
 import { getCollabIndexToolSchemas } from '../tools/collabIndexToolHandlers';
+import { getCollabReadToolSchemas } from '../tools/collabReadToolHandlers';
+import { getRequestFeedbackToolSchemas } from '../tools/requestFeedbackToolHandler';
 
 /**
  * Phase 0 characterization harness for the MCP server consolidation.
@@ -36,7 +39,10 @@ describe('MCP tool budget characterization (current first-party surface)', () =>
       ...getInteractiveToolSchemas('characterization-session'),
       ...displayToolSchemas,
       ...getEditorToolSchemas('characterization-session'),
+      ...CANVAS_WORKING_SET_TOOL_SCHEMAS.map((tool) => ({ ...tool })),
       ...getCollabIndexToolSchemas(),
+      ...getCollabReadToolSchemas(),
+      ...getRequestFeedbackToolSchemas(),
       ...trackerToolSchemas,
       ...feedbackToolSchemas,
       ...voiceToolSchemas,
@@ -92,6 +98,29 @@ describe('MCP tool budget characterization (current first-party surface)', () =>
 
   it('confirms core is the only eager server', () => {
     expect(MCP_EAGER_CONFIG_KEYS).toEqual([MCP_CORE]);
+  });
+
+  it('registers explicit collaborative comment tools without caller-supplied identity', () => {
+    const editorTools = getEditorToolSchemas('characterization-session');
+    const byName = new Map(editorTools.map((tool) => [tool.name, tool]));
+
+    expect([
+      'readCollabDocComments',
+      'replyToCollabDocComment',
+      'createCollabDocComment',
+    ].every((name) => byName.has(name))).toBe(true);
+    for (const name of [
+      'replyToCollabDocComment',
+      'createCollabDocComment',
+    ]) {
+      const properties = byName.get(name)?.inputSchema?.properties ?? {};
+      expect(properties).not.toHaveProperty('actor');
+      expect(properties).not.toHaveProperty('sessionId');
+      expect(properties).not.toHaveProperty('onBehalfOfUserId');
+      expect(byName.get(name)?.inputSchema?.required).toContain(
+        'clientMutationId',
+      );
+    }
   });
 
   // Reverse of the mapping test above: guards against topology declaring a tool

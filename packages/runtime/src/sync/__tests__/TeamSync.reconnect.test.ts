@@ -1,4 +1,6 @@
+// @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { asTeamMemberId } from '../../auth/jwtScopes';
 import { TeamSyncProvider } from '../TeamSync';
 
 describe('TeamSyncProvider reconnect failures', () => {
@@ -15,9 +17,7 @@ describe('TeamSyncProvider reconnect failures', () => {
     const provider = new TeamSyncProvider({
       serverUrl: 'wss://sync.example',
       orgId: 'org-team',
-      userId: 'member-team',
-      keyCustody: 'server-managed',
-      orgKeyFingerprint: null,
+      teamMemberId: asTeamMemberId('member-team'),
       getJwt,
     });
 

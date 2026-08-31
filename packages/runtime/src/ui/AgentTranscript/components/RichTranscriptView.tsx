@@ -2,9 +2,11 @@ import type { JSX } from 'react';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { VList, type VListHandle, type CacheSnapshot } from 'virtua';
 import type { TranscriptViewMessage, SessionData } from '../../../ai/server/types';
+import type { ToolCallDiffLoadResult } from '../../../ai/server/transcript';
+import { isInteractiveWidgetTool, stripMcpPrefix } from '../../../ai/server/interactivePromptTools';
 import type { TranscriptSettings } from '../types';
 import { MessageSegment } from './MessageSegment';
-import { MarkdownRenderer } from './MarkdownRenderer';
+import { MarkdownRenderer, type TranscriptFileLocation } from './MarkdownRenderer';
 import { ProviderIcon } from '../../icons/ProviderIcons';
 import { MaterialSymbol } from '../../icons/MaterialSymbol';
 import { formatMessageTime, formatDuration, formatTurnFinishedAt } from '../../../utils/dateUtils';
@@ -20,6 +22,7 @@ import { useTranscriptToolWidgetRegistryVersion } from '../contributions';
 import { ToolCallChanges } from './ToolCallChanges';
 import { setSessionIsAtBottom, getSessionIsAtBottom } from '../../../store/atoms/transcriptScroll';
 import { isAppleMobileWebKit } from '../../../utils/platform';
+import { AttachmentStagingDeniedCard } from './AttachmentStagingDeniedCard';
 
 // Per-session VList cache - survives component remounts so returning to a session
 // doesn't re-measure all items from scratch
@@ -485,8 +488,8 @@ interface RichTranscriptViewProps {
   hideEmptyHelp?: boolean;
   /** Optional: Read a file from the filesystem (for custom widgets that need to load persisted files) */
   readFile?: (filePath: string) => Promise<{ success: boolean; content?: string; error?: string }>;
-  /** Optional: Open a file in the editor */
-  onOpenFile?: (filePath: string) => void;
+  /** Optional: Open a file in the editor, optionally scrolled to a line */
+  onOpenFile?: (filePath: string, location?: TranscriptFileLocation) => void;
   /** Optional: Navigate to a session by ID (for @@session reference links) */
   onOpenSession?: (sessionId: string) => void;
   /** Optional: Callback to trigger /compact command */
@@ -515,6 +518,8 @@ interface RichTranscriptViewProps {
    * runtime asks without crossing the package boundary.
    */
   canEmbedFile?: (filePath: string) => boolean;
+  /** Host callback for lazy, workspace-scoped history diff hydration. */
+  loadToolCallDiffs?: (toolCallItemId: string, toolCallTimestamp?: number) => Promise<ToolCallDiffLoadResult>;
   /**
    * Optional: callback fired when the transcript find-in-page search bar
    * shows or hides. The parent uses this to shift `FloatingTranscriptActions`
@@ -544,10 +549,11 @@ const defaultSettings: TranscriptSettings = {
 // 'applypatch'/'apply_patch' covers Codex ACP's apply_patch tool, which
 // emits its diff via a `changes: { [path]: { type, unified_diff } }` shape
 // (parsed in extractEditsFromToolMessage).
-// OpenAI Codex SDK's `file_change` tool is NOT in this set -- the raw
-// item.completed payload has no diff content, so its dispatch goes through
-// the main-process transcript enrichment path, which resolves fileDiffs before
-// the renderer sees the transcript row.
+// Codex app-server's `file_change` is NOT in this set -- its `changes` is an
+// array of `{path, kind, diff}` rather than the {old_string,new_string}/
+// {content} shapes extractEditsFromToolMessage understands, so it routes
+// through extractCodexFileChanges in renderToolCard instead. (#1191: it used
+// to depend on main-side fileDiffs enrichment, which lazy diff loading removed.)
 const EDIT_TOOL_NAMES = new Set([
   'edit', 'write', 'multi-edit', 'multiedit', 'multi_edit',
   'applypatch', 'apply_patch',
@@ -563,9 +569,28 @@ export function isTranscriptAtBottom(distanceFromBottom: number): boolean {
 
 export function shouldAutoScrollTranscript(
   wasAtBottom: boolean,
-  distanceFromBottom: number
+  distanceFromBottom: number,
+  hasActiveSelection = false
 ): boolean {
+  // Never yank the viewport while the user is dragging a text selection in the
+  // transcript — the jump collapses the highlight they are making, which is the
+  // single most common "I can't copy from the chat" complaint during streaming.
+  if (hasActiveSelection) return false;
   return wasAtBottom || isTranscriptAtBottom(distanceFromBottom);
+}
+
+/**
+ * True only when there is a live, non-collapsed text selection whose anchor sits
+ * inside the transcript root. Scopes the auto-scroll suppression to selections
+ * made in the transcript, so selecting text elsewhere (the composer, a sidebar)
+ * never blocks the chat from following new messages.
+ */
+export function hasActiveTranscriptSelection(root: HTMLElement | null): boolean {
+  if (!root || typeof window === 'undefined') return false;
+  const selection = window.getSelection?.();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
+  const anchor = selection.anchorNode;
+  return anchor != null && root.contains(anchor);
 }
 
 const isEditToolName = (name?: string): boolean => {
@@ -580,41 +605,12 @@ const isEditToolName = (name?: string): boolean => {
 const WRITE_TOOL_NAMES = new Set(['write', 'notebookedit']);
 
 /**
- * Interactive tool widgets that require the user to act. These render even when
- * `settings.showToolCalls` is false, so the user can still respond to prompts
- * (permission grants, plan-mode exits, question answers, structured input
- * prompts, commit proposals).
+ * The interactive-prompt tool set and the MCP prefix rule live in
+ * `ai/server/interactivePromptTools` because the transcript parser and the live
+ * Claude Code stream path need the same answers (#1341). Re-exported here so
+ * existing importers and the renderer's `sessions.ts` mirror keep working.
  */
-const INTERACTIVE_WIDGET_TOOLS = new Set([
-  'ToolPermission',
-  'ExitPlanMode',
-  'AskUserQuestion',
-  'PromptForUserInput',
-  'RequestUserInput',
-  'GitCommitProposal',
-  'git_commit_proposal',
-  'developer_git_commit_proposal',
-  'developer.git_commit_proposal',
-]);
-
-/**
- * MCP tools arrive as `mcp__<server>__<toolName>` (server name may contain
- * dashes or underscores). When the tool was registered with a bare name like
- * `AskUserQuestion` on the in-app MCP server, the SDK forwards it as
- * `mcp__nimbalyst-mcp__AskUserQuestion`. Strict equality against the bare set
- * misses, so the suppression / grouping logic below uses the un-prefixed name.
- *
- * Exported for tests; mirrored on the renderer in `sessions.ts`.
- */
-export function stripMcpPrefix(toolName: string): string {
-  const match = toolName.match(/^mcp__[^_]+(?:_[^_]+)*__(.+)$/);
-  return match ? match[1] : toolName;
-}
-
-export function isInteractiveWidgetTool(toolName: string | null | undefined): boolean {
-  if (!toolName) return false;
-  return INTERACTIVE_WIDGET_TOOLS.has(stripMcpPrefix(toolName));
-}
+export { stripMcpPrefix, isInteractiveWidgetTool };
 
 /** Formats provider-supplied sub-agent execution metadata without normalizing it. */
 export function formatSubagentAuditLabel(
@@ -869,6 +865,66 @@ const extractApplyPatchChanges = (changes: unknown): any[] => {
 };
 
 /**
+ * Detect the Codex app-server `file_change` shape -- an ARRAY of
+ * `{ path, kind: 'add'|'update'|'delete', move_path?: string|null, diff: string }`
+ * (see CodexAppServerRawParser.parseFileChangeItem). The `diff` field's meaning
+ * depends on `kind`, per providers/codex/patchReverse.ts:
+ *
+ *   add    -> raw post-edit file content (NOT a unified diff)
+ *   update -> one or more standard unified-diff hunks
+ *   delete -> the removed content, formatted as `-` lines
+ *
+ * Rendering straight off these arguments keeps Codex edits on the red/green
+ * EditToolResultCard without touching the lazy history-diff machinery: the
+ * patch text is already in the persisted tool call, so no snapshot reads and
+ * no diff computation are needed.
+ *
+ * The legacy `@openai/codex-sdk` transport passes the SDK's `changes` through
+ * verbatim and those entries carry no `diff`, so they yield no edits here and
+ * fall through to the generic tool card.
+ */
+export const extractCodexFileChanges = (changes: unknown): any[] => {
+  if (!Array.isArray(changes)) return [];
+  const out: any[] = [];
+  for (const raw of changes) {
+    if (!raw || typeof raw !== 'object') continue;
+    const entry = raw as Record<string, unknown>;
+    const filePath = typeof entry.path === 'string' ? entry.path : undefined;
+    const diff = typeof entry.diff === 'string' ? entry.diff : undefined;
+    if (!filePath || !diff) continue;
+    const kind = typeof entry.kind === 'string' ? entry.kind : 'update';
+
+    if (kind === 'add') {
+      out.push({ filePath, type: 'add', operation: 'create', content: diff });
+      continue;
+    }
+
+    if (kind === 'delete') {
+      out.push({
+        filePath,
+        type: 'delete',
+        operation: 'delete',
+        old_string: stripLeadingDiffMarkers(diff),
+        new_string: '',
+      });
+      continue;
+    }
+
+    const replacements = parseUnifiedDiffToReplacements(diff);
+    if (replacements.length === 0) continue;
+    out.push({ filePath, type: 'update', operation: 'edit', replacements });
+  }
+  return out;
+};
+
+/** Strip the leading `-` from each line of a Codex delete diff. */
+const stripLeadingDiffMarkers = (diff: string): string =>
+  diff
+    .split('\n')
+    .map((line) => (line.startsWith('-') ? line.slice(1) : line))
+    .join('\n');
+
+/**
  * Map resolved `ToolCallDiffResult[]` into the edit-record shape
  * EditToolResultCard expects. Used by transcript rows that are enriched in
  * main before the renderer sees them (for example Codex `file_change`).
@@ -1105,10 +1161,11 @@ export const extractEditsFromToolMessage = (message: TranscriptViewMessage): any
 export const RichTranscriptView = React.forwardRef<
   { scrollToMessage: (index: number) => void; scrollToTop: () => void },
   RichTranscriptViewProps
->(({ sessionId, sessionStatus, isProcessing, hasPendingInteractivePrompt, messages, provider, settings: propsSettings, onSettingsChange, showSettings, documentContext, workspacePath, renderEmptyExtra, hideEmptyHelp, readFile, onOpenFile, onOpenSession, onCompact, promptAdditions, currentTeammates, waitingForNoun, appStartTime, renderEmbeddedFile, canEmbedFile, onSearchBarVisibilityChange, persistScrollState = true }, ref) => {
+>(({ sessionId, sessionStatus, isProcessing, hasPendingInteractivePrompt, messages, provider, settings: propsSettings, onSettingsChange, showSettings, documentContext, workspacePath, renderEmptyExtra, hideEmptyHelp, readFile, onOpenFile, onOpenSession, onCompact, promptAdditions, currentTeammates, waitingForNoun, appStartTime, renderEmbeddedFile, canEmbedFile, loadToolCallDiffs, onSearchBarVisibilityChange, persistScrollState = true }, ref) => {
   const [collapsedMessages, setCollapsedMessages] = useState<Set<number>>(new Set());
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const scrollButtonRef = useRef<HTMLDivElement>(null);
+  const scrollButtonElementRef = useRef<HTMLButtonElement>(null);
   const [copiedMessageIndex, setCopiedMessageIndex] = useState<number | null>(null);
   const [showSearchBar, setShowSearchBar] = useState(false);
 
@@ -1480,7 +1537,8 @@ export const RichTranscriptView = React.forwardRef<
       const scrollOffset = vlistRef.current.scrollOffset;
       const distanceFromBottom = scrollSize - scrollOffset - viewportSize;
 
-      if (shouldAutoScrollTranscript(wasAtBottom, distanceFromBottom)) {
+      const hasActiveSelection = hasActiveTranscriptSelection(viewRootRef.current);
+      if (shouldAutoScrollTranscript(wasAtBottom, distanceFromBottom, hasActiveSelection)) {
         // Account for the "Thinking..." indicator which is an extra item after messages
         const lastIndex = isWaitingForResponse ? messages.length : messages.length - 1;
         vlistRef.current.scrollToIndex(lastIndex, { align: 'end' });
@@ -1695,6 +1753,9 @@ export const RichTranscriptView = React.forwardRef<
     const isSubAgent = toolMsg.type === 'subagent';
     const isTeammate = isSubAgent && !!(toolMsg.subagent?.teammateName || toolMsg.subagent?.teamName);
     const hasChildren = isSubAgent && toolMsg.subagent?.childEvents && toolMsg.subagent.childEvents.length > 0;
+    const lazyDiffLoader = tool.providerToolCallId && loadToolCallDiffs
+      ? () => loadToolCallDiffs(tool.providerToolCallId!, toolMsg.createdAt?.getTime())
+      : undefined;
 
     // Check for custom widget first
     const CustomWidget = tool.toolName ? getCustomToolWidget(tool.toolName) : undefined;
@@ -1713,36 +1774,20 @@ export const RichTranscriptView = React.forwardRef<
               workspacePath={workspacePath}
               sessionId={sessionId}
               readFile={readFile}
+              loadToolCallDiffs={lazyDiffLoader}
             />
           </ToolWidgetErrorBoundary>
         </div>
       );
     }
 
-    // Codex SDK `file_change` rows are enriched with resolved diffs in main
-    // before the transcript reaches the renderer. Render them through the same
-    // EditToolResultCard path as Claude's Edit tool.
-    if (tool.toolName === 'file_change' && tool.fileDiffs && tool.fileDiffs.length > 0) {
-      return (
-        <div
-          key={toolRenderKey}
-          className={`rich-transcript-tool-container mb-2 ${depth > 0 ? 'nested ml-0' : ''}`}
-          style={{ marginLeft: depth > 0 ? '1rem' : '0' }}
-        >
-          <EditToolResultCard
-            toolMessage={toolMsg}
-            edits={toolCallDiffsToEdits(tool.fileDiffs)}
-            workspacePath={workspacePath}
-            onOpenFile={onOpenFile}
-            renderEmbeddedFile={renderEmbeddedFile}
-            canEmbedFile={canEmbedFile}
-          />
-        </div>
-      );
-    }
-
-    const editTool = isEditToolName(tool.toolName);
-    const editEntries = editTool ? extractEditsFromToolMessage(toolMsg) : [];
+    // Codex `file_change` carries its patch text in the tool arguments, so it
+    // renders as a red/green diff without any main-side enrichment.
+    const isCodexFileChange = tool.toolName === 'file_change';
+    const editTool = isEditToolName(tool.toolName) || isCodexFileChange;
+    const editEntries = isCodexFileChange
+      ? extractCodexFileChanges((tool.arguments as Record<string, any> | undefined)?.changes)
+      : editTool ? extractEditsFromToolMessage(toolMsg) : [];
     const toolDisplayName = formatToolDisplayName(tool.toolName || '') || tool.toolName || 'Tool';
 
     if (editTool && editEntries.length > 0) {
@@ -1992,7 +2037,7 @@ export const RichTranscriptView = React.forwardRef<
               )}
 
               {/* File changes caused by this tool call */}
-              {!isSubAgent && tool.fileDiffs && tool.fileDiffs.length > 0 && (
+              {!isSubAgent && ((tool.fileDiffs && tool.fileDiffs.length > 0) || lazyDiffLoader) && (
                 <ToolCallChanges
                   diffs={tool.fileDiffs}
                   isExpanded={isExpanded}
@@ -2000,6 +2045,7 @@ export const RichTranscriptView = React.forwardRef<
                   onOpenFile={onOpenFile}
                   renderEmbeddedFile={renderEmbeddedFile}
                   canEmbedFile={canEmbedFile}
+                  loadDiffs={lazyDiffLoader}
                 />
               )}
             </div>
@@ -2154,6 +2200,22 @@ export const RichTranscriptView = React.forwardRef<
     }
 
     if (message.type === 'system_message' && message.systemMessage?.systemType === 'permission_denied') {
+      if (message.systemMessage.isAttachmentStagingDenied) {
+        const priorUserMessage = messages
+          .slice(0, index)
+          .reverse()
+          .find((candidate) => candidate.type === 'user_message');
+        return (
+          <div key={messageKey} data-message-index={index}>
+            <AttachmentStagingDeniedCard
+              sessionId={sessionId}
+              systemMessage={message.systemMessage}
+              prompt={priorUserMessage?.text ?? ''}
+              attachments={priorUserMessage?.attachments ?? []}
+            />
+          </div>
+        );
+      }
       // Auto-mode classifier denials are paired with a re-prompt from the
       // PermissionDenied SDK hook (see AgentToolHooks.createPermissionDeniedHook).
       // The user sees the regular ToolPermission widget with the classifier
@@ -2449,7 +2511,11 @@ export const RichTranscriptView = React.forwardRef<
                       if (scrollButtonRef.current) {
                         const show = distanceFromBottom > viewportSize;
                         scrollButtonRef.current.style.opacity = show ? '1' : '0';
-                        scrollButtonRef.current.style.pointerEvents = show ? '' : 'none';
+                        // Only the button opts back into pointer events, and only while visible.
+                        // Clearing it lets the button inherit the container's pointer-events: none.
+                        if (scrollButtonElementRef.current) {
+                          scrollButtonElementRef.current.style.pointerEvents = show ? 'auto' : '';
+                        }
                       }
                       // Check if any pending permission widgets are visible in viewport
                       if (pendingPermissionIndices.length > 0) {
@@ -2510,11 +2576,14 @@ export const RichTranscriptView = React.forwardRef<
           </div>
         )}
 
-        {/* Scroll to bottom button - uses ref + opacity/pointer-events to avoid layout shifts that interfere with text selection */}
-        <div ref={scrollButtonRef} className="rich-transcript-scroll-button-container sticky bottom-3 flex justify-center opacity-0 transition-opacity">
+        {/* Scroll to bottom button - uses ref + opacity to avoid layout shifts that interfere with text selection.
+            The container spans the full pane width, so it must stay pointer-events-none in every state;
+            only the button opts back in, otherwise it becomes a dead band for clicks and the wheel. */}
+        <div ref={scrollButtonRef} className="rich-transcript-scroll-button-container sticky bottom-3 flex justify-center pointer-events-none opacity-0 transition-opacity">
           <button
+            ref={scrollButtonElementRef}
             onClick={scrollToBottom}
-            className="rich-transcript-scroll-button w-9 h-9 flex items-center justify-center bg-[var(--nim-primary)] text-white rounded-full border-none shadow-lg cursor-pointer transition-all hover:bg-[var(--nim-primary-hover)] hover:scale-110 pointer-events-auto"
+            className="rich-transcript-scroll-button w-9 h-9 flex items-center justify-center bg-[var(--nim-primary)] text-white rounded-full border-none shadow-lg cursor-pointer transition-all hover:bg-[var(--nim-primary-hover)] hover:scale-110"
             title="Scroll to bottom"
           >
             <MaterialSymbol icon="arrow_downward" size={20} />

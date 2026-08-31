@@ -33,6 +33,8 @@ export const BUILTIN_VOICE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'navigate_to_session',
   'create_session',
   'propose_commit',
+  'get_ui_context',
+  'capture_ui_screenshot',
 ]);
 
 /**
@@ -42,6 +44,36 @@ export interface ExtensionVoiceToolResult {
   success: boolean;
   message?: string;
   data?: unknown;
+  error?: string;
+}
+
+export interface VoiceUiContextToolResult {
+  success: boolean;
+  context?: {
+    activeView: string;
+    selectedFile?: {
+      name: string;
+      relativePath?: string;
+    };
+    activeSession?: {
+      id: string;
+      title: string;
+      status: string;
+    };
+  };
+  error?: string;
+}
+
+export interface VoiceUiScreenshotToolResult {
+  success: boolean;
+  imageDataUrl?: string;
+  source?: 'active_nimbalyst_window';
+  format?: 'jpeg';
+  width?: number;
+  height?: number;
+  bytes?: number;
+  capturedAt?: string;
+  context?: VoiceUiContextToolResult['context'];
   error?: string;
 }
 
@@ -76,6 +108,8 @@ const BUILTIN_VOICE_TOOL_DISPLAY_NAMES: Record<string, string> = {
   navigate_to_session: 'Switch session',
   create_session: 'Create session',
   propose_commit: 'Propose commit',
+  get_ui_context: 'Get UI context',
+  capture_ui_screenshot: 'Capture UI screenshot',
   respond_to_interactive_prompt: 'Answer prompt',
   pause_listening: 'Pause listening',
   stop_voice_session: 'Stop voice session',
@@ -196,6 +230,10 @@ export class RealtimeAPIClient {
   private onNavigateToSessionCallback: ((sessionId: string) => Promise<{ success: boolean; title?: string; error?: string }>) | null = null;
   private onCreateSessionCallback: ((title?: string) => Promise<{ success: boolean; sessionId?: string; title?: string; error?: string }>) | null = null;
   private onProposeCommitCallback: (() => Promise<{ success: boolean; error?: string }>) | null = null;
+  private onGetUiContextCallback: (() => Promise<VoiceUiContextToolResult>) | null = null;
+  private onCaptureUiScreenshotCallback:
+    | ((reason: string) => Promise<VoiceUiScreenshotToolResult>)
+    | null = null;
   private claudeCodeSessionId: string;
   private workspacePath: string | null;
   private window: Electron.BrowserWindow;
@@ -237,6 +275,16 @@ export class RealtimeAPIClient {
   // (create_response/interrupt_response=false) so residual echo cannot make
   // the server act on its own voice; the client keeps barge-in control.
   private serverResponsesGated: boolean = false;
+  // The gate state the server actually has, plus whether a toggle is waiting
+  // for the active response to finish. session.update is never sent while a
+  // response is generating -- see flushOrDeferGateUpdate().
+  private sentGateState: boolean = false;
+  private gateUpdatePending: boolean = false;
+  // Responses the user barged in on. Generation runs far ahead of realtime, so
+  // the server has usually already emitted audio deltas past the cancel point;
+  // those must not be forwarded to the renderer, whose queue has no response
+  // identity and would play them in front of the next response's audio.
+  private abandonedResponseIds: Set<string> = new Set();
   // Probation timer for an echo-suspect VAD trigger (min-duration heuristic):
   // fires onDeferredInterruptTimeout to decide whether the speech outlived
   // the window (real barge-in) or was an echo blip.
@@ -484,6 +532,18 @@ export class RealtimeAPIClient {
    */
   setOnProposeCommit(callback: () => Promise<{ success: boolean; error?: string }>): void {
     this.onProposeCommitCallback = callback;
+  }
+
+  /** Set callback for retrieving a bounded snapshot of renderer-owned UI state. */
+  setOnGetUiContext(callback: () => Promise<VoiceUiContextToolResult>): void {
+    this.onGetUiContextCallback = callback;
+  }
+
+  /** Set callback for capturing the active Nimbalyst window after user consent. */
+  setOnCaptureUiScreenshot(
+    callback: (reason: string) => Promise<VoiceUiScreenshotToolResult>,
+  ): void {
+    this.onCaptureUiScreenshotCallback = callback;
   }
 
   /**
@@ -750,15 +810,29 @@ export class RealtimeAPIClient {
             });
           }
         }
+        // Terminal for this response: no further audio deltas can arrive for
+        // it, so stop suppressing its id.
+        const doneId = response?.id as string | undefined;
+        if (doneId) this.abandonedResponseIds.delete(doneId);
         this.currentResponseId = null;
         this.hasActiveResponse = false;
         this.hasPendingFunctionCall = false;
         this.isOutputtingAudio = false;
+        // A gate toggle held back during generation applies now.
+        if (this.gateUpdatePending) this.flushOrDeferGateUpdate();
         break;
 
       // GA event is response.output_audio.delta; the beta name is kept for safety.
       case 'response.output_audio.delta':
-      case 'response.audio.delta':
+      case 'response.audio.delta': {
+        // Drop the tail of a response the user already barged in on. The
+        // renderer cleared its queue at the interrupt; replaying these late
+        // chunks would stitch the abandoned utterance onto the front of the
+        // next one, which is heard as the agent's voice changing mid-answer.
+        const audioResponseId = (event as any).response_id as string | undefined;
+        if (audioResponseId && this.abandonedResponseIds.has(audioResponseId)) {
+          break;
+        }
         // Received audio chunk from OpenAI
         this.isOutputtingAudio = true;
         // Remember which conversation item is speaking so a barge-in during
@@ -772,6 +846,7 @@ export class RealtimeAPIClient {
           this.onAudioCallback(audioDelta);
         }
         break;
+      }
 
       case 'response.output_audio.done':
       case 'response.audio.done':
@@ -893,6 +968,16 @@ export class RealtimeAPIClient {
     if (msSincePlaybackStarted !== null) {
       this.truncatePlayedAudio(msSincePlaybackStarted);
     }
+    // Abandon this response's audio regardless of whether the cancel below
+    // actually goes out (it is deliberately skipped while function-call args
+    // stream, and is a no-op once response.done landed). The renderer stops
+    // playback either way, so any further audio for this response is stale.
+    if (this.currentResponseId) {
+      // Safety valve: the set is drained by response.done, but never let a
+      // missing terminal event grow it without bound.
+      if (this.abandonedResponseIds.size > 16) this.abandonedResponseIds.clear();
+      this.abandonedResponseIds.add(this.currentResponseId);
+    }
     this.cancelCurrentResponse();
     if (this.onInterruptionCallback) {
       this.onInterruptionCallback();
@@ -962,6 +1047,8 @@ Tools:
 - pause_listening: Put the microphone to sleep.
 - stop_voice_session: End the voice session entirely.
 - get_session_summary: Get a summary of what's been discussed.
+- get_ui_context: Read the active Nimbalyst view, selected file, and active coding session.
+- capture_ui_screenshot: Capture the visible Nimbalyst window only after explicit user consent.
 
 Guidelines:
 - Be terse (see RESPONSE STYLE above). One short sentence per response by default; no filler, no acknowledgments, no explanations unless the user asks.
@@ -973,6 +1060,8 @@ Guidelines:
 - Brainstorming and planning: you can be a design partner, not just a relay. Talk an idea through, push back, and when it is fleshed out kick off a written plan with submit_agent_prompt phrased as "/design <the idea>". To start implementation against an approved plan, use submit_agent_prompt phrased as "/implement <plan>". If extra grounding or plan-reading tools are listed in your context above, prefer them for pulling design docs and reading plans back; otherwise fall back to ask_coding_agent.
 - For "[INTERNAL: Task complete. Result: ...]" messages: briefly relay the result to the user. Do NOT say "I finished that task" -- just state the result.
 - For "[INTERNAL: User is now viewing ...]" messages: do NOT announce this. Silently note it for context.
+- UI context is read-only and intentionally bounded. Use get_ui_context when the user asks what is open, selected, or active; do not claim it exposes hidden renderer state.
+- capture_ui_screenshot sends pixels from the visible Nimbalyst window to the OpenAI Realtime session. Call it ONLY when the user explicitly asks you to inspect/capture the current UI, or after you explain the capture and the user explicitly confirms. Never infer consent from an unrelated request, never set userConfirmed=true without that consent, and never describe the capture as the whole desktop or another application.
 - For "[INTERACTIVE PROMPT: ... promptType=\"git_commit_proposal_request\"]" messages, say exactly: "Commit proposal: <commit title>. Say approve to commit or reject to cancel." Replace <commit title> with only the first line of the commit message. Never read file paths, the file list, code, the commit body, or descriptions aloud. Do not shorten this to "Approve, or reject?" Then WAIT for the user to clearly say approve or reject.
 - For all other "[INTERACTIVE PROMPT: ...]" messages: the coding agent needs user input. Read the question and option labels aloud BRIEFLY -- just the question and option labels, not descriptions. Then WAIT for the user to clearly state their choice. Do NOT call respond_to_interactive_prompt until you hear a clear, deliberate answer from the user. If you hear garbled audio, silence, or unclear speech, ask "Which option?" -- do NOT guess or pick the first option. The user's microphone may pick up echo from your own speech -- ignore any "response" that arrives while you are still speaking or immediately after.
 - When summarizing coding agent responses: be concise, paraphrase for speech. Never read code or file paths verbatim.
@@ -1058,6 +1147,10 @@ Your job is to be a voice relay, not to interpret or improve the user's requests
 
     console.log(`[RealtimeAPIClient] session.update: voice=${config.audio.output.voice} model=${this.model} reasoning=${this.reasoningEffort} transcription=${TRANSCRIPTION_MODEL}`);
     this.ws.send(JSON.stringify(event));
+    // This full update carries turn_detection too, so the server's gate state
+    // is now whatever we just sent (matters after a reconnect re-applies it).
+    this.sentGateState = this.serverResponsesGated;
+    this.gateUpdatePending = false;
   }
 
   /**
@@ -1204,6 +1297,36 @@ Your job is to be a voice relay, not to interpret or improve the user's requests
             required: [],
           },
         },
+        {
+          type: 'function',
+          name: 'get_ui_context',
+          description: 'Read a concise snapshot of the current Nimbalyst UI: active view, selected workspace file, and active coding session. This is read-only and omits absolute paths and hidden renderer state. Use it when the user asks what is currently open, selected, or active.',
+          parameters: {
+            type: 'object',
+            properties: {},
+            required: [],
+          },
+        },
+        {
+          type: 'function',
+          name: 'capture_ui_screenshot',
+          description: 'Capture and inspect the visible Nimbalyst application window. The screenshot pixels are sent to this OpenAI Realtime session and are not written to disk. Call ONLY after the user explicitly asks for a UI screenshot/inspection or explicitly confirms after you explain the capture.',
+          parameters: {
+            type: 'object',
+            properties: {
+              userConfirmed: {
+                type: 'boolean',
+                description: 'Must be true only when the user explicitly requested or confirmed this screenshot capture.',
+              },
+              reason: {
+                type: 'string',
+                description: 'A short reason for the capture, for example "inspect the active settings panel". Do not include secrets or file contents.',
+                maxLength: 160,
+              },
+            },
+            required: ['userConfirmed', 'reason'],
+          },
+        },
     ];
   }
 
@@ -1275,6 +1398,45 @@ Your job is to be a voice relay, not to interpret or improve the user's requests
       return true;
     } catch (error) {
       console.error('[RealtimeAPIClient] Failed to inject context:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Inject an in-memory screenshot into the Realtime conversation without
+   * triggering a response. The subsequent function-call output triggers the
+   * response, so the model sees the image before it interprets the tool result.
+   */
+  injectImage(imageDataUrl: string, description: string): boolean {
+    if (!this.ws || !this.connected) {
+      return false;
+    }
+    if (!/^data:image\/(?:jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(imageDataUrl)) {
+      return false;
+    }
+
+    try {
+      this.ws.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'user',
+          content: [
+            {
+              type: 'input_text',
+              text: `[INTERNAL: Current Nimbalyst UI screenshot captured for: ${description}]`,
+            },
+            {
+              type: 'input_image',
+              image_url: imageDataUrl,
+              detail: 'high',
+            },
+          ],
+        },
+      }));
+      return true;
+    } catch (error) {
+      console.error('[RealtimeAPIClient] Failed to inject UI screenshot:', error);
       return false;
     }
   }
@@ -1649,6 +1811,78 @@ Your job is to be a voice relay, not to interpret or improve the user's requests
         break;
       }
 
+      case 'get_ui_context': {
+        try {
+          if (!this.onGetUiContextCallback) {
+            this.sendFunctionCallResult(callId, {
+              success: false,
+              error: 'UI context callback not registered',
+            });
+            break;
+          }
+          this.sendFunctionCallResult(callId, await this.onGetUiContextCallback());
+        } catch (error) {
+          console.error('[RealtimeAPIClient] Failed to get UI context:', error);
+          this.sendFunctionCallResult(callId, {
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        break;
+      }
+
+      case 'capture_ui_screenshot': {
+        try {
+          const args = argsJson ? JSON.parse(argsJson) : {};
+          const reason = typeof args.reason === 'string'
+            ? args.reason.replace(/\s+/g, ' ').trim().slice(0, 160)
+            : '';
+          if (args.userConfirmed !== true) {
+            this.sendFunctionCallResult(callId, {
+              success: false,
+              error: 'Explicit user confirmation is required before capturing the UI.',
+            });
+            break;
+          }
+          if (!reason) {
+            this.sendFunctionCallResult(callId, {
+              success: false,
+              error: 'A short capture reason is required.',
+            });
+            break;
+          }
+          if (!this.onCaptureUiScreenshotCallback) {
+            this.sendFunctionCallResult(callId, {
+              success: false,
+              error: 'UI screenshot callback not registered',
+            });
+            break;
+          }
+
+          const result = await this.onCaptureUiScreenshotCallback(reason);
+          const { imageDataUrl, ...metadata } = result;
+          if (!result.success || !imageDataUrl) {
+            this.sendFunctionCallResult(callId, metadata);
+            break;
+          }
+          if (!this.injectImage(imageDataUrl, reason)) {
+            this.sendFunctionCallResult(callId, {
+              success: false,
+              error: 'The screenshot was captured but could not be sent to the voice model.',
+            });
+            break;
+          }
+          this.sendFunctionCallResult(callId, metadata);
+        } catch (error) {
+          console.error('[RealtimeAPIClient] Failed to capture UI screenshot:', error);
+          this.sendFunctionCallResult(callId, {
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        break;
+      }
+
       default: {
         // Not a built-in tool -- route to an extension-contributed voice tool
         // (Core hook 1) if one is registered under this realtime-safe name.
@@ -1793,13 +2027,37 @@ Your job is to be a voice relay, not to interpret or improve the user's requests
 
   /**
    * Gate or un-gate server VAD responses while the agent's audio plays.
-   * Sends a partial session.update touching only turn_detection. No-ops in
-   * push_to_talk mode (no turn detection) and when the state is unchanged.
+   * No-ops in push_to_talk mode (no turn detection) and when unchanged.
    */
   private setServerResponsesGated(gated: boolean): void {
     if (gated === this.serverResponsesGated) return;
     this.serverResponsesGated = gated;
+    this.flushOrDeferGateUpdate();
+  }
+
+  /**
+   * Apply the desired gate state, but NEVER while a response is generating.
+   *
+   * Playback starts a few hundred ms into a turn, so gating on playback-active
+   * used to push a session.update into the middle of the model's audio render.
+   * Mutating the session mid-generation perturbs the render, and the second
+   * half of a long answer comes back in a noticeably different register --
+   * the "the voice changes partway through" report. Deferring costs nothing:
+   * while a response is active the server cannot start another one, which is
+   * the only thing the gate prevents. response.done flushes whatever is
+   * pending, and a toggle that flips back before then collapses to no update
+   * at all (sentGateState tracks what the server actually has).
+   */
+  private flushOrDeferGateUpdate(): void {
     if (!this.ws || !this.connected || this.turnDetection.mode === 'push_to_talk') return;
+    if (this.hasActiveResponse) {
+      this.gateUpdatePending = true;
+      return;
+    }
+    this.gateUpdatePending = false;
+    if (this.serverResponsesGated === this.sentGateState) return;
+    const gated = this.serverResponsesGated;
+    this.sentGateState = gated;
     this.ws.send(JSON.stringify({
       type: 'session.update',
       session: {
@@ -1991,6 +2249,9 @@ Your job is to be a voice relay, not to interpret or improve the user's requests
       this.hasActiveResponse = false;
       this.currentAssistantItemId = null;
       this.serverResponsesGated = false;
+      this.sentGateState = false;
+      this.gateUpdatePending = false;
+      this.abandonedResponseIds.clear();
       this.playbackActive = false;
     }
   }

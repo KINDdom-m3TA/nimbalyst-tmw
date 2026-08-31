@@ -18,6 +18,9 @@
  *     few pathological rows cannot still blow up a SessionRoom.
  *   - Leave `tool_use` blocks alone regardless of size; that's the "what
  *     happened" signal users actually want on mobile.
+ *   - Keep inline image blocks (screenshots), downscaling instead of eliding.
+ *     They are the one large payload whose whole point is being looked at on
+ *     the phone, and there is no other channel that can deliver them.
  *   - Unknown providers fall back to a compact opaque marker rather than
  *     syncing arbitrarily large raw payloads.
  *
@@ -26,48 +29,65 @@
  * (every N messages or every M seconds, whichever comes first) and exposes a
  * snapshot for inspection.
  */
+import { utf8ByteLen, formatBytes, isImageBlock } from '../utils/contentBytes';
+import {
+  CLAUDE_CODE_TRANSIENT_CHUNK_TYPES,
+  CLAUDE_CODE_TRANSIENT_SYSTEM_SUBTYPES,
+  CODEX_APP_SERVER_TRANSIENT_EVENT_TYPES,
+  CODEX_LEGACY_TRANSIENT_EVENT_TYPES,
+} from '../storage/nonRenderingFrames';
 
 const TRUNCATE_THRESHOLD_BYTES = 4 * 1024;
 const MAX_SYNC_MESSAGE_BYTES = 16 * 1024;
+
+// Messages carrying an inline image block (capture_editor_screenshot and other
+// MCP tools that return pictures) get their own, much larger ceiling. Mobile
+// has no second way to fetch the image -- the only encrypted attachment channel
+// runs mobile -> desktop -- so applying MAX_SYNC_MESSAGE_BYTES here doesn't
+// "trim" the message, it deletes the screenshot the user wanted to look at on
+// their phone.
+//
+// MUST STAY UNDER the server's SessionRoom.MAX_ENCRYPTED_CONTENT_BYTES (512 KB).
+// Encryption inflates this ~1.4x (JSON escaping, then AES-GCM + base64), so 256
+// KB here lands near 358 KB on the wire. Raising it past ~365 KB makes the
+// server reject the message, which disables that session's message sync.
+const MAX_SYNC_MESSAGE_WITH_IMAGE_BYTES = 256 * 1024;
+
+// Largest single image block we will put on the wire, after the downscale pass
+// below. Sized for the sync compressor's 150 KB binary target (~200 KB of
+// base64) plus the surrounding JSON. Every synced screenshot permanently
+// occupies part of a SessionRoom's storage cap, hence the tight budget.
+const MAX_SYNC_IMAGE_BLOCK_BYTES = 220 * 1024;
+
 const LOG_EVERY_N_MESSAGES = 25;
 const LOG_INTERVAL_MS = 30_000;
 
-const CODEX_APP_SERVER_TRANSIENT_EVENT_TYPES = new Set([
-  'item/agentMessage/delta',
-  'item/commandExecution/outputDelta',
-  'thread/tokenUsage/updated',
-  'account/rateLimits/updated',
-  'thread/status/changed',
-  'mcpServer/startupStatus/updated',
-  'turn/started',
-  'turn/completed',
-  'turn/diff/updated',
-  'skills/changed',
-]);
+/**
+ * Optional platform hook for shrinking an oversized image before it is synced.
+ * Electron's main process registers the same nativeImage-backed compressor the
+ * MCP layer uses; platforms without it (mobile) simply fall back to dropping
+ * images past MAX_SYNC_IMAGE_BLOCK_BYTES. Observed screenshots run from 200 KB
+ * to 1.7 MB, so without this ~20% of them would never reach the phone.
+ */
+export type SyncImageCompressor = (
+  base64Data: string,
+  mimeType: string,
+) => { data: string; mimeType: string };
 
-// Claude Agent SDK chunk types whose persisted form never renders -- they only
-// drive live in-memory side effects in ClaudeCodeProvider. The provider now
-// skips persisting these, but this sync-side filter catches the same chunks if
-// they're already sitting in ai_agent_messages from before the persistence fix
-// (e.g. older sessions replayed on first reconnect).
-const CLAUDE_CODE_TRANSIENT_CHUNK_TYPES = new Set([
-  'tool_progress',
-  'tool_use_summary',
-  'auth_status',
-  'rate_limit_event',
-]);
-const CLAUDE_CODE_TRANSIENT_SYSTEM_SUBTYPES = new Set([
-  'hook_started',
-  'hook_response',
-  'task_started',
-  'task_progress',
-  'task_notification',
-  // Live "estimated thinking tokens" progress ticks. A long turn emits dozens
-  // (190 in one observed session, ~37 KB + 190 extra synced rows). They drive a
-  // live in-memory indicator only and produce no descriptor on reparse, so they
-  // are pure waste on the wire.
-  'thinking_tokens',
-]);
+let syncImageCompressor: SyncImageCompressor | null = null;
+
+export function setSyncImageCompressor(compressor: SyncImageCompressor | null): void {
+  syncImageCompressor = compressor;
+}
+
+// The three "renders nothing" sets below are shared with the provider write
+// path and the storage backfill -- see `storage/nonRenderingFrames`. They used
+// to be a private copy here, which is how `thinking_tokens` ended up filtered
+// on the wire and persisted to disk for months.
+//
+// This sync-side filter still earns its keep independently of the write-path
+// gate: it catches chunks already sitting in ai_agent_messages from before that
+// gate landed (older sessions replayed on first reconnect).
 
 // System subtypes that ARE persisted locally (so the desktop's own transcript
 // build can read e.g. the SDK session_id) but must NOT cross the sync wire.
@@ -79,11 +99,8 @@ const CLAUDE_CODE_TRANSIENT_SYSTEM_SUBTYPES = new Set([
 // assistant branch, rendering a stray bubble desktop never shows. Drop it.
 const CLAUDE_CODE_NON_SYNCED_SYSTEM_SUBTYPES = new Set(['init']);
 
-// Legacy codex SDK/exec transport events that render nothing on mobile.
-// `thread.started` only captures a thread id; `token_count` (bare or wrapped in
-// an `event_msg` envelope) only feeds a turn_ended descriptor, which the
-// projector drops. Text deltas / item events DO render and must pass through.
-const CODEX_LEGACY_TRANSIENT_EVENT_TYPES = new Set(['thread.started', 'token_count']);
+// Legacy codex `event_msg` envelopes are additionally unwrapped below; the bare
+// event-type set itself lives in `storage/nonRenderingFrames`.
 
 // OpenCode SSE event types that can produce something the mobile transcript
 // renders, mirroring the switch in OpenCodeRawParser.parseOutputMessage. That
@@ -137,6 +154,21 @@ export interface PerMessageTruncationStats {
   largestBlockElidedBytes: number;
 }
 
+/**
+ * Record types the headless-agent parser turns into canonical events.
+ *
+ * `thought` and `text` are deliberately absent: both are per-token deltas that
+ * the parser drops in favour of the turn-final `item.completed`.
+ */
+export const HEADLESS_AGENT_SYNCED_EVENT_TYPES = new Set([
+  'item.completed',
+  // Grok
+  'tool_call',
+  'tool_call_update',
+  // Cursor -- its records carry the same `type` discriminator
+  'result',
+]);
+
 export function shouldSyncMessageForSessionRoom(
   source: string,
   metadata?: Record<string, unknown> | null,
@@ -182,6 +214,22 @@ export function shouldSyncMessageForSessionRoom(
       }
     }
     return true;
+  }
+
+  // Grok Build and Cursor Agent persist every NDJSON record their CLI emits.
+  // HeadlessAgentRawParser renders only the turn-final `item.completed`, the
+  // tool_call / tool_call_update (Grok) or tool_call started/completed
+  // (Cursor) rows, and errors. Text and reasoning deltas are dropped by design
+  // -- the full response arrives self-contained on item.completed -- and Grok
+  // emits one `thought` row per word, so syncing them would be pure waste.
+  //
+  // Keep this in sync with `HeadlessAgentRawParser`: a record type the parser
+  // learns to render must be added here, or mobile silently shows less than
+  // the desktop does. `headlessAgentSyncParity.test.ts` is the gate.
+  if (source.startsWith('grok-build') || source.startsWith('cursor-agent')) {
+    const eventType = typeof metadata?.eventType === 'string' ? metadata.eventType : '';
+    if (!eventType) return true;
+    return HEADLESS_AGENT_SYNCED_EVENT_TYPES.has(eventType);
   }
 
   if (source.startsWith('opencode')) {
@@ -268,6 +316,10 @@ export function shouldSyncMessageForSessionRoom(
     return true;
   }
 
+  // Everything else, including Gemini. Gemini has no branch on purpose: it
+  // writes three row kinds (prompt, answer, tool) and its parser renders all
+  // three, so a filter here could only take something off mobile that desktop
+  // shows. `syncContentTruncator.test.ts` pins that.
   return true;
 }
 
@@ -306,29 +358,6 @@ function emptyPerMessage(bytesBefore: number): PerMessageTruncationStats {
     elidedBytes: 0,
     largestBlockElidedBytes: 0,
   };
-}
-
-function formatBytes(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let v = n;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-}
-
-/** UTF-8 byte length of a string. JSON.stringify result is ASCII-heavy but
- * tool output may include non-ASCII; use Blob to get the real wire size. */
-function utf8ByteLen(s: string): number {
-  // TextEncoder is available in both Node and Workers; fall back to char count
-  // if missing (vanishingly unlikely in our runtime).
-  if (typeof TextEncoder !== 'undefined') {
-    return new TextEncoder().encode(s).length;
-  }
-  return s.length;
 }
 
 /**
@@ -371,8 +400,9 @@ function truncateBlockContent(
   if (Array.isArray(content)) {
     const originalBytes = utf8ByteLen(JSON.stringify(content));
     if (originalBytes <= TRUNCATE_THRESHOLD_BYTES) return null;
-    // Truncate only the text-type entries. Non-text entries (images, etc.)
-    // pass through unchanged -- they're small and structurally important.
+    // Truncate the text-type entries. Image entries pass through so the phone
+    // can actually render the screenshot, unless a single one is too big to be
+    // worth the wire cost -- then it alone is swapped for a marker.
     const out: unknown[] = [];
     let budget = TRUNCATE_THRESHOLD_BYTES;
     let elided = 0;
@@ -397,6 +427,16 @@ function truncateBlockContent(
           elided += utf8ByteLen(text) - utf8ByteLen(kept);
           budget = 0;
         }
+      } else if (isImageBlock(item)) {
+        const bytes = utf8ByteLen(JSON.stringify(item));
+        const shrunk = shrinkImageBlockForSync(item);
+        if (shrunk === null) {
+          out.push(makeImageMarkerBlock(bytes));
+          elided += bytes;
+        } else {
+          out.push(shrunk);
+          elided += bytes - utf8ByteLen(JSON.stringify(shrunk));
+        }
       } else {
         out.push(item);
       }
@@ -413,6 +453,111 @@ function truncateBlockContent(
   return null;
 }
 
+/** Read the base64 payload out of either image block shape. */
+function readImageBlockData(block: unknown): { data: string; mimeType: string } | null {
+  const b = block as {
+    data?: unknown;
+    mimeType?: unknown;
+    source?: { data?: unknown; media_type?: unknown };
+  };
+  if (typeof b.source?.data === 'string') {
+    return {
+      data: b.source.data,
+      mimeType: typeof b.source.media_type === 'string' ? b.source.media_type : 'image/png',
+    };
+  }
+  if (typeof b.data === 'string') {
+    return {
+      data: b.data,
+      mimeType: typeof b.mimeType === 'string' ? b.mimeType : 'image/png',
+    };
+  }
+  return null;
+}
+
+/** Rebuild an image block with new bytes, preserving whichever shape it had. */
+function withImageBlockData(block: unknown, data: string, mimeType: string): unknown {
+  const b = block as { source?: { data?: unknown } };
+  if (typeof b.source?.data === 'string') {
+    return { ...(block as object), source: { ...b.source, data, media_type: mimeType } };
+  }
+  return { ...(block as object), data, mimeType };
+}
+
+/**
+ * Bring one image block under MAX_SYNC_IMAGE_BLOCK_BYTES, downscaling via the
+ * registered compressor when one is available. Returns null when the image is
+ * still too large to sync (caller substitutes a marker).
+ */
+function shrinkImageBlockForSync(block: unknown): unknown | null {
+  if (utf8ByteLen(JSON.stringify(block)) <= MAX_SYNC_IMAGE_BLOCK_BYTES) return block;
+  if (!syncImageCompressor) return null;
+
+  const image = readImageBlockData(block);
+  if (!image) return null;
+
+  try {
+    const compressed = syncImageCompressor(image.data, image.mimeType);
+    if (!compressed?.data || compressed.data.length >= image.data.length) return null;
+    const rebuilt = withImageBlockData(block, compressed.data, compressed.mimeType);
+    return utf8ByteLen(JSON.stringify(rebuilt)) <= MAX_SYNC_IMAGE_BLOCK_BYTES ? rebuilt : null;
+  } catch {
+    // A corrupt or undecodable image must never break the sync of the message
+    // around it -- fall through to the marker.
+    return null;
+  }
+}
+
+function makeImageMarkerBlock(bytes: number): { type: 'text'; text: string } {
+  return {
+    type: 'text',
+    text: `[Image (${formatBytes(bytes)}) elided from mobile sync; view on desktop]`,
+  };
+}
+
+/** Does this claude-code message still carry an image the phone can render? */
+function messageCarriesImageBlock(parsed: unknown): boolean {
+  if (!parsed || typeof parsed !== 'object') return false;
+  const blocks = (parsed as { message?: { content?: unknown } }).message?.content;
+  if (!Array.isArray(blocks)) return false;
+  return blocks.some((block) => {
+    if (isImageBlock(block)) return true;
+    const content = (block as { content?: unknown } | null)?.content;
+    return Array.isArray(content) && content.some(isImageBlock);
+  });
+}
+
+/**
+ * Last resort before the whole-message marker: swap every image block for a
+ * text marker. Used when a message carries so much image data that even
+ * MAX_SYNC_MESSAGE_WITH_IMAGE_BYTES can't hold it -- dropping the pictures
+ * keeps the message valid JSON, so mobile still renders the tool call instead
+ * of a bare marker string it can't parse.
+ */
+function stripImageBlocksInPlace(parsed: unknown): boolean {
+  if (!parsed || typeof parsed !== 'object') return false;
+  const blocks = (parsed as { message?: { content?: unknown } }).message?.content;
+  if (!Array.isArray(blocks)) return false;
+
+  let modified = false;
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if (isImageBlock(block)) {
+      blocks[i] = makeImageMarkerBlock(utf8ByteLen(JSON.stringify(block)));
+      modified = true;
+      continue;
+    }
+    const content = (block as { content?: unknown } | null)?.content;
+    if (!Array.isArray(content)) continue;
+    for (let j = 0; j < content.length; j++) {
+      if (!isImageBlock(content[j])) continue;
+      content[j] = makeImageMarkerBlock(utf8ByteLen(JSON.stringify(content[j])));
+      modified = true;
+    }
+  }
+  return modified;
+}
+
 function makeWholeMessageMarker(source: string, originalBytes: number): string {
   const label = source || 'unknown';
   return (
@@ -424,9 +569,10 @@ function makeWholeMessageMarker(source: string, originalBytes: number): string {
 function clampWholeMessage(
   content: string,
   source: string,
+  maxBytes: number = MAX_SYNC_MESSAGE_BYTES,
 ): { content: string; bytesAfter: number; elidedBytes: number } {
   const bytesBefore = utf8ByteLen(content);
-  if (bytesBefore <= MAX_SYNC_MESSAGE_BYTES) {
+  if (bytesBefore <= maxBytes) {
     return { content, bytesAfter: bytesBefore, elidedBytes: 0 };
   }
 
@@ -827,8 +973,21 @@ export function truncateContentForSync(
   } else {
     modified = truncateCodexItemInPlace(parsed, stats, blockBytesBefore);
   }
-  const providerContent = modified ? JSON.stringify(parsed) : rawContent;
-  const wholeClamp = clampWholeMessage(providerContent, sourceKey);
+  let providerContent = modified ? JSON.stringify(parsed) : rawContent;
+
+  // A surviving image block buys a bigger ceiling -- see
+  // MAX_SYNC_MESSAGE_WITH_IMAGE_BYTES. If even that isn't enough, drop the
+  // images rather than the message, so mobile gets parseable JSON.
+  let maxBytes = MAX_SYNC_MESSAGE_BYTES;
+  if (utf8ByteLen(providerContent) > MAX_SYNC_MESSAGE_BYTES && messageCarriesImageBlock(parsed)) {
+    maxBytes = MAX_SYNC_MESSAGE_WITH_IMAGE_BYTES;
+    if (utf8ByteLen(providerContent) > MAX_SYNC_MESSAGE_WITH_IMAGE_BYTES) {
+      if (stripImageBlocksInPlace(parsed)) providerContent = JSON.stringify(parsed);
+      maxBytes = MAX_SYNC_MESSAGE_BYTES;
+    }
+  }
+
+  const wholeClamp = clampWholeMessage(providerContent, sourceKey, maxBytes);
   stats.bytesAfter = wholeClamp.bytesAfter;
   if (wholeClamp.elidedBytes > 0) {
     stats.blocksTruncated++;

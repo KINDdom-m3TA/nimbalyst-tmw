@@ -15,8 +15,6 @@
 
 import os from 'os';
 import { existsSync, mkdirSync } from 'fs';
-import { join } from 'path';
-import { app } from 'electron';
 import { McpConfigService, getMcpConfigService } from '@nimbalyst/runtime/ai/server';
 import { getSessionStateManager } from '@nimbalyst/runtime/ai/server/SessionStateManager';
 import { getTerminalSessionManager } from '../TerminalSessionManager';
@@ -24,10 +22,11 @@ import { getEnhancedPath, getShellEnvironment } from '../CLIManager';
 import { ClaudeCliSessionLauncher } from './ClaudeCliSessionLauncher';
 import { HooklessAgentFileWatcher } from './HooklessAgentFileWatcher';
 import { resolveClaudeCliWorktreeCwd } from './resolveClaudeCliWorktreeCwd';
+import { resolveClaudeCliEffort } from './claudeCliEffort';
 import { resolveClaudeExecutablePath, isClaudeExecutableInstalled } from './claudeExecutableResolver';
 import { resolveClaudeCliSupportsPluginDir } from './claudeCliPluginSupport';
 import { getAgentWorkflowService } from '../AgentWorkflowService';
-import { workspacePathToDir } from '../AttachmentService';
+import { resolveAttachmentStagingAllowDirectories } from '../attachments/attachmentStagingRoot';
 import { resolveClaudePermissionHookScriptPath } from './claudeCliPermissionHookPath';
 import { getPermissionService } from '../PermissionService';
 import { startClaudeCliProxyObservation, fireClaudeCliTurnCompletion } from './claudeCliObservationSingleton';
@@ -85,8 +84,8 @@ export function isClaudeCliInstalled(): boolean {
 /**
  * Resolve (and create) the workspace's chat-attachments root and return it as the
  * `--add-dir` allow-list for the CLI. Mirrors `AttachmentService`'s storage
- * layout (`<userData>/chat-attachments/<workspaceDir>`) via the shared
- * `workspacePathToDir` so the path matches where pasted images actually land.
+ * layout through the same staging resolver used by AttachmentService, so the
+ * path matches where pasted images actually land.
  * Returns `undefined` on any failure so a directory-prep error never blocks the
  * CLI launch.
  */
@@ -103,20 +102,45 @@ export function claudeCliSessionSupportsPlugins(): boolean {
 
 function prepareAttachmentsAllowDir(workspacePath: string): string[] | undefined {
   try {
-    const attachmentsRoot = join(
-      app.getPath('userData'),
-      'chat-attachments',
-      workspacePathToDir(workspacePath),
-    );
+    const attachmentDirectories = resolveAttachmentStagingAllowDirectories(workspacePath);
     // Synchronous mkdir: one-time, fast op during session spawn. Keeps the launch
     // path free of an extra async tick (the SDK/CLI launch-coalescing logic relies
     // on a tight pre-launch microtask shape).
-    mkdirSync(attachmentsRoot, { recursive: true });
-    return [attachmentsRoot];
+    for (const attachmentsRoot of attachmentDirectories) {
+      mkdirSync(attachmentsRoot, { recursive: true });
+    }
+    return attachmentDirectories;
   } catch (err) {
     console.warn('[ClaudeCliLauncher] failed to prepare chat-attachments --add-dir:', err);
     return undefined;
   }
+}
+
+/**
+ * Wire the pure effort resolver to the real session store and app settings.
+ * `AISessionsRepository` and the settings store are imported lazily here to match
+ * how the neighbouring worktree lookup in this file already loads them.
+ */
+async function resolveClaudeCliEffortLevel(
+  input: EnsureClaudeCliSessionInput,
+): Promise<string | undefined> {
+  const { resolveEffortLevel } = await import('@nimbalyst/runtime/ai/server/effortLevels');
+  const { getDefaultEffortLevel } = await import('../../utils/store');
+  return resolveClaudeCliEffort(
+    { explicit: input.effortLevel, sessionId: input.sessionId },
+    {
+      getSessionEffortLevel: async (sessionId) => {
+        const { AISessionsRepository } = await import(
+          '@nimbalyst/runtime/storage/repositories/AISessionsRepository'
+        );
+        const session = await AISessionsRepository.get(sessionId);
+        return (session?.metadata as { effortLevel?: string } | undefined)?.effortLevel;
+      },
+      getDefaultEffortLevel,
+      resolveEffortLevel,
+      logWarn: (message, err) => console.warn(message, err),
+    },
+  );
 }
 
 function buildMcpConfigService(): McpConfigService {
@@ -171,6 +195,11 @@ export interface EnsureClaudeCliSessionInput {
   /** Resolved CLI model value (`--model`). Omit to let the CLI default. */
   model?: string;
   resumeSessionId?: string;
+  /**
+   * Explicit effort level. Omit to resolve it from the session's own selection
+   * falling back to the app default, the same way the Agent SDK path does.
+   */
+  effortLevel?: string;
   cols?: number;
   rows?: number;
 }
@@ -271,12 +300,20 @@ export async function ensureClaudeCliSession(
         logWarn: (message, err) => console.warn(message, err),
       });
 
+      // #844: the Agent SDK path forwards the selected effort as
+      // CLAUDE_CODE_EFFORT_LEVEL; the CLI path never did, so the selector had no
+      // effect here. Resolve the same way the SDK path does (session selection,
+      // then app default). Best-effort: a lookup failure just leaves the CLI on
+      // its own default rather than blocking the launch.
+      const effortLevel = await resolveClaudeCliEffortLevel(input);
+
       await launcher.launch({
         sessionId: input.sessionId,
         workspacePath: input.workspacePath,
         cwd: resolvedCwd,
         model: input.model,
         resumeSessionId: input.resumeSessionId,
+        effortLevel,
         cols: input.cols,
         rows: input.rows,
         additionalDirectories,

@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, app, nativeImage, ipcMain, screen, nativeTheme, Menu, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
+import { BrowserWindow, app, nativeImage, ipcMain, screen, Menu, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
 import { safeHandle, safeOn } from '../utils/ipcRegistry';
 import { join, basename } from 'path';
 import { existsSync } from 'fs';
@@ -8,18 +8,20 @@ import { getTheme, saveWorkspaceWindowState, getWorkspaceNavigationHistory, save
 import { stopFileWatcher } from '../file/FileWatcher';
 import { stopWorkspaceWatcher, startWorkspaceWatcher } from '../file/WorkspaceWatcher.ts';
 import { getFolderContents } from '../utils/FileTree';
-import { getTitleBarColors } from '../theme/ThemeManager';
+import { getBackgroundColor, getTitleBarColors } from '../theme/ThemeManager';
 import { ElectronDocumentService, setupDocumentServiceHandlers } from '../services/ElectronDocumentService';
 import { ElectronFileSystemService } from '../services/ElectronFileSystemService';
 import { isWorktreePath, resolveProjectPath } from '../utils/workspaceDetection';
 import { getPreloadPath } from '../utils/appPaths';
+import { createUnresponsiveHandler } from './unresponsiveHandler';
 import {
   setFileSystemService,
   clearFileSystemService,
   setFileSystemServiceFor,
 } from '@nimbalyst/runtime';
 import { navigationHistoryService } from '../services/NavigationHistoryService';
-import { runWhenAppIsActive } from './AppActivationGuard';
+import { revealReadyWindow } from './revealReadyWindow';
+import { registerStartupWindow } from './StartupActivation';
 import { signalFirstWindowLoaded } from '../services/startupMaintenanceGate';
 import { AnalyticsService } from '../services/analytics/AnalyticsService';
 import { FeatureTrackingService } from '../services/analytics/FeatureTrackingService';
@@ -27,8 +29,14 @@ import { ExtensionLogService } from '../services/ExtensionLogService';
 import { getMcpConfigService } from '../mcpConfigServiceRef';
 import { addNimAssetRoot } from '../protocols/nimAssetProtocol';
 import { addNimPreviewWorkspaceRoot } from '../protocols/nimPreviewProtocol';
+import { scheduleAttachmentStagingCleanup } from '../services/attachments/attachmentStagingCleanup';
 import { windows, windowStates, anyWindowReferencesWorkspace, resolveDocumentServicePath, getWindowIdForWindow } from './windowState';
 import { shouldSaveSessionOnWindowClose } from './sessionSaveOnClose';
+import {
+    registerCustomTitleBarWindow,
+    registerFullScreenChrome,
+    titleBarOptionsForWindow,
+} from './windowChrome';
 
 // Window management
 export { windows, windowStates };
@@ -143,6 +151,12 @@ app.on('before-quit', () => {
   isQuitting = true;
 });
 
+/** True once `before-quit` has fired. Callers that create windows lazily
+ *  (e.g. auto-opening a project to deliver a queued prompt) must check this. */
+export function isAppQuitting(): boolean {
+  return isQuitting;
+}
+
 // Get focused window or create new one
 export function getFocusedOrNewWindow(): BrowserWindow {
     const focusedWindow = BrowserWindow.getFocusedWindow();
@@ -157,15 +171,20 @@ export function getFocusedOrNewWindow(): BrowserWindow {
 export interface CreateWindowOptions {
     /** Show the window without activating the app (no focus steal). */
     showInactive?: boolean;
-    /** Keep a restored window hidden if the user switched away during startup. */
-    deferShowUntilAppActive?: boolean;
+    /**
+     * This window is part of app launch: reveal it without activating and let
+     * StartupActivation foreground the app once, at the end of startup.
+     */
+    startupReveal?: boolean;
+    /** Among the startup windows, the one that should end up frontmost. */
+    startupFrontmost?: boolean;
 }
 
 export function createWindow(
     isOpeningFile: boolean = false,
     isWorkspaceMode: boolean = false,
     workspacePath: string | null = null,
-    savedBounds?: { x: number; y: number; width: number; height: number },
+    savedBounds?: { x: number; y: number; width: number; height: number; isMaximized?: boolean },
     options?: CreateWindowOptions
 ): BrowserWindow {
     const startTime = Date.now();
@@ -217,23 +236,15 @@ export function createWindow(
             }
         }
 
-        // Determine the current theme and set appropriate background color
-        // IMPORTANT: These colors MUST match the CSS theme files exactly to prevent flash
+        // Passed to the renderer as a query param so it can apply the theme on
+        // first paint; this is the persisted id, extension themes included.
         const currentTheme = getTheme();
-        // console.log('[WINDOW-MANAGER] Creating window with theme:', currentTheme);
-        let backgroundColor = '#ffffff'; // Default to white for light theme
 
-        if (currentTheme === 'dark') {
-            backgroundColor = '#2d2d2d'; // Matches --nim-bg in NimbalystTheme.css (dark)
-        } else if (currentTheme === 'crystal-dark') {
-            backgroundColor = '#0f172a'; // Matches --nim-bg in NimbalystTheme.css (crystal-dark)
-        } else if (currentTheme === 'light') {
-            backgroundColor = '#ffffff'; // Matches --nim-bg in NimbalystTheme.css (light)
-        } else {
-            // system/auto - use nativeTheme which should match prefers-color-scheme
-            backgroundColor = nativeTheme.shouldUseDarkColors ? '#2d2d2d' : '#ffffff';
-        }
-        // console.log('[WINDOW-MANAGER] Background color:', backgroundColor);
+        // The canvas colour behind the renderer, painted before any CSS parses.
+        // Single source of truth in ThemeManager: it prefers the real --nim-bg
+        // the renderer last reported (the only way an extension or file-based
+        // theme's colour is knowable here) and falls back to the base themes.
+        const backgroundColor = getBackgroundColor();
 
         const preloadPath = getPreloadPath();
 
@@ -259,7 +270,11 @@ export function createWindow(
                 webviewTag: false
             },
             show: false,
-            titleBarStyle: process.platform === 'darwin' ? undefined : 'default',
+            ...titleBarOptionsForWindow({
+                customTitleBar: isWorkspaceMode,
+                platform: process.platform,
+                overlayColors: getTitleBarColors(),
+            }),
         };
 
         if (iconPath) {
@@ -267,6 +282,16 @@ export function createWindow(
         }
 
         const window = new BrowserWindow(windowOptions);
+        if (isWorkspaceMode) {
+            registerCustomTitleBarWindow(window);
+            registerFullScreenChrome(window);
+        }
+
+        // Join the startup cohort before ready-to-show can fire, so launch
+        // knows to wait for this window before foregrounding the app once.
+        if (options?.startupReveal) {
+            registerStartupWindow(window, { frontmost: options.startupFrontmost });
+        }
 
         // Generate a unique window ID
         const windowId = ++windowIdCounter;
@@ -288,6 +313,7 @@ export function createWindow(
         if (isWorkspaceMode && workspacePath) {
             addNimAssetRoot(workspacePath);
             addNimPreviewWorkspaceRoot(workspacePath);
+            scheduleAttachmentStagingCleanup(workspacePath);
         }
         if (isWorkspaceMode && workspacePath) {
             if (!documentServices.has(workspacePath)) {
@@ -577,16 +603,7 @@ export function createWindow(
         // Show window when ready
         window.once('ready-to-show', () => {
             // console.log('[MAIN] Window ready to show at', new Date().toISOString(), 'elapsed:', Date.now() - startTime, 'ms');
-            const showWindow = options?.showInactive
-                ? () => window.showInactive()
-                : () => window.show();
-
-            if (options?.deferShowUntilAppActive) {
-                runWhenAppIsActive(window, showWindow);
-                return;
-            }
-
-            showWindow();
+            revealReadyWindow(window, options, savedBounds);
         });
 
         // Handle renderer process crashes.
@@ -618,20 +635,11 @@ export function createWindow(
         });
 
         // Handle unresponsive renderer
-        window.webContents.on('unresponsive', () => {
-            console.warn('[MAIN] Window became unresponsive');
-            const choice = dialog.showMessageBoxSync(window, {
-                type: 'warning',
-                buttons: ['Reload', 'Keep Waiting'],
-                defaultId: 0,
-                message: 'The window is not responding',
-                detail: 'Would you like to reload the window?'
-            });
-
-            if (choice === 0 && !window.isDestroyed()) {
-                window.reload();
-            }
-        });
+        window.webContents.on('unresponsive', createUnresponsiveHandler({
+            message: 'The window is not responding',
+            logLabel: '[MAIN]',
+            getWindow: () => window
+        }));
 
         // Handle responsive again
         window.webContents.on('responsive', () => {

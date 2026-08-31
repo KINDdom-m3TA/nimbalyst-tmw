@@ -6,6 +6,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { BaseAIProvider } from '../AIProvider';
+import { AgentCapabilities, BUILTIN_AGENT_CAPABILITIES } from '../agentCapabilities';
 import {
   DocumentContext,
   ProviderConfig,
@@ -200,7 +201,13 @@ export class ClaudeProvider extends BaseAIProvider {
     // Log the input message
     // CRITICAL: Must await to ensure user message is persisted before proceeding
     if (sessionId) {
-      await this.logAgentMessage(sessionId, 'claude', 'input', message);
+      await this.logAgentMessage(
+        sessionId,
+        'claude',
+        'input',
+        message,
+        this.withPromptProvenanceMetadata(documentContext),
+      );
     }
 
     // Check if current message has attachments
@@ -931,6 +938,10 @@ export class ClaudeProvider extends BaseAIProvider {
     };
   }
 
+  getAgentCapabilities(): AgentCapabilities {
+    return BUILTIN_AGENT_CAPABILITIES.claude;
+  }
+
   protected buildSystemPrompt(documentContext?: DocumentContext): string {
     // The base prompt now includes all tool usage instructions
     return super.buildSystemPrompt(documentContext);
@@ -1003,6 +1014,16 @@ export class ClaudeProvider extends BaseAIProvider {
     if (opusMinor) {
       const minor = parseInt(opusMinor[1], 10);
       return minor < 7;
+    }
+
+    // Opus 5+ (dateless `claude-opus-5`) inherits the Opus 4.7+ deprecation --
+    // adaptive thinking, effort parameter, no sampling parameters -- so
+    // `temperature` returns HTTP 400. The `4-` branch above already handled
+    // major 4; anything matching `claude-opus-<major>` with major >= 5 rejects.
+    const opusMajor = id.match(/^claude-opus-(\d{1,2})(?:-|$)/);
+    if (opusMajor) {
+      const major = parseInt(opusMajor[1], 10);
+      return major < 5;
     }
 
     // Sonnet 5+ adopted the same deprecation as Opus 4.7+ (adaptive thinking,

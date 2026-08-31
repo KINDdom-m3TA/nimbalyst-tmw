@@ -116,6 +116,20 @@ const TOOLS = [
     },
   },
   {
+    name: "appearance_set_spellcheck_languages",
+    description:
+      "Set the spellchecker language(s) as Chromium BCP-47 codes (e.g. [\"en-CA\"], [\"en-US\",\"fr\"]). " +
+      "Pass an empty array to clear the override and derive the language from the OS locale. " +
+      "No effect on macOS, which uses the system spellchecker.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        languages: { type: "array", items: { type: "string" } },
+      },
+      required: ["languages"],
+    },
+  },
+  {
     name: "analytics_set_enabled",
     description: "Enable or disable anonymous usage analytics.",
     inputSchema: {
@@ -193,23 +207,9 @@ const TOOLS = [
     },
   },
   {
-    name: "tracker_set_sync_policy",
-    description:
-      "Set the sync mode for a tracker type within a workspace. Modes: 'local' (no sync), 'shared' (sync to team), 'hybrid' (per-item).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        workspacePath: { type: "string" },
-        trackerType: { type: "string", description: "Tracker type ID (e.g. 'bug', 'task')." },
-        mode: { type: "string", enum: ["local", "shared", "hybrid"] },
-      },
-      required: ["workspacePath", "trackerType", "mode"],
-    },
-  },
-  {
     name: "tracker_set_issue_key_prefix",
     description:
-      "Set the issue key prefix for a workspace (e.g. 'NIM' produces NIM-1, NIM-2). Uppercase letter first, 1-16 chars, A-Z 0-9 _ - only.",
+      "Set the team project's unique issue-key prefix (e.g. 'NIM' produces NIM-1, NIM-2). The server rejects prefixes held by another project in the organization and may suggest a free alternative. Use 2-5 uppercase letters.",
     inputSchema: {
       type: "object",
       properties: {
@@ -285,6 +285,15 @@ export async function dispatchSettingsTool(
       case "appearance_set_spellcheck":
         return respond(await svc.setSpellcheck(aiSessionId, { enabled: !!args.enabled }));
 
+      case "appearance_set_spellcheck_languages":
+        return respond(
+          await svc.setSpellcheckLanguages(aiSessionId, {
+            languages: Array.isArray(args.languages)
+              ? (args.languages as unknown[]).filter((x): x is string => typeof x === "string")
+              : [],
+          }),
+        );
+
       case "analytics_set_enabled":
         return respond(await svc.setAnalytics(aiSessionId, { enabled: !!args.enabled }));
 
@@ -320,15 +329,6 @@ export async function dispatchSettingsTool(
           await svc.setWorkspaceTrust(aiSessionId, {
             workspacePath: args.workspacePath,
             trusted: !!args.trusted,
-            mode: args.mode,
-          }),
-        );
-
-      case "tracker_set_sync_policy":
-        return respond(
-          await svc.setTrackerSyncPolicy(aiSessionId, {
-            workspacePath: args.workspacePath,
-            trackerType: args.trackerType,
             mode: args.mode,
           }),
         );

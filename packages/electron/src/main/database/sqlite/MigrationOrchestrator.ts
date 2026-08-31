@@ -37,6 +37,14 @@ import {
 } from './PGLiteToSQLiteMigrator';
 import { MigrationProgressReporter } from './MigrationProgressReporter';
 import { commitMigrationToSqlite } from './BackendSelector';
+import { classifyDatabaseError } from '../DatabaseErrorTelemetry';
+import { dirSizeBytes } from './dirSize';
+import { findRestorableBackups } from './recoveryArtifacts';
+import {
+  assessMigrationSource,
+  gatherMigrationSourceFacts,
+  type MigrationSourceFacts,
+} from './migrationSourcePlausibility';
 
 /**
  * Read surface satisfied by the live PGLiteDatabaseWorker. Mirrors the adapter
@@ -103,6 +111,13 @@ export interface OrchestratorOptions {
   log?: (level: 'info' | 'warn' | 'error', msg: string, meta?: unknown) => void;
   /** For tests: skip the safety check that requires `pglite-db/` to exist. */
   allowEmptyPglite?: boolean;
+  /**
+   * Projects configured in app settings. Used as evidence from outside the
+   * source database that this install has actually been used, so a store with
+   * no sessions in it can be recognised as the wrong store (NIM-3632).
+   * Defaults to 0, which is the permissive value.
+   */
+  configuredProjectCount?: number;
 }
 
 export interface PreflightResult {
@@ -146,7 +161,26 @@ export class MigrationOrchestrator {
         requiredBytes,
       };
     }
+    const plausibility = assessMigrationSource(await this.gatherSourceFacts(pgliteDirBytes));
+    if (!plausibility.ok) {
+      return { ok: false, reason: plausibility.reason, pgliteDirBytes, freeBytes, requiredBytes };
+    }
     return { ok: true, pgliteDirBytes, freeBytes, requiredBytes };
+  }
+
+  /**
+   * Facts about the migration source drawn from outside the source itself.
+   * See `migrationSourcePlausibility.ts` for why that distinction is the whole
+   * point of this check.
+   */
+  private gatherSourceFacts(liveDirBytes: number): Promise<MigrationSourceFacts> {
+    return gatherMigrationSourceFacts({
+      userDataPath: this.opts.userDataPath,
+      liveDirBytes,
+      pglite: this.opts.pglite,
+      configuredProjectCount: this.opts.configuredProjectCount,
+      findBackups: findRestorableBackups,
+    });
   }
 
   /**
@@ -167,6 +201,21 @@ export class MigrationOrchestrator {
       sqliteDir,
       pgliteMigratedDir,
     });
+
+    // Refuse an implausible source before touching anything. preflight() runs
+    // this too, but the UI is not the only caller and this is the last moment
+    // the PGLite store is still authoritative (NIM-3632). The event goes out
+    // before we act, so a refusal is visible even if this process dies next.
+    const plausibility = assessMigrationSource(
+      await this.gatherSourceFacts(fs.existsSync(pgliteDir) ? dirSizeBytes(pgliteDir) : 0),
+    );
+    if (!plausibility.ok) {
+      this.opts.sendEvent?.('migration_refused_implausible_source', { reason: plausibility.reason });
+      log('error', '[orchestrator] refusing to migrate an implausible source', {
+        reason: plausibility.reason,
+      });
+      throw new Error(plausibility.reason);
+    }
 
     // Sanity: don't overwrite an existing sqlite-db. If one exists from a
     // previous aborted attempt, move it aside first.
@@ -292,7 +341,7 @@ export class MigrationOrchestrator {
       reporter?.emitFailed({ phase, message, stack });
       this.opts.sendEvent?.('migration_failed', {
         phase,
-        message: message.slice(0, 500),
+        ...classifyDatabaseError(err),
       });
 
       // Best-effort cleanup. We're conservative about not touching pglite-db;
@@ -333,32 +382,6 @@ function buildReadOnlyAdapter(reader: LivePgliteReader): PGLiteHandle {
 // ----------------------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------------------
-
-function dirSizeBytes(dir: string): number {
-  let total = 0;
-  const stack: string[] = [dir];
-  while (stack.length > 0) {
-    const p = stack.pop()!;
-    let stat: fs.Stats;
-    try {
-      stat = fs.lstatSync(p);
-    } catch {
-      continue;
-    }
-    if (stat.isDirectory()) {
-      let entries: string[] = [];
-      try {
-        entries = fs.readdirSync(p);
-      } catch {
-        continue;
-      }
-      for (const e of entries) stack.push(path.join(p, e));
-    } else if (stat.isFile()) {
-      total += stat.size;
-    }
-  }
-  return total;
-}
 
 async function freeBytesOnPath(p: string): Promise<number> {
   // `fs.statfs` is Node 18.15+ / 20+. We're on Node 22 in Electron 33+.

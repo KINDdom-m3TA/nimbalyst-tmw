@@ -7,10 +7,17 @@
  */
 
 import type { ContentBlockParam, TextBlockParam, MessageParam } from '@anthropic-ai/sdk/resources';
+// Type-only, so it is erased at build time and the SDK stays dynamically
+// loaded. #1361 shipped a 20-version SDK jump whose compatibility could only be
+// verified by diffing the .d.ts by hand, because this object was `any`. Bound to
+// the SDK's own type, a removed or renamed option fails typecheck at the next
+// bump instead of silently becoming a no-op at runtime.
+import type { Options as ClaudeAgentSdkOptions, SettingSource } from '@anthropic-ai/claude-agent-sdk';
 import path from 'path';
 import { app } from 'electron';
 import { ClaudeCodeDeps } from './dependencyInjection';
 import { resolveClaudeAgentCliPath } from './cliPathResolver';
+import { hasEnterpriseManagedMcpConfig } from './enterpriseMcpConfig';
 import { type ThinkingMode } from '../../effortLevels';
 
 type SessionMode = 'planning' | 'agent' | 'auto' | undefined;
@@ -44,6 +51,11 @@ export interface BuildSdkOptionsDeps {
   sessions: { getSessionId: (sessionId: string) => string | null | undefined };
   config: { model?: string; apiKey?: string; effortLevel?: string; thinkingMode?: ThinkingMode };
   abortController: AbortController;
+  /**
+   * True when an enterprise `managed-mcp.json` forbids passing MCP servers at
+   * all (NIM-2372). Injectable for tests; defaults to the real filesystem probe.
+   */
+  hasEnterpriseMcpLockdown?: () => boolean;
 }
 
 export interface BuildSdkOptionsParams {
@@ -83,7 +95,7 @@ export interface PromptStreamController {
 }
 
 export interface BuildSdkOptionsResult {
-  options: any;
+  options: ClaudeAgentSdkOptions;
   promptInput: AsyncIterable<SDKUserMessage>;
   promptController: PromptStreamController;
   helperMethod: 'native' | 'custom';
@@ -166,7 +178,10 @@ export async function buildSdkOptions(
     sessions,
     config,
     abortController,
+    hasEnterpriseMcpLockdown = hasEnterpriseManagedMcpConfig,
   } = deps;
+
+  const mcpLockdown = hasEnterpriseMcpLockdown();
 
   const {
     message,
@@ -187,7 +202,7 @@ export async function buildSdkOptions(
   let helperMethod: 'native' | 'custom' = 'native';
 
   // Determine which settings sources to use based on user preferences
-  let settingSources: string[] = ['local'];
+  let settingSources: SettingSource[] = ['local'];
   if (ClaudeCodeDeps.claudeCodeSettingsLoader) {
     try {
       const ccSettings = await ClaudeCodeDeps.claudeCodeSettingsLoader();
@@ -229,7 +244,7 @@ export async function buildSdkOptions(
   // console.log(`[CLAUDE-CODE] Binary path: custom=${customPath || '(none)'} resolved=${resolvedBinaryPath ?? '(none)'} effective=${effectivePath ?? '(none)'}`);
   const resolvedModel = resolveModelVariant();
 
-  const options: any = {
+  const options: ClaudeAgentSdkOptions = {
     pathToClaudeCodeExecutable: effectivePath,
     // NOTE: this `append` string is re-sent on EVERY resumed turn and sits at
     // the front of the prompt-cache prefix. It MUST be byte-identical across a
@@ -249,20 +264,22 @@ export async function buildSdkOptions(
     // server appearing/disappearing here would force a tools_changed miss over
     // the whole cached conversation. Do not move the live McpConfigService read
     // back into this per-turn builder; ClaudeCodeProvider freezes it once.
-    mcpServers: await getMcpServersSnapshot({
-      sessionId,
-      workspacePath: mcpConfigWorkspacePath || workspacePath,
-      profile: isMetaAgent ? 'meta-agent' : 'standard',
-    }),
-    // NIM-843 (SDK path): use ONLY the mcpServers we pass above and ignore the
-    // SDK's own discovery (~/.claude.json, project .mcp.json, user settings,
-    // claude.ai connectors). settingSources includes 'user'/'project' to load
-    // slash commands/skills/hooks, but that also re-merges their mcpServers on
-    // top of our filtered list — leaking user-disabled third-party servers into
-    // sessions, ignoring the `disabled`/`enabledForProviders` toggle. strictMcpConfig
-    // gates MCP only, so commands/skills/hooks from settingSources still load.
-    // This mirrors the CLI path's `--strict-mcp-config` (claudeCliSpawnConfig.ts).
-    strictMcpConfig: true,
+    // NIM-2372: no `strictMcpConfig`. It made the SDK ignore its own discovery
+    // (~/.claude.json, project .mcp.json, enterprise config, claude.ai
+    // connectors), which silently stripped every account connector and hard-
+    // failed on managed machines. Nimbalyst's off-toggle is written into Claude
+    // Code's own `disabledMcpServers` instead — see claudeCodeDisabledServers.ts.
+    //
+    // Under an enterprise MCP lockdown the binary rejects ANY dynamically-passed
+    // server (the SDK serializes this map into `--mcp-config`), so we pass none
+    // and the session runs on the enterprise's servers alone.
+    mcpServers: mcpLockdown
+      ? {}
+      : await getMcpServersSnapshot({
+          sessionId,
+          workspacePath: mcpConfigWorkspacePath || workspacePath,
+          profile: isMetaAgent ? 'meta-agent' : 'standard',
+        }),
     cwd: workspacePath,
     abortController,
     model: resolvedModel,
@@ -423,6 +440,26 @@ export async function buildSdkOptions(
       sanitizedShellEnv.DISABLE_UPDATES == null &&
       sanitizedSettingsEnv.DISABLE_UPDATES == null && {
         DISABLE_UPDATES: '1',
+      }),
+    // #1177: Suppress the CLI's own "git status at the start of the
+    // conversation" block. That block is rebuilt from the LIVE working tree by
+    // every CLI process and injected at the head of the conversation, and it is
+    // never persisted to the transcript, so `--resume` always regenerates it.
+    // Nimbalyst runs each user turn as a separate process, so in an agentic
+    // session -- where the agent itself edits files between turns -- the block
+    // differs on most turns and every message block behind it is a cache miss.
+    // Measured over 19,073 local turns: 62.8% full-prefix rewrite on resume
+    // turns against 0.4% on in-process turns, carrying ~63% of all cache-write
+    // tokens. Cache writes bill at 1.25x base input where reads bill at 0.1x.
+    // The equivalent context is re-added as a FROZEN section resolved once per
+    // session (see buildClaudeCodeSystemPrompt's gitContext) so it cannot move
+    // between turns. Default only -- a user-set value (settings/shell/process
+    // env) still wins, so anyone who wants the CLI's live snapshot back can
+    // have it.
+    ...(sanitizedProcessEnv.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS == null &&
+      sanitizedShellEnv.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS == null &&
+      sanitizedSettingsEnv.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS == null && {
+        CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: '1',
       }),
   };
 

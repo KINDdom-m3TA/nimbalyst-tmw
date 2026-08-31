@@ -176,6 +176,61 @@ export function getMigrations(schemaDir: string): Migration[] {
       name: 'tool_usage_backfill_state',
       sqlFile: path.join(schemaDir, '0027_tool_usage_backfill_state.sql'),
     },
+    {
+      version: 28,
+      name: 'tracker_shared_saved_views',
+      sqlFile: path.join(schemaDir, '0028_tracker_shared_saved_views.sql'),
+    },
+    {
+      version: 29,
+      name: 'tracker_personal_snooze',
+      sqlFile: path.join(schemaDir, '0029_tracker_personal_snooze.sql'),
+    },
+    {
+      version: 30,
+      name: 'tracker_type_defs_synced_model',
+      sqlFile: path.join(schemaDir, '0030_tracker_type_defs_synced_model.sql'),
+    },
+    {
+      version: 31,
+      name: 'session_commits',
+      sqlFile: path.join(schemaDir, '0031_session_commits.sql'),
+    },
+    {
+      version: 32,
+      name: 'feedback_request_cache',
+      sqlFile: path.join(schemaDir, '0032_feedback_request_cache.sql'),
+    },
+    {
+      version: 33,
+      name: 'tracker_local_key',
+      sqlFile: path.join(schemaDir, '0033_tracker_local_key.sql'),
+    },
+    {
+      version: 34,
+      name: 'feedback_request_index',
+      sqlFile: path.join(schemaDir, '0034_feedback_request_index.sql'),
+    },
+    {
+      version: 35,
+      name: 'github_issues',
+      sqlFile: path.join(schemaDir, '0035_github_issues.sql'),
+    },
+    {
+      version: 36,
+      name: 'history_file_timestamp_index',
+      sqlFile: path.join(schemaDir, '0036_history_file_timestamp_index.sql'),
+    },
+    {
+      version: 37,
+      name: 'drop_unused_message_index',
+      sqlFile: path.join(schemaDir, '0037_drop_unused_message_index.sql'),
+    },
+    {
+      version: 38,
+      name: 'repair_double_quoted_review_status',
+      sqlFile: path.join(schemaDir, '0038_repair_double_quoted_review_status.sql'),
+    },
   ];
 }
 
@@ -205,6 +260,10 @@ export function runMigrations(db: SqliteDatabase, schemaDir: string): MigrationR
     seen.add(m.version);
   }
 
+  const findAppliedVersion = db.prepare(
+    'SELECT version FROM _migrations WHERE version = ?',
+  );
+
   for (const m of migrations) {
     if (applied.has(m.version)) {
       result.skipped.push(m.version);
@@ -217,7 +276,13 @@ export function runMigrations(db: SqliteDatabase, schemaDir: string): MigrationR
       );
     }
 
-    const tx = db.transaction(() => {
+    const tx = db.transaction((): boolean => {
+      // Another app process or worker may have initialized the same database
+      // after our applied-version snapshot. Re-check while holding the
+      // immediate write lock so only one connection can apply this version.
+      if (findAppliedVersion.get(m.version)) {
+        return false;
+      }
       if (m.sqlFile) {
         const sql = fs.readFileSync(m.sqlFile, 'utf-8');
         db.exec(sql);
@@ -230,9 +295,13 @@ export function runMigrations(db: SqliteDatabase, schemaDir: string): MigrationR
         m.version,
         m.name,
       );
+      return true;
     });
-    tx();
-    result.applied.push(m.version);
+    if (tx.immediate()) {
+      result.applied.push(m.version);
+    } else {
+      result.skipped.push(m.version);
+    }
   }
 
   return result;

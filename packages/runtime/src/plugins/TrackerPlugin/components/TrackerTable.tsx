@@ -5,20 +5,32 @@
 
 import type { JSX } from 'react';
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { useFloating, offset, flip, shift, FloatingPortal } from '@floating-ui/react';
 import { useAtomValue } from 'jotai';
 import type {
   TrackerItemType,
 } from '../../../core/DocumentService';
 import type { TrackerRecord } from '../../../core/TrackerRecord';
-import { trackerItemsByTypeAtom, trackerDataLoadedAtom } from '../trackerDataAtoms';
+import {
+  trackerItemsByTypeAtom,
+  trackerDataLoadedAtom,
+  trackerRelationshipLabelAtom,
+} from '../trackerDataAtoms';
+import { TrackerRowContextMenu } from './TrackerRowContextMenu';
 import {
   EXTENSION_OWNED_KEYS,
   LEGACY_KEY_TO_TYPE,
   buildFullDocumentTrackerId,
 } from '../documentHeader/frontmatterUtils';
-import { getRecordTitle, getRecordStatus, getRecordPriority, getFieldByRole, resolveRoleFieldName, getItemShareState } from '../trackerRecordAccessors';
-import { globalRegistry, parseDate, normalizeRelationshipValue } from '../models';
+import { getRecordTitle, getRecordStatus, getRecordPriority, getFieldByRole, resolveRoleFieldName, getItemPublicationState } from '../trackerRecordAccessors';
+import {
+  globalRegistry,
+  parseDate,
+  normalizeRelationshipValue,
+  resolveRelationshipLabel,
+  type TrackerGroupBy,
+  type TrackerRelationshipLabelResolver,
+} from '../models';
+import { resolveDisplayIssueKey } from '../models/localIssueKey';
 import {usePostHog} from "posthog-js/react";
 import {
   resolveColumnsForType,
@@ -28,24 +40,40 @@ import {
   getTypeColor as getTypeColorFromRegistry,
   getTypeIcon as getTypeIconFromRegistry,
   formatRelativeDate,
+  formatTrackerDateCell,
   getCellValue,
   getEffectiveUpdatedDate,
+  resolveColumnFieldName,
   type TrackerColumnDef,
   type TypeColumnConfig,
 } from './trackerColumns';
 import { UserAvatar } from './UserAvatar';
+import { TrackerPublicationChip } from './TrackerPublicationChip';
+import { TrackerBlockedChip } from './TrackerBlockedChip';
+import type { Readiness } from '../models/trackerReadiness';
+import type { BlockerVisibilityScope } from '../models/trackerBlockerVisibility';
 import { TrackerUnreadDot } from '../../../readReceipts/TrackerUnreadDot';
 import { DisplayOptionsPanel } from './DisplayOptionsPanel';
 import { useTrackerRows } from './useTrackerRows';
 import { TrackerFavoriteStar } from './TrackerFavoriteStar';
+import { compareRecords, groupTrackerRecords, searchMatchesRecord } from './trackerRowData';
 
 export type SortColumn = 'title' | 'type' | 'status' | 'priority' | 'progress' | 'module' | 'lastIndexed' | (string & {});
 export type SortDirection = 'asc' | 'desc';
+
+/**
+ * Keep schema field names scoped so common names such as `progress` cannot
+ * collide with global utility or extension styles.
+ */
+export function getTrackerTableCellClassName(columnId: string): string {
+  return `tracker-table-cell tracker-table-cell-${columnId}`;
+}
 
 interface TrackerTableProps {
   filterType?: TrackerItemType | 'all';
   sortBy?: SortColumn;
   sortDirection?: SortDirection;
+  groupBy?: TrackerGroupBy;
   onSortChange?: (column: SortColumn, direction: SortDirection) => void;
   hideTypeTabs?: boolean;
   onSwitchToFilesMode?: () => void;
@@ -65,6 +93,12 @@ interface TrackerTableProps {
    *  exactly one item is selected. Callers omit this when the workspace
    *  has no team configured. */
   onCopyDeepLink?: (itemId: string) => void;
+  /**
+   * Open a row's tracker item as a document (the focused document view). When
+   * the host offers it, double-clicking a row goes there instead of opening the
+   * backing file in the editor, and the row context menu gains the action.
+   */
+  onOpenDocument?: (itemId: string) => void;
   /** External search query from parent toolbar (replaces internal search input) */
   searchQuery?: string;
   /** Whether filters owned by the parent are active (for the filtered empty state). */
@@ -77,7 +111,22 @@ interface TrackerTableProps {
   onColumnConfigChange?: (config: import('./trackerColumns').TypeColumnConfig) => void;
   favoriteItemIds?: ReadonlySet<string>;
   onToggleFavorite?: (itemId: string) => void;
+  /**
+   * Dependency readiness, derived once by the host from the full tracker
+   * corpus. Rows with open blockers get a chip explaining why; omit it and the
+   * table renders exactly as before.
+   */
+  readinessByItemId?: ReadonlyMap<string, Readiness>;
+  /**
+   * The type/archive scope these rows were selected under. Blockers outside it
+   * keep their count and state but withhold title and reference; omit it and
+   * every blocker is named in full, which is right for a host showing the whole
+   * corpus.
+   */
+  blockerScope?: BlockerVisibilityScope;
   preserveItemOrder?: boolean;
+  /** Parent renders the shared tracker-view controls. */
+  hideToolbar?: boolean;
 }
 
 /**
@@ -292,27 +341,6 @@ function getTypeIcon(type: TrackerItemType): string {
   return icons[type];
 }
 
-function formatDate(date: Date): string {
-  // If date is invalid or epoch (our placeholder for missing dates), show nothing
-  if (!date || date.getTime() === 0 || isNaN(date.getTime())) {
-    return '';
-  }
-
-  const now = new Date();
-  const diff = now.getTime() - date.getTime();
-  const minutes = Math.floor(diff / (1000 * 60));
-  const hours = Math.floor(diff / (1000 * 60 * 60));
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-
-  if (minutes < 1) return 'Just now';
-  if (minutes < 60) return `${minutes}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  if (days === 1) return 'Yesterday';
-  if (days < 7) return `${days}d ago`;
-  if (days < 30) return `${Math.floor(days / 7)}w ago`;
-  return date.toLocaleDateString();
-}
-
 /**
  * Convert full-document tracker items (from frontmatter) to TrackerRecord format
  * Works for any tracker type that supports fullDocument mode (plan, decision, etc.)
@@ -466,7 +494,7 @@ export function convertFullDocumentToTrackerItems(metadata: any[], trackerType: 
  * Render a cell value based on column definition.
  * Extracted to keep the row rendering clean.
  *
- * Exported so the new `TrackerTableGrid` view can render the same cell
+ * Exported so other tracker surfaces can render the same cell
  * content without duplicating the field-by-field switch.
  */
 export function renderCell(
@@ -480,6 +508,7 @@ export function renderCell(
   setEditingTitle: (title: string) => void,
   titleInputRef: React.RefObject<HTMLInputElement | null>,
   handleFieldUpdate: (item: TrackerRecord, field: string, value: string) => void,
+  resolveLabel?: TrackerRelationshipLabelResolver,
 ): React.ReactNode {
   // Resolve field values via schema roles (generic for any schema)
   const title = getRecordTitle(item);
@@ -522,13 +551,15 @@ export function renderCell(
         <div className="title-text text-[13px] font-medium text-[var(--nim-text)] truncate min-w-0">{title}</div>
       );
 
-    case 'key':
-      if (!item.issueKey) return null;
+    case 'key': {
+      const displayKey = resolveDisplayIssueKey(item);
+      if (!displayKey) return null;
       return (
         <span className="text-[11px] font-mono font-medium uppercase tracking-[0.04em] text-[var(--nim-text-faint)] truncate">
-          {item.issueKey}
+          {displayKey}
         </span>
       );
+    }
 
     case 'status': {
       if (isItemEditable(item) && editingCell?.itemId === item.id && editingCell?.field === 'status') {
@@ -616,24 +647,8 @@ export function renderCell(
       }
       return <span className="text-[var(--nim-text-faint)] text-xs">{formatRelativeDate(value as Date)}</span>;
 
-    case 'shared': {
-      // Read-only share indicator. `n/a` (sync mode `local`) renders nothing.
-      const shareState = getItemShareState(item);
-      if (shareState === 'n/a') return null;
-      const shared = shareState === 'shared';
-      const shareColor = shared ? '#22c55e' : '#6b7280';
-      return (
-        <span
-          className="shared-badge inline-flex items-center gap-1 py-0.5 px-2 rounded-[10px] text-[11px] font-medium border"
-          style={{ backgroundColor: `${shareColor}20`, color: shareColor, borderColor: shareColor }}
-          data-testid="tracker-shared-badge"
-          title={shared ? 'Shared with the team' : 'Local to this device'}
-        >
-          <span className="material-symbols-outlined text-[13px]">{shared ? 'group' : 'person'}</span>
-          {shared ? 'Shared' : 'Local'}
-        </span>
-      );
-    }
+    case 'shared':
+      return <TrackerPublicationChip state={getItemPublicationState(item)} />;
 
     default: {
       // Generic field rendering -- dispatch by col.render type
@@ -665,13 +680,14 @@ export function renderCell(
             </div>
           );
 
-        case 'date':
-          if (value instanceof Date) return <span className="text-[var(--nim-text-faint)] text-xs">{formatRelativeDate(value)}</span>;
-          if (typeof value === 'string') {
-            const d = new Date(value);
-            return <span className="text-[var(--nim-text-faint)] text-xs">{isNaN(d.getTime()) ? value : formatRelativeDate(d)}</span>;
-          }
-          return null;
+        case 'date': {
+          // formatTrackerDateCell, not `new Date`: a calendar-day string is
+          // local midnight, not UTC midnight, and reads by day rather than by
+          // elapsed time (nimbalyst#1135, #1156).
+          const { display, title } = formatTrackerDateCell(value);
+          if (!display) return null;
+          return <span className="text-[var(--nim-text-faint)] text-xs" title={title || undefined}>{display}</span>;
+        }
 
         case 'badge': {
           const strVal = String(value);
@@ -694,15 +710,21 @@ export function renderCell(
           if (links.length === 0) return null;
           return (
             <div className="flex flex-wrap gap-0.5">
-              {links.map((l) => (
-                <span
-                  key={l.itemId}
-                  className="relationship-pill inline-block px-1.5 py-0.5 text-[10px] rounded-full bg-[var(--nim-bg-tertiary)] text-[var(--nim-text-muted)]"
-                  title={l.title || l.itemId}
-                >
-                  {l.issueKey || l.title || l.itemId}
-                </span>
-              ))}
+              {links.map((l) => {
+                // The live record's title, not the snapshot on the link: a
+                // collection linked from the other side carries no title at
+                // all, so the pill would otherwise read as a raw item id.
+                const label = resolveRelationshipLabel(l, resolveLabel);
+                return (
+                  <span
+                    key={l.itemId}
+                    className="relationship-pill inline-block px-1.5 py-0.5 text-[10px] rounded-full bg-[var(--nim-bg-tertiary)] text-[var(--nim-text-muted)]"
+                    title={label}
+                  >
+                    {label}
+                  </span>
+                );
+              })}
             </div>
           );
         }
@@ -745,6 +767,7 @@ export function TrackerTable({
   filterType = 'all',
   sortBy = 'lastIndexed',
   sortDirection = 'desc',
+  groupBy = 'none',
   onSortChange,
   hideTypeTabs = false,
   onSwitchToFilesMode,
@@ -755,6 +778,7 @@ export function TrackerTable({
   onArchiveItems,
   onDeleteItems,
   onCopyDeepLink,
+  onOpenDocument,
   searchQuery: externalSearchQuery,
   hasExternalFilters = false,
   onClearFilters,
@@ -762,14 +786,19 @@ export function TrackerTable({
   onColumnConfigChange,
   favoriteItemIds = new Set<string>(),
   onToggleFavorite,
+  readinessByItemId,
+  blockerScope,
   preserveItemOrder = false,
+  hideToolbar = false,
 }: TrackerTableProps): JSX.Element {
   // Type filter: use prop filterType when hideTypeTabs is true, otherwise use internal state
   const [internalTypeFilter, setInternalTypeFilter] = useState<TrackerItemType | 'all'>('all');
   const activeTypeFilter = hideTypeTabs ? filterType : internalTypeFilter;
 
-  // Display options panel state
+  // Display options panel state. The panel is portaled and positions against the
+  // toolbar button, so the button's element is what anchors it.
   const [showDisplayOptions, setShowDisplayOptions] = useState(false);
+  const displayOptionsButtonRef = useRef<HTMLButtonElement>(null);
 
   // Column configuration: use external config or derive from type
   const effectiveColumnConfig = useMemo(() => {
@@ -792,6 +821,7 @@ export function TrackerTable({
   // Read tracker items from cross-platform atoms (populated by host adapter)
   const atomItems = useAtomValue(trackerItemsByTypeAtom(activeTypeFilter));
   const dataLoaded = useAtomValue(trackerDataLoadedAtom);
+  const relationshipLabel = useAtomValue(trackerRelationshipLabelAtom);
 
   // Use override items if provided (e.g., for archived view), otherwise atom items
   const sourceItems = overrideItems ?? atomItems;
@@ -856,63 +886,30 @@ export function TrackerTable({
 
   const sortItems = useCallback((itemsToSort: TrackerRecord[], sortColumn: SortColumn, sortDir: SortDirection) => {
     const sorted = [...itemsToSort].sort((a, b) => {
-      let compareValue = 0;
-
-      switch (sortColumn) {
-        case 'manual': {
+      // `manual` is list-only (kanban drag order); everything else goes through the
+      // shared comparator so this surface and the grid order identical rows
+      // identically -- including role columns, which resolve per record and would
+      // otherwise read the wrong field in the cross-tracker "All" view.
+      const compareValue = sortColumn === 'manual'
+        // Raw string comparison, not localeCompare -- fractional indexing
+        // keys sort by character code order (0-9, A-Z, a-z).
+        ? (() => {
           const aKey = (a.fields.kanbanSortOrder as string) ?? '';
           const bKey = (b.fields.kanbanSortOrder as string) ?? '';
-          // Raw string comparison, not localeCompare -- fractional indexing
-          // keys sort by character code order (0-9, A-Z, a-z).
-          compareValue = aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
-          break;
-        }
-        case 'type':
-          compareValue = a.primaryType.localeCompare(b.primaryType);
-          break;
-        case 'module':
-          compareValue = (a.system.documentPath ?? '').localeCompare(b.system.documentPath ?? '');
-          break;
-        case 'lastIndexed': {
-          const aTime = a.system.lastIndexed ? new Date(a.system.lastIndexed).getTime() : 0;
-          const bTime = b.system.lastIndexed ? new Date(b.system.lastIndexed).getTime() : 0;
-          compareValue = aTime - bTime;
-          break;
-        }
-        default: {
-          // Generic field sort via getCellValue (handles all schema fields + builtins)
-          const aVal = getCellValue(a, sortColumn);
-          const bVal = getCellValue(b, sortColumn);
-          if (aVal == null && bVal == null) { compareValue = 0; break; }
-          if (aVal == null) { compareValue = 1; break; }
-          if (bVal == null) { compareValue = -1; break; }
-          if (aVal instanceof Date && bVal instanceof Date) { compareValue = aVal.getTime() - bVal.getTime(); break; }
-          if (typeof aVal === 'number' && typeof bVal === 'number') { compareValue = aVal - bVal; break; }
-          compareValue = String(aVal).localeCompare(String(bVal));
-          break;
-        }
-      }
+          return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
+        })()
+        : compareRecords(a, b, sortColumn, allColumns);
 
       return sortDir === 'asc' ? compareValue : -compareValue;
     });
 
     return sorted;
-  }, []);
+  }, [allColumns]);
 
   const filteredItems = items
     .filter(item => {
-      // Apply search filter
-      if (searchTerm) {
-        const searchLower = searchTerm.toLowerCase();
-        const matchesSearch =
-          item.issueKey?.toLowerCase().includes(searchLower) ||
-          String(item.issueNumber ?? '').includes(searchLower) ||
-          getRecordTitle(item).toLowerCase().includes(searchLower) ||
-          (item.system.documentPath ?? '').toLowerCase().includes(searchLower) ||
-          (String(getFieldByRole(item, 'assignee') ?? '')).toLowerCase().includes(searchLower) ||
-          (Array.isArray(getFieldByRole(item, 'tags')) && (getFieldByRole(item, 'tags') as string[]).some((tag: string) => tag.toLowerCase().includes(searchLower)));
-        if (!matchesSearch) return false;
-      }
+      // Apply search filter -- the same predicate the tracker's other views use.
+      if (!searchMatchesRecord(item, searchTerm)) return false;
 
       // Apply type filter
       if (activeTypeFilter !== 'all' && item.primaryType !== activeTypeFilter) {
@@ -947,10 +944,26 @@ export function TrackerTable({
 
   // console.log('[TrackerTable] Render - items:', items.length, 'filtered:', filteredItems.length, 'typeFilter:', typeFilter);
   const sortedItems = preserveItemOrder ? filteredItems : sortItems(filteredItems, currentSortBy, currentSortDirection);
+  const groupedRecords = useMemo(
+    () => groupTrackerRecords(sortedItems, groupBy, relationshipLabel),
+    [groupBy, sortedItems, relationshipLabel],
+  );
+  const displayItems = useMemo(
+    () => groupedRecords.flatMap(group => group.items),
+    [groupedRecords],
+  );
+  const groupHeadersByItemId = useMemo(() => {
+    const headers = new Map<string, { label: string; count: number }>();
+    for (const group of groupedRecords) {
+      const first = group.items[0];
+      if (group.label && first) headers.set(first.id, { label: group.label, count: group.items.length });
+    }
+    return headers;
+  }, [groupedRecords]);
 
-  // Row interaction model -- shared with TrackerTableGrid via useTrackerRows.
+  // Row interaction model -- shared with TrackerGridView via useTrackerRows.
   const rows = useTrackerRows({
-    items: sortedItems,
+    items: displayItems,
     activeTypeFilter,
     onItemSelect,
     onDeleteItems,
@@ -977,9 +990,11 @@ export function TrackerTable({
     contextRefs,
     contextFloatingStyles,
     handleContextMenu,
+    openContextMenuForIds,
     closeContextMenu,
     handleBulkStatusUpdate,
     handleBulkPriorityUpdate,
+    statusOptionsForBulk,
   } = rows;
 
   const handleColumnClick = (column: SortColumn) => {
@@ -1118,15 +1133,14 @@ export function TrackerTable({
   return (
     <div className="tracker-table-wrapper flex flex-col h-full w-full bg-[var(--nim-bg)]" data-testid="tracker-table">
       {/* Display options panel (positioned relative to wrapper) */}
-      {showDisplayOptions && onColumnConfigChange && (
-        <div className="relative">
-          <DisplayOptionsPanel
-            availableColumns={allColumns}
-            config={effectiveColumnConfig}
-            onConfigChange={(config) => onColumnConfigChange(config)}
-            onClose={() => setShowDisplayOptions(false)}
-          />
-        </div>
+      {!hideToolbar && showDisplayOptions && onColumnConfigChange && (
+        <DisplayOptionsPanel
+          availableColumns={allColumns}
+          config={effectiveColumnConfig}
+          onConfigChange={(config) => onColumnConfigChange(config)}
+          onClose={() => setShowDisplayOptions(false)}
+          anchorElement={displayOptionsButtonRef.current}
+        />
       )}
 
       {/* Type filter tabs */}
@@ -1150,7 +1164,7 @@ export function TrackerTable({
       )}
 
       {/* Toolbar: filter + display options + count */}
-      {items.length > 0 && (
+      {!hideToolbar && items.length > 0 && (
         <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-[var(--nim-border)] bg-[var(--nim-bg)]">
           {/* Filter button */}
           <div className="relative" ref={filterMenuRef}>
@@ -1233,6 +1247,7 @@ export function TrackerTable({
           {/* Display options */}
           {onColumnConfigChange && (
             <button
+              ref={displayOptionsButtonRef}
               className="inline-flex items-center justify-center w-6 h-6 rounded hover:bg-[var(--nim-bg-tertiary)] text-[var(--nim-text-faint)] hover:text-[var(--nim-text)] transition-colors"
               onClick={() => setShowDisplayOptions(!showDisplayOptions)}
               title="Display options"
@@ -1317,31 +1332,50 @@ export function TrackerTable({
             )}
           </div>
         ) : (
-          sortedItems.map((item, index) => {
+          displayItems.map((item, index) => {
             const title = getRecordTitle(item);
             const status = getRecordStatus(item);
             const priority = getRecordPriority(item);
             const statusColor = getStatusColor(status, item.primaryType);
             const lastIndexed = item.system.lastIndexed ? new Date(item.system.lastIndexed) : new Date(0);
             const editable = isItemEditable(item);
+            const groupHeader = groupHeadersByItemId.get(item.id);
 
             return (
-              <div
-                key={item.id || index}
-                className={`tracker-table-row flex items-center gap-3 px-3 py-[7px] border-b border-[var(--nim-border)] cursor-pointer transition-colors duration-100 hover:bg-[var(--nim-bg-secondary)] select-none ${
-                  selectedIds.has(item.id) ? 'bg-[var(--nim-bg-secondary)]' : ''
-                } ${
-                  selectedItemId && item.id === selectedItemId ? 'bg-[var(--nim-bg-secondary)]' : ''
-                } ${
-                  focusedIndex === index ? 'outline outline-1 outline-[var(--nim-primary)] -outline-offset-1' : ''
-                }`}
-                data-testid="tracker-table-row"
-                data-item-id={item.id}
-                data-item-title={item.fields.title as string}
-                onClick={(e) => handleRowClick(item, index, e)}
-                onDoubleClick={() => { if (item.system.documentPath) openItemInEditor(item); }}
-                onContextMenu={(e) => handleContextMenu(e, item, index)}
-              >
+              <React.Fragment key={item.id || index}>
+                {groupHeader && (
+                  <div
+                    className="tracker-table-group-header sticky top-0 z-[1] flex items-center gap-2 border-b border-nim bg-nim-secondary px-3 py-1.5 text-[11px] font-semibold text-nim"
+                    data-testid="tracker-table-group-header"
+                  >
+                    <span>{groupHeader.label}</span>
+                    <span className="font-normal tabular-nums text-nim-faint">{groupHeader.count}</span>
+                  </div>
+                )}
+                <div
+                  className={`tracker-table-row group flex items-center gap-3 px-3 py-[7px] border-b border-[var(--nim-border)] cursor-pointer transition-colors duration-100 hover:bg-[var(--nim-bg-secondary)] select-none ${
+                    selectedIds.has(item.id) ? 'bg-[var(--nim-bg-secondary)]' : ''
+                  } ${
+                    selectedItemId && item.id === selectedItemId ? 'bg-[var(--nim-bg-secondary)]' : ''
+                  } ${
+                    focusedIndex === index ? 'outline outline-1 outline-[var(--nim-primary)] -outline-offset-1' : ''
+                  }`}
+                  data-testid="tracker-table-row"
+                  data-item-id={item.id}
+                  data-item-title={item.fields.title as string}
+                  onClick={(e) => handleRowClick(item, index, e)}
+                  onDoubleClick={() => {
+                    // Double-click is the primary "open the document" gesture
+                    // where the host offers one; elsewhere it keeps opening the
+                    // backing file in the editor.
+                    if (onOpenDocument) {
+                      onOpenDocument(item.id);
+                      return;
+                    }
+                    if (item.system.documentPath) openItemInEditor(item);
+                  }}
+                  onContextMenu={(e) => handleContextMenu(e, item, index)}
+                >
                 {/* Unread dot (nothing when read) */}
                 <TrackerUnreadDot itemId={item.id} className="w-2" />
                 <TrackerFavoriteStar
@@ -1376,197 +1410,77 @@ export function TrackerTable({
                     />
                   ) : (
                     <div className="flex items-baseline gap-2 min-w-0">
-                      {item.issueKey && (
-                        <span className="shrink-0 text-[10px] font-mono font-medium uppercase tracking-[0.08em] text-[var(--nim-text-faint)]">{item.issueKey}</span>
+                      {resolveDisplayIssueKey(item) && (
+                        <span className="shrink-0 text-[10px] font-mono font-medium uppercase tracking-[0.08em] text-[var(--nim-text-faint)]">{resolveDisplayIssueKey(item)}</span>
                       )}
                       <span className="text-[13px] font-medium text-[var(--nim-text)] truncate">{title}</span>
                     </div>
                   )}
                 </div>
 
+                <TrackerBlockedChip readiness={readinessByItemId?.get(item.id)} scope={blockerScope} />
+
                 {/* Right-side metadata: render visible columns (except type/title which are already shown) */}
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="tracker-table-row-meta flex items-center gap-2 shrink-0">
                   {visibleColumnDefs.filter(col => col.id !== 'type' && col.id !== 'title').map(col => {
-                    const value = getCellValue(item, col.id);
+                    const value = getCellValue(item, resolveColumnFieldName(item.primaryType, col));
                     return (
-                      <div key={col.id} className={`tracker-table-cell ${col.id}`}>
-                        {renderCell(col, item, value, editingCell, isItemEditable, setEditingCell, editingTitle, setEditingTitle, titleInputRef, handleFieldUpdate)}
+                      <div
+                        key={col.id}
+                        className={getTrackerTableCellClassName(col.id)}
+                        data-column-id={col.id}
+                      >
+                        {renderCell(col, item, value, editingCell, isItemEditable, setEditingCell, editingTitle, setEditingTitle, titleInputRef, handleFieldUpdate, relationshipLabel)}
                       </div>
                     );
                   })}
                 </div>
-              </div>
+                <button
+                  type="button"
+                  aria-label={`Actions for ${item.issueKey ?? title}`}
+                  title="Item actions"
+                  data-testid="tracker-row-more-actions"
+                  className="tracker-row-more-actions shrink-0 inline-flex h-6 w-6 items-center justify-center rounded border-none bg-transparent p-0 text-[var(--nim-text-faint)] opacity-0 transition-opacity hover:bg-[var(--nim-bg-hover)] hover:text-[var(--nim-text)] focus-visible:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--nim-border-focus)] group-hover:opacity-100"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onDoubleClick={(event) => event.stopPropagation()}
+                  onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); }}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    openContextMenuForIds(
+                      selectedIds.has(item.id) ? Array.from(selectedIds) : [item.id],
+                      { x: rect.right, y: rect.bottom },
+                    );
+                  }}
+                >
+                  <span className="material-symbols-outlined text-[17px] leading-none">more_horiz</span>
+                </button>
+                </div>
+              </React.Fragment>
             );
           })
         )}
       </div>
 
-      {/* Context menu */}
-      {contextAnchor && selectedIds.size > 0 && (
-        <FloatingPortal>
-        <div
-          ref={contextRefs.setFloating}
-          className="z-50 min-w-[180px] bg-[var(--nim-bg-secondary)] border border-[var(--nim-border)] rounded-md shadow-lg py-1 text-[13px]"
-          style={contextFloatingStyles}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="px-3 py-1 text-[11px] text-[var(--nim-text-faint)] font-medium">
-            {selectedIds.size} item{selectedIds.size > 1 ? 's' : ''} selected
-          </div>
-          <div className="border-b border-[var(--nim-border)] my-1" />
-
-          {/* Status submenu */}
-          <ContextSubmenu label="Set Status" icon="swap_horiz">
-            {(() => {
-              const tracker = activeTypeFilter !== 'all' ? globalRegistry.get(activeTypeFilter) : null;
-              const statusFieldName = activeTypeFilter !== 'all' ? resolveRoleFieldName(activeTypeFilter, 'workflowStatus') : 'status';
-              const statusField = tracker?.fields.find(f => f.name === statusFieldName);
-              const rawOptions: Array<string | { value: string; label: string }> = statusField?.options || [
-                { value: 'to-do', label: 'To Do' },
-                { value: 'in-progress', label: 'In Progress' },
-                { value: 'in-review', label: 'In Review' },
-                { value: 'done', label: 'Done' },
-                { value: 'blocked', label: 'Blocked' },
-              ];
-              return rawOptions.map(opt => {
-                const val = typeof opt === 'string' ? opt : opt.value;
-                const label = typeof opt === 'string' ? opt.split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : opt.label;
-                return (
-                  <button
-                    key={val}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[var(--nim-text)] hover:bg-[var(--nim-bg-hover)] cursor-pointer"
-                    onClick={() => handleBulkStatusUpdate(val)}
-                  >
-                    <span
-                      className="w-2 h-2 rounded-full shrink-0"
-                      style={{ backgroundColor: getStatusColor(val as string, activeTypeFilter !== 'all' ? activeTypeFilter : undefined) }}
-                    />
-                    {label}
-                  </button>
-                );
-              });
-            })()}
-          </ContextSubmenu>
-
-          {/* Priority submenu */}
-          <ContextSubmenu label="Set Priority" icon="flag">
-            {['critical', 'high', 'medium', 'low'].map(p => (
-              <button
-                key={p}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[var(--nim-text)] hover:bg-[var(--nim-bg-hover)] cursor-pointer"
-                onClick={() => handleBulkPriorityUpdate(p)}
-              >
-                <span
-                  className="w-2 h-2 rounded-full shrink-0"
-                  style={{ backgroundColor: getPriorityColor(p as string) }}
-                />
-                {p.charAt(0).toUpperCase() + p.slice(1)}
-              </button>
-            ))}
-          </ContextSubmenu>
-
-          <div className="border-b border-[var(--nim-border)] my-1" />
-
-          {/* Copy Link (single-selection only) */}
-          {onCopyDeepLink && selectedIds.size === 1 && (
-            <button
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[var(--nim-text)] hover:bg-[var(--nim-bg-hover)] cursor-pointer"
-              onClick={() => {
-                const [onlyId] = selectedIds;
-                closeContextMenu();
-                onCopyDeepLink(onlyId);
-              }}
-            >
-              <span className="material-symbols-outlined text-sm">link</span>
-              Copy Link
-            </button>
-          )}
-
-          {/* Archive */}
-          {onArchiveItems && (
-            <button
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[var(--nim-text)] hover:bg-[var(--nim-bg-hover)] cursor-pointer"
-              onClick={() => {
-                closeContextMenu();
-                onArchiveItems(Array.from(selectedIds), true);
-                setSelectedIds(new Set());
-              }}
-            >
-              <span className="material-symbols-outlined text-sm">archive</span>
-              Archive
-            </button>
-          )}
-
-          {/* Delete */}
-          {onDeleteItems && (
-            <button
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[#ef4444] hover:bg-[var(--nim-bg-hover)] cursor-pointer"
-              onClick={() => {
-                closeContextMenu();
-                const ids = Array.from(selectedIds);
-                if (window.confirm(`Delete ${ids.length} item${ids.length > 1 ? 's' : ''}? This cannot be undone.`)) {
-                  onDeleteItems(ids);
-                  setSelectedIds(new Set());
-                }
-              }}
-            >
-              <span className="material-symbols-outlined text-sm">delete</span>
-              Delete
-            </button>
-          )}
-        </div>
-        </FloatingPortal>
-      )}
+      {/* Context menu -- shared with the RevoGrid table view */}
+      <TrackerRowContextMenu
+        anchor={contextAnchor}
+        refs={contextRefs}
+        floatingStyles={contextFloatingStyles}
+        selectedIds={selectedIds}
+        activeTypeFilter={activeTypeFilter}
+        statusOptions={statusOptionsForBulk}
+        onSetStatus={handleBulkStatusUpdate}
+        onSetPriority={handleBulkPriorityUpdate}
+        onCopyDeepLink={onCopyDeepLink}
+        onOpenDocument={onOpenDocument}
+        onArchiveItems={onArchiveItems}
+        onDeleteItems={onDeleteItems}
+        closeContextMenu={closeContextMenu}
+        clearSelection={() => setSelectedIds(new Set())}
+      />
     </div>
   );
 }
-
-/** Context menu submenu with hover-expand. Exported for reuse in the new
- *  TrackerTableGrid context menu. */
-export const ContextSubmenu: React.FC<{
-  label: string;
-  icon: string;
-  children: React.ReactNode;
-}> = ({ label, icon, children }) => {
-  const [open, setOpen] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const { refs, floatingStyles } = useFloating({
-    placement: 'right-start',
-    middleware: [offset(2), flip({ padding: 8 }), shift({ padding: 8 })],
-  });
-
-  const handleEnter = () => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    setOpen(true);
-  };
-  const handleLeave = () => {
-    timeoutRef.current = setTimeout(() => setOpen(false), 150);
-  };
-
-  return (
-    <div
-      ref={refs.setReference as React.RefCallback<HTMLDivElement>}
-      onMouseEnter={handleEnter}
-      onMouseLeave={handleLeave}
-    >
-      <div className="flex items-center gap-2 px-3 py-1.5 text-[var(--nim-text)] hover:bg-[var(--nim-bg-hover)] cursor-pointer">
-        <span className="material-symbols-outlined text-sm">{icon}</span>
-        <span className="flex-1">{label}</span>
-        <span className="material-symbols-outlined text-xs text-[var(--nim-text-faint)]">chevron_right</span>
-      </div>
-      {open && (
-        <FloatingPortal>
-          <div
-            ref={refs.setFloating}
-            className="min-w-[140px] bg-[var(--nim-bg-secondary)] border border-[var(--nim-border)] rounded-md shadow-lg py-1 z-[60]"
-            style={floatingStyles}
-            onMouseEnter={handleEnter}
-            onMouseLeave={handleLeave}
-          >
-            {children}
-          </div>
-        </FloatingPortal>
-      )}
-    </div>
-  );
-};

@@ -3,9 +3,9 @@ import {
   AgentMessagesRepository,
   AISessionsRepository,
 } from "@nimbalyst/runtime";
+import { STRUCTURED_INPUT_FIELD_TYPES } from "@nimbalyst/collab-protocol";
 import { getSessionStateManager } from "@nimbalyst/runtime/ai/server/SessionStateManager";
 import { notificationService } from "../../services/NotificationService";
-import { TrayManager } from "../../tray/TrayManager";
 import { findWindowIdForWorkspacePath } from "../mcpWorkspaceResolver";
 import { setSessionPendingPrompt } from "../../services/ai/pendingPromptPersistence";
 import { getGitSubprocessEnv } from "../../services/gitEnv";
@@ -33,6 +33,7 @@ import {
 import { broadcastMessageLogged } from "../../services/ai/claudeCliUserPromptLog";
 import { ClaudeSettingsManager } from "../../services/ClaudeSettingsManager";
 import { getPermissionService } from "../../services/PermissionService";
+import { SessionCommitService } from "../../services/SessionCommitService";
 import { findFreshInteractiveResponse } from "./interactiveResponsePolling";
 import {
   clearPendingInteractiveWaiter,
@@ -40,6 +41,18 @@ import {
   notePendingInteractiveWaiter,
   shouldSettleFromSessionFallback,
 } from "./interactivePromptFallback";
+import {
+  clearLiveInteractivePrompt,
+  noteLiveInteractivePrompt,
+} from "./interactivePromptLiveness";
+import {
+  attachInteractivePromptCall,
+  type InteractivePromptCallExtra,
+} from "./interactivePromptKeepalive";
+import {
+  shouldTerminalizePrompt,
+  type InteractivePromptSettleReason,
+} from "./interactivePromptAbandonment";
 
 export function getInteractiveToolSchemas(sessionId: string | undefined) {
   if (!sessionId) return [];
@@ -161,7 +174,8 @@ type McpToolResult = {
 export async function handleAskUserQuestion(
   args: any,
   sessionId: string | undefined,
-  request: any
+  request: any,
+  extra?: InteractivePromptCallExtra,
 ): Promise<McpToolResult> {
   const typedArgs = args as
     | {
@@ -290,10 +304,17 @@ export async function handleAskUserQuestion(
   // "Thinking…" suppressed for the rest of the turn. Broadcasting ai:askUserQuestion
   // here sets the flag (and feeds voice mode) exactly while the question is pending;
   // the settle below broadcasts ai:askUserQuestionAnswered to clear it. Sent to all
-  // windows (the renderer handler keys by sessionId); handleAskUserQuestion only
-  // runs for the MCP-routed CLI path, so SDK sessions are unaffected.
+  // windows (the renderer handler keys by sessionId).
+  //
+  // The broadcast stays CLI-only for the reason above. The pending bit does NOT:
+  // this handler serves the MCP AskUserQuestion tool for every provider, and an
+  // SDK session waiting on this question is exactly as blocked as a CLI one.
+  // Guarding it meant neither the sidebar nor the menu bar knew, and the tray
+  // panel filed those sessions under "Running".
+  if (sessionId) {
+    void setSessionPendingPrompt(sessionId, true, "decision");
+  }
   if (isCliSession && sessionId) {
-    void setSessionPendingPrompt(sessionId, true);
     for (const w of BrowserWindow.getAllWindows()) {
       if (!w.isDestroyed()) {
         w.webContents.send("ai:askUserQuestion", {
@@ -305,17 +326,33 @@ export async function handleAskUserQuestion(
     }
   }
 
+  // NIM-2208: registered immediately before the wait and cleared in settle, so
+  // the stale-prompt reconcile can never clear the "awaiting input" bit while
+  // this handler is genuinely blocked.
+  if (sessionId) noteLiveInteractivePrompt(sessionId);
+
   return new Promise((resolve) => {
     let settled = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let detachCall: (() => void) | null = null;
 
     const settle = (result: {
       answers?: Record<string, string>;
       cancelled?: boolean;
       respondedBy?: "desktop" | "mobile";
-    }, source: string = 'unknown') => {
+    }, source: string = 'unknown', reason: InteractivePromptSettleReason = 'user-responded') => {
       if (settled) return;
       settled = true;
+      detachCall?.();
+      if (sessionId) clearLiveInteractivePrompt(sessionId);
+
+      // The client walking away does not answer the question. Tear the waiter
+      // down (below) but leave the widget answerable -- a later answer finds no
+      // live waiter and resumes the session with it as a new turn (#1116).
+      const terminalize = shouldTerminalizePrompt({
+        kind: 'ask_user_question',
+        reason,
+      });
 
       console.log(`[MCP Server] AskUserQuestion settled via ${source}: questionId=${questionId}, cancelled=${result?.cancelled}`);
 
@@ -347,25 +384,36 @@ export async function handleAskUserQuestion(
       // NIM-806: mirror the start write — the external CLI never emits a
       // tool_result block, so persist a synthetic one to flip the widget out of
       // its pending state (ClaudeCliPromptSurface drops answered prompts).
-      if (isCliSession && sessionId) {
-        void persistInteractivePromptToolResult({
-          sessionId,
-          toolUseId: questionId,
-          result: {
-            answers: cancelled ? {} : answers,
-            cancelled,
-            respondedBy,
-            respondedAt: Date.now(),
-          },
-          isError: cancelled,
-        });
-
-        // NIM-850: clear the pending-interactive-prompt flag the moment the prompt
-        // settles (answered or cancelled). For claude-code-cli the renderer otherwise
-        // never clears it mid-turn — session:streaming intentionally doesn't, and
-        // there was no resolved broadcast — so "Thinking…" stayed suppressed until
-        // the turn ended. Mirrors PromptForUserInput's ai:requestUserInputResolved.
+      // Symmetric with the set above: clear for every provider, so an answered
+      // question cannot leave a session stuck showing "awaiting input".
+      if (sessionId) {
         void setSessionPendingPrompt(sessionId, false);
+      }
+      if (isCliSession && sessionId) {
+        // Only a real response closes the widget out. An abandoned call leaves
+        // the tool call pending on purpose, so the question can still be
+        // answered (and resume the session) later.
+        if (terminalize) {
+          void persistInteractivePromptToolResult({
+            sessionId,
+            toolUseId: questionId,
+            result: {
+              answers: cancelled ? {} : answers,
+              cancelled,
+              respondedBy,
+              respondedAt: Date.now(),
+            },
+            isError: cancelled,
+          });
+        }
+
+        // NIM-850: the resolved broadcast. For claude-code-cli the renderer
+        // otherwise never clears the flag mid-turn — session:streaming
+        // intentionally doesn't, and there was no resolved broadcast — so
+        // "Thinking…" stayed suppressed until the turn ended. Mirrors
+        // PromptForUserInput's ai:requestUserInputResolved. Sent on abandonment
+        // too: nothing is blocked on this session any more, whether or not the
+        // question still stands.
         for (const w of BrowserWindow.getAllWindows()) {
           if (!w.isDestroyed()) {
             w.webContents.send("ai:askUserQuestionAnswered", {
@@ -432,6 +480,17 @@ export async function handleAskUserQuestion(
     ipcMain.once(questionResponseChannel, onQuestionIdResponse);
     ipcMain.once(fallbackSessionChannel, onSessionFallbackResponse);
 
+    // #1341: keep the call off the client's idle watchdog while the question is
+    // on screen, and settle as cancelled if the client gives up on it anyway --
+    // an abandoned question must not keep offering buttons whose answer has
+    // nowhere to go (NIM-2607).
+    detachCall = attachInteractivePromptCall({
+      request,
+      extra,
+      toolName: 'AskUserQuestion',
+      onAbort: () => settle({ cancelled: true }, 'client-abort', 'client-abandoned'),
+    });
+
     // Database polling fallback: if the IPC path fails (e.g., transport issues),
     // poll for a response message written by the AIService answer handler.
     if (sessionId) {
@@ -490,6 +549,7 @@ export function getToolPermissionResponseChannel(
 function waitForToolPermissionAnswer(
   sessionId: string,
   requestId: string,
+  signal?: InteractivePromptCallExtra['signal'],
 ): Promise<ToolPermissionAnswer> {
   const channel = getToolPermissionResponseChannel(sessionId, requestId);
   console.log(
@@ -499,10 +559,12 @@ function waitForToolPermissionAnswer(
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let detachCall: (() => void) | null = null;
 
     const settle = (answer: ToolPermissionAnswer, source: string) => {
       if (settled) return;
       settled = true;
+      detachCall?.();
       if (timer) clearTimeout(timer);
       if (pollTimer) clearInterval(pollTimer);
       ipcMain.removeListener(channel, onResponse);
@@ -517,6 +579,20 @@ function waitForToolPermissionAnswer(
     };
 
     ipcMain.once(channel, onResponse);
+
+    // NIM-2607: when the CLI that asked for this permission goes away, the
+    // request socket closes. Settle the waiter fail-closed rather than leaving
+    // an approval surface up whose "Allow" would answer nobody.
+    detachCall = attachInteractivePromptCall({
+      request: undefined,
+      extra: { signal },
+      toolName: 'ToolPermission',
+      onAbort: () =>
+        settle(
+          { decision: 'deny', scope: 'once', cancelled: true, unansweredReason: 'client-abort' },
+          'client-abort',
+        ),
+    });
 
     const POLL_INTERVAL = 1000;
     pollTimer = setInterval(async () => {
@@ -540,7 +616,10 @@ function waitForToolPermissionAnswer(
       console.warn(
         `[MCP Server] ToolPermission timed out (deny): requestId=${requestId}`,
       );
-      settle({ decision: "deny", scope: "once", cancelled: true }, "timeout");
+      settle(
+        { decision: "deny", scope: "once", cancelled: true, unansweredReason: "timeout" },
+        "timeout",
+      );
     }, MAX_WAIT);
   });
 }
@@ -566,6 +645,7 @@ export async function handleToolPermission(
   sessionId: string | undefined,
   workspacePath: string | undefined,
   _request: any,
+  extra?: InteractivePromptCallExtra,
 ): Promise<McpToolResult> {
   if (!sessionId) {
     return {
@@ -625,7 +705,8 @@ export async function handleToolPermission(
         await persistInteractivePromptToolResult({ sessionId: sid, toolUseId, result, isError });
         broadcastMessageLogged(sid, workspacePath ?? "");
       },
-      waitForAnswer: ({ sessionId: sid, requestId }) => waitForToolPermissionAnswer(sid, requestId),
+      waitForAnswer: ({ sessionId: sid, requestId }) =>
+        waitForToolPermissionAnswer(sid, requestId, extra?.signal),
       setWaitingStatus: (sid) => {
         getSessionStateManager()
           .updateActivity({ sessionId: sid, status: "waiting_for_input" })
@@ -639,24 +720,74 @@ export async function handleToolPermission(
           isCliSession,
           stateManager: getSessionStateManager(),
         }).catch(() => {});
+        // Symmetric with notifyBlocked below.
+        void setSessionPendingPrompt(sid, false);
       },
       savePattern: async (wp, pattern) => {
         await ClaudeSettingsManager.getInstance().addAllowedTool(wp, pattern);
       },
       notifyBlocked: ({ sessionId: sid, workspacePath: wp }) => {
         notificationService.showBlockedNotification(sid, sessionTitle, "permission", wp ?? "");
-        TrayManager.getInstance().onPromptCreated(sid);
+        // A permission prompt blocks the session exactly like a question does.
+        // This previously only told the tray, so the sidebar and mobile showed a
+        // CLI session waiting on a permission as merely running -- the mirror of
+        // the AskUserQuestion gap. Persisting also notifies the tray.
+        void setSessionPendingPrompt(sid, true);
       },
       log: (m) => console.log(`[MCP Server] ${m}`),
     },
   );
 }
 
+/**
+ * Record an approved commit against the session's tracker items.
+ *
+ * A commit the user approved is their sign-off on the work, so when its message
+ * closes linked items ("Fixes NIM-123") the session is complete too. Agents are
+ * barred from writing `done` or `complete` themselves; this is the one path that
+ * has a human's approval behind it, so it writes both rather than leaving
+ * finished work parked in `in-review` / `validating` forever.
+ *
+ * Fire-and-forget: a linking failure must not fail the commit that succeeded.
+ */
+async function linkCommitToTrackerItems(
+  commitHash: string,
+  commitMessage: string,
+  sessionId: string,
+  workspacePath: string
+): Promise<void> {
+  try {
+    const { commitTrackerLinker } = await import(
+      "../../services/CommitTrackerLinker"
+    );
+    const { closedItemIds } = await commitTrackerLinker.linkBySession(
+      commitHash,
+      commitMessage,
+      sessionId,
+      workspacePath
+    );
+    if (closedItemIds.length === 0) return;
+
+    const { SessionNamingService } = await import(
+      "../../services/SessionNamingService"
+    );
+    await SessionNamingService.getInstance().applySessionMetadata(sessionId, {
+      phase: "complete",
+    });
+    console.log(
+      `[MCP Server] Commit ${commitHash.slice(0, 7)} closed ${closedItemIds.length} tracker item(s); session marked complete`
+    );
+  } catch (err) {
+    console.error("[MCP Server] Commit-tracker linking failed:", err);
+  }
+}
+
 export async function handleGitCommitProposal(
   args: any,
   sessionId: string | undefined,
   workspacePath: string | undefined,
-  request: any
+  request: any,
+  extra?: InteractivePromptCallExtra,
 ): Promise<McpToolResult> {
   type FileToStage =
     | string
@@ -827,9 +958,7 @@ export async function handleGitCommitProposal(
       console.warn("[MCP Server] No commitWindow found to send IPC event");
     }
 
-    // Notify tray of pending prompt
-    TrayManager.getInstance().onPromptCreated(targetSessionId);
-    // Persist pending-prompt bit + push to mobile
+    // Persist pending-prompt bit + push to mobile (this also notifies the tray)
     void setSessionPendingPrompt(targetSessionId, true);
   } catch (error) {
     console.error("[MCP Server] Failed to persist git commit proposal:", error);
@@ -943,15 +1072,20 @@ export async function handleGitCommitProposal(
     }
 
     if (response.action === "committed" && response.commitHash) {
+      // Record the sha -> session link so the Git Log panel can show provenance
+      void SessionCommitService.getInstance().recordCommit({
+        commitSha: response.commitHash,
+        sessionId: targetSessionId,
+        workspaceId: workspacePath,
+      });
+
       // Link commit to tracker items via session (fire-and-forget)
-      import("../../services/CommitTrackerLinker").then(({ commitTrackerLinker }) => {
-        commitTrackerLinker.linkBySession(
-          response.commitHash!,
-          commitMessage,
-          targetSessionId,
-          workspacePath,
-        ).catch((err) => console.error("[MCP Server] Commit-tracker linking failed:", err));
-      }).catch(() => { /* CommitTrackerLinker not available */ });
+      void linkCommitToTrackerItems(
+        response.commitHash,
+        commitMessage,
+        targetSessionId,
+        workspacePath,
+      );
 
       return {
         content: [
@@ -1003,12 +1137,16 @@ export async function handleGitCommitProposal(
   // Wait for user confirmation with DB polling fallback.
   // The IPC listener is the fast path; DB polling catches responses when the
   // transport drops (the bug that caused this tool to hang indefinitely).
+  // NIM-2208: see handleAskUserQuestion — paired with the clear in settle below.
+  if (targetSessionId) noteLiveInteractivePrompt(targetSessionId);
+
   return new Promise((resolve) => {
     const getFilePath = (f: FileToStage) =>
       typeof f === "string" ? f : f.path;
 
     let settled = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let detachCall: (() => void) | null = null;
 
     type CommitResult = {
       action: "committed" | "cancelled" | "error";
@@ -1022,6 +1160,8 @@ export async function handleGitCommitProposal(
     const settle = (result: CommitResult, source: string) => {
       if (settled) return;
       settled = true;
+      detachCall?.();
+      if (targetSessionId) clearLiveInteractivePrompt(targetSessionId);
 
       console.log(
         `[MCP Server] Git commit proposal settled via ${source}: action=${result.action}, hash=${result.commitHash || "none"}`
@@ -1034,16 +1174,21 @@ export async function handleGitCommitProposal(
       ipcMain.removeListener(responseChannel, onResponse);
 
       if (result.action === "committed" && result.commitHash) {
-        // Link commit to tracker items via session (fire-and-forget)
         if (targetSessionId && targetSessionId !== "unknown") {
-          import("../../services/CommitTrackerLinker").then(({ commitTrackerLinker }) => {
-            commitTrackerLinker.linkBySession(
-              result.commitHash!,
-              result.commitMessage || proposalArgs.commitMessage || "",
-              targetSessionId,
-              workspacePath,
-            ).catch((err) => console.error("[MCP Server] Commit-tracker linking failed:", err));
-          }).catch(() => { /* CommitTrackerLinker not available */ });
+          // Record the sha -> session link for the Git Log panel
+          void SessionCommitService.getInstance().recordCommit({
+            commitSha: result.commitHash,
+            sessionId: targetSessionId,
+            workspaceId: workspacePath,
+          });
+
+          // Link commit to tracker items via session (fire-and-forget)
+          void linkCommitToTrackerItems(
+            result.commitHash,
+            result.commitMessage || proposalArgs.commitMessage || "",
+            targetSessionId,
+            workspacePath,
+          );
         }
 
         const filesCount =
@@ -1099,6 +1244,16 @@ export async function handleGitCommitProposal(
     //   `[MCP Server] Registering git commit proposal listener on channel: ${responseChannel}`
     // );
     ipcMain.on(responseChannel, onResponse);
+
+    // #1341 / NIM-2607: heartbeat the call while the proposal is on screen, and
+    // settle as cancelled if the client abandons it -- a stale commit button is
+    // worse than none, because pressing it looks like it committed.
+    detachCall = attachInteractivePromptCall({
+      request,
+      extra,
+      toolName: 'developer_git_commit_proposal',
+      onAbort: () => settle({ action: 'cancelled' }, 'client-abort'),
+    });
 
     // Database polling fallback: if the IPC path fails (e.g., transport drop),
     // poll for a response message written by the durable prompt handler.
@@ -1191,11 +1346,11 @@ const REQUEST_USER_INPUT_FIELD_SCHEMA = {
     "  - singleSelect: options[]; optional allowOther\n" +
     "  - reorder: items[]; optional minItems\n" +
     "  - editText: initialText; optional format ('markdown'|'plain'), placeholder, minLength, maxLength\n" +
-    "  - confirm: optional defaultValue (boolean)",
+    "  - confirm: optional defaultValue (boolean); omit it to make the user pick yes or no before they can submit",
   properties: {
     type: {
       type: "string",
-      enum: ["multiSelect", "singleSelect", "reorder", "editText", "confirm"],
+      enum: [...STRUCTURED_INPUT_FIELD_TYPES],
       description: "Field type discriminator.",
     },
     id: {
@@ -1261,7 +1416,11 @@ const REQUEST_USER_INPUT_FIELD_SCHEMA = {
     maxLength: { type: "integer", minimum: 1, description: "editText: maximum length." },
 
     // confirm.
-    defaultValue: { type: "boolean", description: "confirm: initial state (default false)." },
+    defaultValue: {
+      type: "boolean",
+      description:
+        "confirm: pre-select yes or no. Omitted means unanswered -- submit stays blocked until the user picks, so an untouched field can never be read as a deliberate no.",
+    },
   },
   required: ["type", "id", "label"],
 };
@@ -1313,12 +1472,13 @@ export async function handleRequestUserInput(
   sessionId: string | undefined,
   workspacePath: string | undefined,
   request: any,
+  extra?: InteractivePromptCallExtra,
 ): Promise<McpToolResult> {
   const fields = Array.isArray(args?.fields) ? args.fields : [];
   if (fields.length === 0) {
     return {
       content: [
-        { type: "text", text: "Error: at least one field is required in RequestUserInput" },
+        { type: "text", text: "Error: at least one field is required in PromptForUserInput" },
       ],
       isError: true,
     };
@@ -1403,7 +1563,7 @@ export async function handleRequestUserInput(
   const fallbackResponseChannel = getRequestUserInputFallbackResponseChannel(sessionKey);
 
   console.log(
-    `[MCP Server] RequestUserInput waiting for response: promptId=${promptId}, sessionId=${sessionId}`,
+    `[MCP Server] PromptForUserInput waiting for response: promptId=${promptId}, sessionId=${sessionId}`,
   );
 
   // Update session status so all windows show the pending indicator.
@@ -1416,7 +1576,7 @@ export async function handleRequestUserInput(
     });
     // Persist pending-prompt bit + push to mobile so the sidebar indicator
     // survives renderer reloads and reaches other devices.
-    void setSessionPendingPrompt(sessionId, true);
+    void setSessionPendingPrompt(sessionId, true, "decision");
   }
 
   // NIM-806: do NOT persist a synthetic nimbalyst_tool_use here (same reasoning
@@ -1446,7 +1606,7 @@ export async function handleRequestUserInput(
       }
     }
   } catch (err) {
-    console.warn("[MCP Server] RequestUserInput: failed to notify renderer:", err);
+    console.warn("[MCP Server] PromptForUserInput: failed to notify renderer:", err);
   }
 
   // Show OS notification if the app is backgrounded.
@@ -1464,27 +1624,39 @@ export async function handleRequestUserInput(
       "question",
       workspacePath ?? "",
     );
-    TrayManager.getInstance().onPromptCreated(sessionId);
   }
 
   // NIM-1981: track this waiter so the session-scoped fallback can be accepted
   // safely when it is the only pending prompt for the session.
   notePendingInteractiveWaiter(sessionKey);
+  // NIM-2208: separate registry (see interactivePromptLiveness) so the
+  // stale-prompt reconcile knows this session is genuinely blocked.
+  if (sessionId) noteLiveInteractivePrompt(sessionId);
 
   return new Promise((resolve) => {
     let settled = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let detachCall: (() => void) | null = null;
 
     const settle = async (
       result: { answers?: Record<string, unknown>; cancelled?: boolean; respondedBy?: "desktop" | "mobile" },
       source: string,
+      reason: InteractivePromptSettleReason = 'user-responded',
     ) => {
       if (settled) return;
       settled = true;
+      detachCall?.();
       clearPendingInteractiveWaiter(sessionKey);
+      // See handleAskUserQuestion: an abandoned call takes the waiter down but
+      // leaves the form standing, because the user has decided nothing.
+      const terminalize = shouldTerminalizePrompt({
+        kind: 'request_user_input',
+        reason,
+      });
+      if (sessionId) clearLiveInteractivePrompt(sessionId);
 
       console.log(
-        `[MCP Server] RequestUserInput settled via ${source}: promptId=${promptId}, cancelled=${result?.cancelled}`,
+        `[MCP Server] PromptForUserInput settled via ${source}: promptId=${promptId}, cancelled=${result?.cancelled}`,
       );
 
       if (sessionId) {
@@ -1495,8 +1667,7 @@ export async function handleRequestUserInput(
           isCliSession,
           stateManager: getSessionStateManager(),
         }).catch(() => {});
-        TrayManager.getInstance().onPromptResolved(sessionId);
-        // Persist resolved state + push to mobile.
+        // Persist resolved state + push to mobile (this also notifies the tray).
         void setSessionPendingPrompt(sessionId, false);
         // Notify renderer to clear the pending indicator and remove from atom.
         try {
@@ -1536,7 +1707,7 @@ export async function handleRequestUserInput(
       // tool_use canonical event stays "pending" forever and the widget shows
       // the input mode again on remount. The SDK's later real tool_result is
       // an idempotent re-update on the same row, so duplicates are harmless.
-      if (sessionId) {
+      if (sessionId && terminalize) {
         // Mark before the write so the CLI proxy's continuation-body scrape skips
         // this same tool_use_id (NIM-806 Defect B).
         markToolResultPersisted(sessionId, promptId);
@@ -1559,7 +1730,7 @@ export async function handleRequestUserInput(
             }),
           });
         } catch (err) {
-          console.warn("[MCP Server] Failed to persist synthetic RequestUserInput tool_result:", err);
+          console.warn("[MCP Server] Failed to persist synthetic PromptForUserInput tool_result:", err);
         }
       }
 
@@ -1638,6 +1809,15 @@ export async function handleRequestUserInput(
 
     ipcMain.on(responseChannel, onResponse);
     ipcMain.on(fallbackResponseChannel, onFallbackResponse);
+
+    // #1341 / NIM-2607: heartbeat the call so the client's idle watchdog leaves
+    // the form alone, and settle as cancelled if the client abandons it.
+    detachCall = attachInteractivePromptCall({
+      request,
+      extra,
+      toolName: 'PromptForUserInput',
+      onAbort: () => { void settle({ cancelled: true }, 'client-abort', 'client-abandoned'); },
+    });
 
     // Database polling fallback for resilience to IPC drops.
     if (sessionId) {

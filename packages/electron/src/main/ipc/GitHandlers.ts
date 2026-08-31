@@ -10,8 +10,9 @@ import log from 'electron-log/main';
 import { existsSync } from 'fs';
 import { dirname, join, relative, isAbsolute, resolve } from 'path';
 import { gitOperationLock } from '../services/GitOperationLock';
-import { executeGitCommit } from '../services/GitCommitService';
+import { executeGitCommit, toRepositoryRelativePath, type HunkSelection } from '../services/GitCommitService';
 import { getGitSubprocessEnv, simpleGitWithHookEnv } from '../services/gitEnv';
+import { SessionCommitService } from '../services/SessionCommitService';
 import { safeHandle } from '../utils/ipcRegistry';
 import { findGitRootForFile } from '../services/GitStatusService';
 import { isFileInWorkspaceOrWorktree } from '../utils/workspaceDetection';
@@ -20,6 +21,12 @@ import {
   runGitCommandStreaming,
   withGitOperationLog,
 } from '../services/GitOperationLogService';
+import type { GitOperationLogService } from '../services/GitOperationLogService';
+import {
+  GitStatusRefreshCoordinator,
+  setGitStatusRefreshCoordinator,
+} from '../services/GitStatusRefreshCoordinator';
+import { isReadOnlyGitCommandLine } from '../services/gitCommandClassifier';
 
 function isGitRepository(workspacePath: string): boolean {
   try {
@@ -60,6 +67,39 @@ function findNearestGitRoot(filePath: string): string | null {
     }
     dir = parent;
   }
+}
+
+/**
+ * Turn a rejected push into a sentence the user can act on.
+ *
+ * `git push` buries the one fact that matters under a `To <url>` line and five
+ * wrapped `hint:` lines, and its final line -- `error: failed to push some refs`
+ * -- is IDENTICAL to the one a failing pre-push hook prints. That collision is
+ * what makes "the remote moved, pull first" read as "the pre-push gate broke".
+ * Key off the `! [rejected] ... (<reason>)` line instead, which only a real
+ * rejection emits, and leave hook failures alone.
+ *
+ * The raw output is kept underneath so the menu tooltip still shows everything.
+ */
+export function explainGitPushFailure(
+  rawError: string | undefined,
+  context: { remote: string; branch: string },
+): string | undefined {
+  if (!rawError) return rawError;
+
+  const lower = rawError.toLowerCase();
+  if (!lower.includes('[rejected]')) return rawError;
+
+  const target = `${context.remote}/${context.branch}`;
+  let summary: string | undefined;
+  if (lower.includes('(stale info)')) {
+    // --force-with-lease refusing because the remote advanced since our fetch.
+    summary = `Push rejected: ${target} moved since your last fetch. Pull first, then push again.`;
+  } else if (lower.includes('(fetch first)') || lower.includes('(non-fast-forward)')) {
+    summary = `Push rejected: ${target} has commits you don't have locally. Pull first, then push again.`;
+  }
+
+  return summary ? `${summary}\n\n${rawError}` : rawError;
 }
 
 export function isDetachedHeadState(branch: string | null | undefined): boolean {
@@ -124,11 +164,192 @@ interface GitCommit {
   refs?: string;
 }
 
+export interface GitWorkingChanges {
+  staged: Array<{ path: string; status: string }>;
+  unstaged: Array<{ path: string; status: string }>;
+  untracked: Array<{ path: string }>;
+  conflicted: Array<{ path: string }>;
+}
+
+const UNMERGED_STATUS_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
+
+function appendWorkingChange(
+  changes: Array<{ path: string; status: string }>,
+  code: string,
+  path: string,
+  sourcePath: string | undefined,
+): void {
+  switch (code) {
+    case 'M':
+    case 'T':
+      changes.push({ path, status: 'M' });
+      return;
+    case 'A':
+      changes.push({ path, status: 'A' });
+      return;
+    case 'D':
+      changes.push({ path, status: 'D' });
+      return;
+    case 'R':
+      // A rename is two ordinary rows so the temp-index commit reproduces it:
+      // selecting both stages the deletion of the old path and the new file.
+      if (!sourcePath) throw new Error('Git status rename is missing its source path');
+      changes.push({ path: sourcePath, status: 'D' }, { path, status: 'A' });
+      return;
+    case 'C':
+      // A copy leaves the source in place, so only the new path is a change.
+      // (Git only reports 'C' when copy detection is explicitly enabled.)
+      if (!sourcePath) throw new Error('Git status copy is missing its source path');
+      changes.push({ path, status: 'A' });
+      return;
+    case ' ':
+      return;
+    default:
+      throw new Error(`Unsupported Git status code: ${code}`);
+  }
+}
+
+/** Parse raw status without losing either path of a rename or configured copy. */
+function parseGitStatusPorcelainV1Z(rawStatus: string): GitWorkingChanges {
+  const changes: GitWorkingChanges = {
+    staged: [],
+    unstaged: [],
+    untracked: [],
+    conflicted: [],
+  };
+  const records = rawStatus.split('\0');
+
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (!record) continue;
+    if (record.length < 4 || record[2] !== ' ') {
+      throw new Error('Git returned an invalid porcelain status record');
+    }
+
+    const statusCode = record.slice(0, 2);
+    const indexCode = statusCode[0];
+    const worktreeCode = statusCode[1];
+    const path = record.slice(3);
+    const hasSourcePath = indexCode === 'R'
+      || indexCode === 'C'
+      || worktreeCode === 'R'
+      || worktreeCode === 'C';
+    const sourcePath = hasSourcePath ? records[++index] : undefined;
+
+    if (hasSourcePath && !sourcePath) {
+      throw new Error('Git status rename or copy is missing its source path');
+    }
+    if (UNMERGED_STATUS_CODES.has(statusCode)) {
+      changes.conflicted.push({ path });
+      continue;
+    }
+    if (statusCode === '??') {
+      changes.untracked.push({ path });
+      continue;
+    }
+    if (statusCode === '!!') continue;
+
+    appendWorkingChange(changes.staged, indexCode, path, sourcePath);
+    appendWorkingChange(changes.unstaged, worktreeCode, path, sourcePath);
+  }
+
+  return changes;
+}
+
+/**
+ * Return working changes in the renderer's ordinary M/A/D vocabulary.
+ * Renames and configured copies become a deleted source plus added destination
+ * so the two concrete paths are staged together without widening the status
+ * vocabulary used by consumers.
+ */
+export async function getWorkingChanges(workspacePath: string): Promise<GitWorkingChanges> {
+  const git: SimpleGit = simpleGit(workspacePath, { config: ['core.optionalLocks=false'] });
+  const rawStatus = await git.raw(['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  return parseGitStatusPorcelainV1Z(rawStatus);
+}
+
+/** Restore the selected tracked paths in both HEAD-backed index and worktree. */
+export async function discardGitChanges(
+  workspacePath: string,
+  files: string[],
+  operationLog: GitOperationLogService = getGitOperationLogService(),
+): Promise<{ success: boolean; error?: string }> {
+  let relativeFiles: string[];
+  try {
+    relativeFiles = files.map((file) => toRepositoryRelativePath(workspacePath, file));
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+
+  // Restore both the real index and worktree to HEAD for the selected paths.
+  const result = await runGitCommandStreaming(operationLog, workspacePath, [
+    '--literal-pathspecs',
+    'restore',
+    '--source=HEAD',
+    '--staged',
+    '--worktree',
+    '--',
+    ...relativeFiles,
+  ]);
+  if (result.success) return { success: true };
+
+  if (/['"]?restore['"]? is not a git command/i.test(result.error ?? '')) {
+    // `checkout HEAD --` is the pre-2.23 single-command equivalent: it also
+    // restores both the index and worktree for these literal tracked paths.
+    const fallback = await runGitCommandStreaming(operationLog, workspacePath, [
+      '--literal-pathspecs',
+      'checkout',
+      'HEAD',
+      '--',
+      ...relativeFiles,
+    ]);
+    return fallback.success ? { success: true } : { success: false, error: fallback.error };
+  }
+
+  return { success: false, error: result.error };
+}
+
+/**
+ * Read the branch/ahead-behind snapshot the title bar and Git panel both render.
+ *
+ * `core.optionalLocks=false` tells git to skip the index refresh that would
+ * create `.git/index.lock`, so this read can run concurrently with writes
+ * (commit/rebase/etc.) without queueing behind them on `gitOperationLock`.
+ */
+export async function readBranchStatus(workspacePath: string): Promise<GitStatusResult> {
+  const git: SimpleGit = simpleGit(workspacePath, { config: ['core.optionalLocks=false'] });
+  const status = await git.status();
+  return {
+    branch: normalizeCurrentBranch(status.current) || 'HEAD',
+    ahead: status.ahead || 0,
+    behind: status.behind || 0,
+    hasUncommitted: !status.isClean(),
+  };
+}
+
 /**
  * Register all git-related IPC handlers
  */
 export function registerGitHandlers(): void {
   const operationLog = getGitOperationLogService();
+
+  // Every foreground Git operation converges on the journal, so its terminal
+  // event is the one signal that covers app-owned and agent-observed commands
+  // alike -- including a fetch, which moves `refs/remotes/*` and so never
+  // reaches the branch-ref or index watchers.
+  const statusRefresh = new GitStatusRefreshCoordinator({
+    readStatus: async (workspacePath) =>
+      isGitRepository(workspacePath) ? readBranchStatus(workspacePath) : null,
+  });
+  setGitStatusRefreshCoordinator(statusRefresh);
+  operationLog.onOperationTerminal((workspacePath, entry) => {
+    // An observed read-only command (an agent's `git status`, `git log`) cannot
+    // have moved refs, the index, or the worktree. Refreshing after each one
+    // would re-read status and reload the Git panel for nothing, and agents run
+    // these constantly. App-owned operations always refresh.
+    if (entry.executor === 'shell' && isReadOnlyGitCommandLine(entry.command)) return;
+    void statusRefresh.request(workspacePath);
+  });
 
   safeHandle('git:operation-log:get', async (_event, workspacePath: string) => {
     if (!workspacePath) throw new Error('workspacePath is required');
@@ -153,20 +374,8 @@ export function registerGitHandlers(): void {
       return { branch: '', ahead: 0, behind: 0, hasUncommitted: false };
     }
 
-    // core.optionalLocks=false tells git to skip the index refresh that would
-    // create .git/index.lock, so this read can run concurrently with writes
-    // (commit/rebase/etc.) without queueing behind them on gitOperationLock.
     try {
-      const git: SimpleGit = simpleGit(workspacePath, { config: ['core.optionalLocks=false'] });
-      const status = await git.status();
-      const branch = normalizeCurrentBranch(status.current) || 'HEAD';
-
-      return {
-        branch,
-        ahead: status.ahead || 0,
-        behind: status.behind || 0,
-        hasUncommitted: !status.isClean(),
-      };
+      return await readBranchStatus(workspacePath);
     } catch (error) {
       log.error('Failed to get git status:', error);
       throw error;
@@ -325,7 +534,9 @@ export function registerGitHandlers(): void {
 
           pushArgs.push(remote, branch);
           const result = await runGitCommandStreaming(operationLog, workspacePath, pushArgs);
-          return result.success ? { success: true } : { success: false, error: result.error };
+          return result.success
+            ? { success: true }
+            : { success: false, error: explainGitPushFailure(result.error, { remote, branch }) };
         } catch (error) {
           log.error('[git:push] Failed:', error);
           return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -645,48 +856,7 @@ export function registerGitHandlers(): void {
       // .git/index.lock, allowing this read to run concurrently with writes
       // without queueing on gitOperationLock.
       try {
-        const git: SimpleGit = simpleGit(workspacePath, { config: ['core.optionalLocks=false'] });
-        const status = await git.status();
-
-        // Build staged files list from the various status arrays.
-        // status.staged = files with index changes (modified in index vs HEAD)
-        // status.created = new files added to index (not in HEAD)
-        const staged: Array<{ path: string; status: string }> = [];
-        for (const f of status.staged) {
-          const isDeleted = status.deleted.includes(f);
-          staged.push({ path: f, status: isDeleted ? 'D' : 'M' });
-        }
-        for (const f of status.created) {
-          staged.push({ path: f, status: 'A' });
-        }
-
-        // Build unstaged files list.
-        // status.modified = files with working-tree changes (vs index).
-        // A file CAN appear in both staged and modified -- this means it has
-        // staged changes AND additional unstaged edits on top. We must show
-        // it in both lists so the user sees the full picture.
-        const unstaged: Array<{ path: string; status: string }> = [];
-        for (const f of status.modified) {
-          unstaged.push({ path: f, status: 'M' });
-        }
-        for (const f of status.deleted) {
-          // Only add to unstaged if it's not already there from modified,
-          // and it represents an unstaged deletion (not a staged one).
-          // status.deleted can contain both staged and unstaged deletions.
-          // If a file is in status.staged with 'D', that's a staged deletion.
-          // If it's in status.deleted but NOT in status.staged, it's unstaged.
-          if (!status.staged.includes(f)) {
-            unstaged.push({ path: f, status: 'D' });
-          }
-        }
-
-        // Untracked files
-        const untracked = status.not_added.map(f => ({ path: f }));
-
-        // Conflicted files
-        const conflicted = status.conflicted.map(f => ({ path: f }));
-
-        return { staged, unstaged, untracked, conflicted };
+        return await getWorkingChanges(workspacePath);
       } catch (error) {
         log.error('[git:working-changes] Failed:', error);
         throw error;
@@ -733,7 +903,7 @@ export function registerGitHandlers(): void {
   );
 
   /**
-   * Discard changes to specific files (git checkout -- <files>)
+   * Discard all changes to specific tracked files (index and worktree)
    */
   safeHandle(
     'git:discard-changes',
@@ -743,8 +913,7 @@ export function registerGitHandlers(): void {
       if (!isGitRepository(workspacePath)) return { success: false, error: 'Not a git repository' };
 
       return gitOperationLock.withLock(workspacePath, 'git:discard-changes', async () => {
-        const result = await runGitCommandStreaming(operationLog, workspacePath, ['checkout', '--', ...files]);
-        return result.success ? { success: true } : { success: false, error: result.error };
+        return discardGitChanges(workspacePath, files, operationLog);
       });
     }
   );
@@ -953,9 +1122,16 @@ export function registerGitHandlers(): void {
       _event,
       workspacePath: string,
       message: string,
-      filesToStage: string[]
+      filesToStage: string[],
+      // Optional: when the commit originates from an AI session, recording the
+      // link here means the Git Log panel can attribute it even if the widget
+      // response round-trip never lands.
+      sessionId?: string,
+      // Optional: files to stage down to individual hunks rather than whole.
+      // Absent means every file in `filesToStage` goes in whole, unchanged.
+      hunkSelections?: HunkSelection[]
     ): Promise<{ success: boolean; commitHash?: string; commitDate?: string; error?: string }> => {
-      return withGitOperationLog(
+      const result = await withGitOperationLog(
         operationLog,
         workspacePath,
         ['commit', '-m', message],
@@ -963,9 +1139,20 @@ export function registerGitHandlers(): void {
           logContext: '[git:commit]',
           env: getGitSubprocessEnv(),
           onOutput: (stream, chunk) => operationLog.appendOutput(workspacePath, entry.id, stream, chunk),
+          hunkSelections,
         }),
         result => result.commitHash ? `[${result.commitHash}] commit created` : undefined,
       );
+
+      if (sessionId && result.success && result.commitHash) {
+        void SessionCommitService.getInstance().recordCommit({
+          commitSha: result.commitHash,
+          sessionId,
+          workspaceId: workspacePath,
+        });
+      }
+
+      return result;
     }
   );
 

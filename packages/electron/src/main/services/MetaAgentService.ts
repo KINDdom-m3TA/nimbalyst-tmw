@@ -3,9 +3,11 @@ import { BrowserWindow } from 'electron';
 import { randomUUID } from 'crypto';
 import { safeHandle } from '../utils/ipcRegistry';
 import { SessionManager } from '@nimbalyst/runtime/ai/server';
-import type { AIProviderType } from '@nimbalyst/runtime/ai/server/types';
+import type { AIProviderType, PromptProvenance } from '@nimbalyst/runtime/ai/server/types';
 import { ModelIdentifier } from '@nimbalyst/runtime/ai/server/types';
-import { AISessionsRepository, AgentMessagesRepository, SessionFilesRepository } from '@nimbalyst/runtime';
+import { AISessionsRepository } from '@nimbalyst/runtime/storage/repositories/AISessionsRepository';
+import { AgentMessagesRepository } from '@nimbalyst/runtime/storage/repositories/AgentMessagesRepository';
+import { SessionFilesRepository } from '@nimbalyst/runtime/storage/repositories/SessionFilesRepository';
 import { getSessionStateManager } from '@nimbalyst/runtime/ai/server/SessionStateManager';
 import { getDefaultAIModel } from '../utils/store';
 import { toMillis } from '../utils/timestampUtils';
@@ -19,6 +21,8 @@ import { setMetaAgentToolFns } from '../mcp/metaAgentServer';
 import { computeNotificationSignature } from './metaAgentNotificationSignature';
 import { extractMessageText, extractUserPrompts } from './metaAgentMessageText';
 import type { NotificationOptions, NotificationResult } from './NotificationService';
+import type { MobilePushResult } from '@nimbalyst/runtime/sync/types';
+import { composeNotificationTitle } from '../../shared/notificationTitle';
 
 type SessionStatusValue = 'idle' | 'running' | 'waiting_for_input' | 'error' | 'interrupted';
 type PromptType = 'permission_request' | 'ask_user_question_request' | 'exit_plan_mode_request';
@@ -126,6 +130,63 @@ type ShowNotificationWithResult = (
   options: NotificationOptions
 ) => Promise<NotificationResult>;
 
+/**
+ * Injected rather than imported: `SyncManager` pulls in the runtime barrel, the
+ * window manager and the Stytch client, and this service is imported by a lot of
+ * tests that have no business loading any of that.
+ */
+type RequestMobilePush = (
+  sessionId: string,
+  title: string,
+  body: string,
+  options: { force?: boolean; reason?: string }
+) => Promise<MobilePushResult | null>;
+
+/** Notification-only bound for the reinjected original task text. The stored,
+ *  returned `SessionResultData.originalPrompt` value itself stays unbounded --
+ *  only the text appended into a `[Child Session Update]` notification (which
+ *  lands directly in the parent's own prompt queue) is capped. Fixed, not
+ *  user-configurable, matching the other hardcoded bounds nearby
+ *  (500 chars for lastResponse, 2,000 chars/message for recentMessages). */
+const CHILD_NOTIFICATION_ORIGINAL_PROMPT_MAX_CHARS = 2_000;
+
+function truncateNotificationPreview(
+  text: string,
+  maxChars: number = CHILD_NOTIFICATION_ORIGINAL_PROMPT_MAX_CHARS,
+): { text: string; truncated: boolean } {
+  if (text.length <= maxChars) {
+    return { text, truncated: false };
+  }
+
+  const marker = '…[original task truncated; call get_session_result for the complete prompt]…';
+  const keepChars = Math.max(0, maxChars - marker.length);
+  const headChars = Math.ceil(keepChars * (13 / 19));
+  const tailChars = keepChars - headChars;
+
+  // Avoid splitting a UTF-16 surrogate pair at either cut point.
+  let headEnd = headChars;
+  if (headEnd > 0 && headEnd < text.length) {
+    const code = text.charCodeAt(headEnd - 1);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      headEnd -= 1;
+    }
+  }
+  let tailStart = text.length - tailChars;
+  if (tailStart > 0 && tailStart < text.length) {
+    // If the tail's first kept unit is a lone low surrogate (its high-surrogate
+    // partner falls in the excluded middle region), advance past it instead of
+    // starting the tail mid-pair.
+    const code = text.charCodeAt(tailStart);
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      tailStart += 1;
+    }
+  }
+
+  const head = text.slice(0, headEnd);
+  const tail = tailChars > 0 ? text.slice(tailStart) : '';
+  return { text: `${head}${marker}${tail}`, truncated: true };
+}
+
 export class MetaAgentService {
   private static instance: MetaAgentService | null = null;
   private starting: Promise<void> | null = null;
@@ -137,6 +198,7 @@ export class MetaAgentService {
   private notificationSignatures = new Map<string, string>();
   private ipcHandlersRegistered = false;
   private showNotificationWithResult: ShowNotificationWithResult | null = null;
+  private requestMobilePush: RequestMobilePush | null = null;
 
   private constructor() {}
 
@@ -159,7 +221,11 @@ export class MetaAgentService {
     );
   }
 
-  private async persistSyntheticInputMessage(sessionId: string, prompt: string): Promise<void> {
+  private async persistSyntheticInputMessage(
+    sessionId: string,
+    prompt: string,
+    promptProvenance?: PromptProvenance,
+  ): Promise<void> {
     await AgentMessagesRepository.create({
       sessionId,
       source: 'nimbalyst-meta-agent',
@@ -167,12 +233,14 @@ export class MetaAgentService {
       content: prompt,
       createdAt: new Date(),
       searchable: true,
+      metadata: promptProvenance ? { promptProvenance } : undefined,
     });
   }
 
   public async start(
     aiService: AIService,
-    showNotificationWithResult: ShowNotificationWithResult
+    showNotificationWithResult: ShowNotificationWithResult,
+    requestMobilePush?: RequestMobilePush
   ): Promise<void> {
     if (this.started) {
       return;
@@ -186,6 +254,7 @@ export class MetaAgentService {
     this.starting = (async () => {
       this.aiService = aiService;
       this.showNotificationWithResult = showNotificationWithResult;
+      this.requestMobilePush = requestMobilePush ?? null;
       this.sessionManager = new SessionManager();
       await this.sessionManager.initialize();
 
@@ -202,8 +271,8 @@ export class MetaAgentService {
           this.getSessionResultJson(targetSessionId, workspaceId, options),
         listQueuedPrompts: (_metaSessionId, workspaceId, targetSessionId, options) =>
           this.listQueuedPromptsJson(targetSessionId, workspaceId, options),
-        sendPrompt: (_metaSessionId, workspaceId, targetSessionId, prompt) =>
-          this.sendPromptToSession(targetSessionId, workspaceId, prompt),
+        sendPrompt: (metaSessionId, workspaceId, targetSessionId, prompt, interrupt) =>
+          this.sendPromptToSession(metaSessionId, targetSessionId, workspaceId, prompt, interrupt),
         notifyUser: (callerSessionId, workspaceId, args) =>
           this.notifyUserJson(callerSessionId, workspaceId, args),
         respondToPrompt: (_metaSessionId, workspaceId, args) =>
@@ -610,10 +679,15 @@ export class MetaAgentService {
     const shouldBypassExecution = this.shouldBypassChildAgentExecutionForTests();
 
     if (initialPrompt) {
+      const promptProvenance: PromptProvenance = {
+        actor: 'agent',
+        origin: 'session-orchestration',
+        originSessionId: metaSessionId,
+      };
       if (shouldBypassExecution) {
-        await this.persistSyntheticInputMessage(sessionId, initialPrompt);
+        await this.persistSyntheticInputMessage(sessionId, initialPrompt, promptProvenance);
       } else {
-        await this.aiService.queuePromptForSession(sessionId, initialPrompt);
+        await this.aiService.queuePromptForSession(sessionId, initialPrompt, undefined, { promptProvenance });
       }
     }
 
@@ -643,7 +717,7 @@ export class MetaAgentService {
     }
 
     if (initialPrompt && !shouldBypassExecution) {
-      await this.aiService.triggerQueuedPromptProcessingForSession(sessionId, worktreePath || workspaceId);
+      await this.aiService.triggerQueuedPromptProcessingForSession(sessionId, worktreePath || workspaceId, 'meta-agent');
     }
 
     return {
@@ -902,7 +976,23 @@ export class MetaAgentService {
     }, null, 2);
   }
 
-  private async sendPromptToSession(sessionId: string, workspaceId: string, prompt: string): Promise<string> {
+  /**
+   * Queue a prompt for another session, optionally stopping whatever that
+   * session is doing first.
+   *
+   * `interrupt` is the tool-side twin of the transcript's send-now lightning
+   * bolt (SessionTranscript.handleSendNowQueuedPrompt): stop the turn, then
+   * drive the queue. Like the button, it drains FIFO -- if the target already
+   * has pending rows, the interrupt delivers the oldest one, not necessarily
+   * this prompt.
+   */
+  private async sendPromptToSession(
+    originSessionId: string,
+    sessionId: string,
+    workspaceId: string,
+    prompt: string,
+    interrupt = false,
+  ): Promise<string> {
     if (!this.aiService) {
       throw new Error('AI service not initialized');
     }
@@ -919,27 +1009,66 @@ export class MetaAgentService {
     const shouldBypassExecution = this.shouldBypassChildAgentExecutionForTests();
     const statusRow = await this.getSessionStatusRow(sessionId, workspaceId);
     const statusBeforeQueue = (statusRow?.status || 'idle') as SessionStatusValue;
+    const promptProvenance: PromptProvenance = {
+      actor: 'agent',
+      origin: 'session-orchestration',
+      originSessionId,
+    };
 
     if (shouldBypassExecution) {
-      await this.persistSyntheticInputMessage(sessionId, normalizedPrompt);
+      await this.persistSyntheticInputMessage(sessionId, normalizedPrompt, promptProvenance);
       return JSON.stringify({
         sessionId,
         queuedPromptId: null,
         prompt: normalizedPrompt,
         statusBeforeQueue,
         processingTriggered: false,
+        interrupted: false,
         bypassedExecutionForTest: true,
       }, null, 2);
     }
 
-    const queued = await this.aiService.queuePromptForSession(sessionId, normalizedPrompt);
+    // Queue before interrupting: the drive that follows the interrupt has to
+    // find this row, and an interrupt that lands first would just idle the
+    // session with nothing waiting for it.
+    const queued = await this.aiService.queuePromptForSession(
+      sessionId,
+      normalizedPrompt,
+      undefined,
+      { promptProvenance },
+    );
     const status = (statusRow?.status || 'idle') as SessionStatusValue;
-    const processingTriggered = status === 'idle' || status === 'interrupted' || status === 'error';
+    const workspaceForDrive = session.worktreePath || session.workspacePath || workspaceId;
+    const idleEnoughToDrive = status === 'idle' || status === 'interrupted' || status === 'error';
+    const interruptSkippedReason = interrupt
+      ? this.reasonToSkipInterrupt(status, session.provider)
+      : null;
+    const shouldInterrupt = interrupt && !interruptSkippedReason;
 
-    if (processingTriggered) {
+    let processingTriggered = idleEnoughToDrive;
+    let interrupted = false;
+    let interruptMethod: string | null = null;
+    let driveOutcome: string | null = null;
+
+    if (shouldInterrupt) {
+      const result = await this.aiService.interruptCurrentTurn(sessionId);
+      interrupted = result.success;
+      interruptMethod = result.method ?? null;
+      // The drive runs even when the interrupt found no live provider: a session
+      // that only nominally reports running has nothing else coming to trigger it.
+      //
+      // 'send-now' rather than 'meta-agent' so a closed project window can be
+      // opened to receive the prompt, matching the lightning bolt.
+      const outcome = await this.aiService.driveQueuedPrompts(sessionId, workspaceForDrive, 'send-now');
+      driveOutcome = outcome.kind;
+      // A deferred drive is not a failure: the interrupt may not have settled
+      // yet, and the driver arms a session-idle wake to dispatch when it does.
+      processingTriggered = outcome.kind === 'dispatched';
+    } else if (idleEnoughToDrive) {
       await this.aiService.triggerQueuedPromptProcessingForSession(
         sessionId,
-        session.worktreePath || session.workspacePath || workspaceId
+        workspaceForDrive,
+        'meta-agent'
       );
     }
 
@@ -949,7 +1078,32 @@ export class MetaAgentService {
       prompt: queued.prompt,
       statusBeforeQueue: status,
       processingTriggered,
+      interrupted,
+      ...(interruptMethod ? { interruptMethod } : {}),
+      ...(interruptSkippedReason ? { interruptSkippedReason } : {}),
+      ...(driveOutcome ? { driveOutcome } : {}),
     }, null, 2);
+  }
+
+  /**
+   * Why an `interrupt: true` request must not actually interrupt.
+   *
+   * - `waiting_for_input`: the session is parked on an interactive prompt.
+   *   Interrupting aborts the question instead of answering it; the caller
+   *   wants respond_to_prompt.
+   * - `claude-code-cli`: a terminal-backed session drains its queue through the
+   *   CLI flush path, not the provider queue driver. The transcript hides the
+   *   lightning bolt for these for the same reason.
+   * - Already idle: there is no turn in the way, so the ordinary drive applies.
+   */
+  private reasonToSkipInterrupt(
+    status: SessionStatusValue,
+    provider: string | undefined,
+  ): string | null {
+    if (provider === 'claude-code-cli') return 'terminal-session';
+    if (status === 'waiting_for_input') return 'waiting-for-input';
+    if (status === 'idle' || status === 'interrupted' || status === 'error') return 'session-not-running';
+    return null;
   }
 
   private async notifyUserJson(
@@ -977,21 +1131,42 @@ export class MetaAgentService {
     }
 
     const boundedBody = body.length > 1000 ? `${body.slice(0, 997)}...` : body;
+    const rawSourceLabel = session.title || session.provider || `Session ${targetSessionId.slice(0, 8)}`;
+    const sourceLabel = rawSourceLabel.trim().slice(0, 60) || `Session ${targetSessionId.slice(0, 8)}`;
     const result = await this.showNotificationWithResult({
-      title: title.length > 120 ? `${title.slice(0, 117)}...` : title,
+      title: composeNotificationTitle(sourceLabel, title),
       body: boundedBody,
+      kind: 'agent-complete',
       sessionId: targetSessionId,
       workspacePath: session.workspacePath,
+      sourceLabel,
       provider: 'agent',
       bypassFocusCheck: args.bypassFocusCheck === true,
       silent: args.silent === true,
       urgency: args.urgency || 'normal',
     });
 
+    // Forced (#1268): `urgency: 'critical'` is the agent saying the human is
+    // needed now, which is exactly the case the server's presence suppression
+    // must not swallow. Anything below critical stays desktop-only.
+    const isUrgent = args.urgency === 'critical';
+    let mobilePush: MobilePushResult | null = null;
+    if (isUrgent && this.requestMobilePush) {
+      try {
+        mobilePush = await this.requestMobilePush(targetSessionId, sourceLabel, boundedBody, {
+          force: true,
+          reason: 'notify_urgent',
+        });
+      } catch (err) {
+        console.warn('[MetaAgentService] notify_user mobile push failed:', err);
+      }
+    }
+
     return JSON.stringify({
       tool: 'notify_user',
-      deliveryChannel: 'os_notification',
-      mobilePushAttempted: false,
+      deliveryChannel: mobilePush ? 'os_notification+mobile_push' : 'os_notification',
+      mobilePushAttempted: mobilePush !== null,
+      mobilePush: mobilePush ?? undefined,
       sessionId: targetSessionId,
       bypassFocusCheck: args.bypassFocusCheck === true,
       result,
@@ -1153,7 +1328,18 @@ export class MetaAgentService {
       }
 
       const notification = this.buildNotificationMessage(eventType, result);
-      await this.aiService.queuePromptForSession(session.createdBySessionId, notification);
+      await this.aiService.queuePromptForSession(
+        session.createdBySessionId,
+        notification,
+        undefined,
+        {
+          promptProvenance: {
+            actor: 'agent',
+            origin: 'child-session-update',
+            originSessionId: session.id,
+          },
+        },
+      );
 
       // Do not auto-re-drive the parent when THIS child settle was an error.
       // The [Child Session Update] notification above is still queued for
@@ -1162,7 +1348,7 @@ export class MetaAgentService {
       // child settles instantly into 'error' every cycle). Native children
       // settle 'session:completed', so this gate is a no-op for them.
       if (eventType !== 'session:error' && (metaStatus === 'idle' || metaStatus === 'interrupted' || metaStatus === 'error')) {
-        await this.aiService.triggerQueuedPromptProcessingForSession(metaSession.id, metaSession.workspacePath);
+        await this.aiService.triggerQueuedPromptProcessingForSession(metaSession.id, metaSession.workspacePath, 'meta-agent');
       }
     } catch (error) {
       console.error(`[MetaAgentService] handleChildSessionEvent failed for session ${sessionId} (${eventType}):`, error);
@@ -1181,7 +1367,9 @@ export class MetaAgentService {
     ];
 
     if (result.originalPrompt) {
-      lines.push(`Original task: ${result.originalPrompt}`);
+      const preview = truncateNotificationPreview(result.originalPrompt);
+      const label = preview.truncated ? 'Original task preview' : 'Original task';
+      lines.push(`${label}: ${preview.text}`);
     }
     if (result.recentMessages.length > 0) {
       lines.push('Recent messages:');

@@ -449,10 +449,10 @@ public struct SessionListView: View {
             appState.configureVoiceAgent(forProject: project.id)
             resolveDefaultModel()
         }
-        .onChange(of: appState.availableModels) { _ in
+        .onChange(of: appState.availableModels) { _, _ in
             resolveDefaultModel()
         }
-        .onChange(of: project.id) { _ in
+        .onChange(of: project.id) { _, _ in
             cancellable?.cancel()
             startObserving()
             loadExpandedState()
@@ -571,7 +571,7 @@ public struct SessionListView: View {
                         .foregroundStyle(.secondary)
                     Text("No Sessions")
                         .font(.title3)
-                    Text("Start a session in Nimbalyst on your Mac, or tap + to create one.")
+                    Text("Start a session in Nimbalyst on your computer, or tap + to create one.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

@@ -15,6 +15,8 @@ A concise reference of all features in the product. Keep this up to date as feat
 - **Browser** (`.html`, `.htm`, `.browser.json`) -- native Chromium `WebContentsView` (not an iframe, so frame-blocking sites load), URL bar / back-forward / reload, workspace-scoped `nim-preview://` local preview, source-mode toggle, and agentic control AI tools (navigate, click, type, evaluate, scroll, get_page_info, screenshot) over editor-backed or agent-owned headless sessions
 - **Image generation project editor** (`.imgproj`) -- multi-variant AI image generation with iterative refinement
 - **Astro editor** (`.astro`) -- schema-aware frontmatter form header
+- **Animation editor** (`.anim.json`) -- step-based animated explainer diagrams with a scrubbable timeline, drag-to-retime step boundaries, click-a-part-to-chat selection, and HTML/GIF/MP4 export
+- **Project Canvas** (`.canvas`) -- infinite JSON Canvas board whose cards mount the real editor for the file or shared document they reference, with frames, stickies, labeled edges, and zoom-driven card mounting
 - **Image viewer** (`.png`, `.jpg`, `.gif`, `.svg`, `.webp`, `.bmp`, `.ico`)
 
 ### Cross-Editor Features
@@ -226,6 +228,7 @@ A concise reference of all features in the product. Keep this up to date as feat
 - Mobile voice mode (soft chime + haptic cue when the session connects and it's your turn to talk)
 - Mobile voice: asking the voice agent to start a new session opens it automatically on the device that asked
 - Mobile voice: the floating mic shows a tool-call indicator (animated ring + tool-icon badge) while the agent runs a tool
+- Session fleet Live Activity — Lock Screen card and Dynamic Island mirroring the macOS menu bar strip, with the sessions waiting on you ranked by wait time; tap a row to open that session. Server-started, so it appears without opening the app; dims when the Mac stops reporting, ends when the fleet goes quiet. Toggled in Settings
 
 ## Mobile (Android)
 
@@ -246,22 +249,11 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 
 ## Collaboration
 
-> **Encryption posture.** Team collaboration data (trackers, documents, doc-index
-> titles) is **encrypted in transit and at rest, isolated per team, and operated
-> by Nimbalyst**. New teams use server-managed custody (Epic H2 — the server
-> holds a per-team KMS-wrapped key and encrypts at rest, enabling
-> web/CLI/cloud-agent access). Existing `legacy-e2e` teams are transitional and
-> migrate silently, one-way, after an org-wide local plaintext recovery sweep.
-> **Server-managed team
-> data is not zero-knowledge.** **Personal sync** (your desktop ↔ phone: sessions,
-> prompts, drafts, settings, personal index) **stays zero-knowledge** — the server
-> never holds those keys. Customers who require true zero-knowledge for team data
-> run the software on their own infrastructure (self-host).
+> **Encryption posture.** Team collaboration data (trackers, documents, doc-index titles) is **encrypted in transit and at rest, isolated per team, and operated by Nimbalyst**. The server holds a per-team KMS-wrapped key and encrypts at rest, which is what enables web, CLI, and cloud-agent access. This is the only supported mode for team data, and **it is not zero-knowledge**. **Personal sync** (your desktop ↔ phone: sessions, prompts, drafts, settings, personal index) **stays zero-knowledge** — the server never holds those keys. Customers who require true zero-knowledge for team data run the software on their own infrastructure (self-host).
 
 - Real-time document editing (Lexical + yJS through Cloudflare Workers)
-- Encrypted tracker item sync (zero-knowledge in `legacy-e2e`; server-managed at-rest in H2)
-- Team trust model with ECDH key exchange and key envelopes (legacy-e2e mode)
-- Server-managed per-team encryption keys (Epic H2): KMS-wrapped split-knowledge DEK, admin key-recovery, append-only audit log
+- Encrypted tracker item sync (server-managed, encrypted at rest per team)
+- Server-managed per-team encryption keys: KMS-wrapped split-knowledge DEK, admin key-recovery, append-only audit log
 - Stytch B2B org management
 - Team invite / join / role management
 - Personal org + team org separation
@@ -291,15 +283,20 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 
 ## Tracker System
 
-- Tracker mode (Cmd+T) with list, table, kanban, and tag-board views
+- Tracker mode (Cmd+T) with list, table, grid, kanban, tag-board, and inbox views
 - Kanban columns honor each type's status order from its schema (no hardcoded order)
 - Tag-board view with one column per tag (items appear in every matching column, plus an Untagged column)
-- Saved views: name, save, apply, and delete reusable filter/layout views per workspace
+- Saved views: name, save, apply, and delete reusable filter/layout views per workspace; a view captures the whole table state (columns, widths, per-column filters), and can be shared with the team so a colleague opens the same view
+- Editable spreadsheet grid — virtualized grid where any schema-backed cell edits in place with an editor chosen by the field's type, plus per-column filters, multi-cell paste, and fill-down
+- Collections — `milestone` and `release` items that group other tracker items through a relationship, with member rollups (counts by status, progress) and an "Add to collection" bulk action
+- Triage inbox — a keyboard-driven queue of everything nobody has decided about yet (unassigned, unprioritized, in no collection, still on its initial status), scoped globally or to one type. Assign, prioritize, accept, add to a milestone, snooze, or dismiss without leaving the keyboard; agent-filed items are flagged as proposals. Snoozes are personal
+- Releases as tracker items — create the next release early, associate work with it as it lands, and let the release scripts fill in version, git tag, and date at build time (`nim release finalize`); `nim release notes` renders the release's members as changelog markdown
+- Review lane — `in-review` -> `changes-requested` / `approved` on bugs, tasks, and plans. An AI agent can move work into review but cannot approve it; only a person can
 - Configurable tracker item types (bugs, tasks, architecture docs, decisions, etc.)
 - Tracker sidebar with type counts
 - Item detail panel
 - Unread indicators — a dot on tracker rows/cards (list, kanban, tag board) when an item is new or was changed by someone else since you last viewed it; clears when you open it; your own edits and views sync across your devices (personal channel), and AI-agent edits count as unread
-- Encrypted sync across team members (zero-knowledge in `legacy-e2e`; server-managed at-rest in H2)
+- Encrypted sync across team members (server-managed, encrypted at rest per team)
 - Inline `#type` items in markdown (TrackerPlugin)
 - Live tracker reference links — `#` in a document references an existing tracker item, inserting a chip that shows the item's current status and title (resolved live, not a snapshot) and links to it; serialized as portable `[NIM-123](nimbalyst://NIM-123)` markdown; the same link renders as a live chip in the AI transcript; one-click "convert to tracked reference" turns a legacy inline embed into a real tracked item plus a reference chip
 - Tracker schema overrides in Trackers settings -- customize a built-in type into `.nimbalyst/trackers`, edit an existing override, reset back to the built-in default, and resync the local database mirror when schema files drift
@@ -340,6 +337,7 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 
 ### Built-in Extensions
 
+- Animation — step-based animated explainer diagrams, with an authoring skill and an `/animate` command
 - Automations
 - Astro Editor
 - CSV Spreadsheet
@@ -354,6 +352,7 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 - Nimbalyst Memory — local project-knowledge brain (hybrid search + facts) for the voice and coding agents
 - PDF Viewer
 - Planning
+- Project Canvas — authoring skill for `.canvas` boards; the editor itself is built in
 - Project Graph — navigable whole-project graph of plans, trackers, sessions, commits, and files, with a horizontally scrollable **Timeline mode** (phase-colored lifecycle bars per item; collapse items into per-tag activity lanes)
 - SQLite Browser
 
@@ -385,6 +384,7 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 - Claude Code CLI sessions: mid-session model switching from the model picker (drives the CLI's `/model` command; idle turns only)
 - Claude Fable 5 selectable across all Claude providers (chat, Claude Agent, Claude Code CLI)
 - Claude Sonnet 5 selectable across all Claude providers, with the previous Sonnet 4.6 still selectable as a pinned choice
+- Claude Opus 5 selectable across all Claude providers and the default Claude model, with the previous Opus 4.8 still selectable as a pinned choice
 
 ## Settings
 
@@ -415,7 +415,7 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 - Session quick open (Cmd+L) — Shift+Tab searches message contents, not just titles
 - Prompt quick open (Cmd+Shift+L)
 - Content search (Cmd+Shift+F)
-- Global semantic search (Cmd+Shift+O) — a Quick Open "Search" tab that finds any tracker or document by meaning (hybrid semantic + keyword), powered by the Nimbalyst Memory extension; appears only when that extension is enabled. Optionally indexes AI sessions too (off by default)
+- Memory search (Cmd+Shift+O) — a Quick Open "Memory" tab with Docs, Trackers, and Sessions scopes for hybrid semantic + keyword lookup, powered by the Nimbalyst Memory extension; appears only when that extension is enabled. Tracker results retain issue keys, status, type filters, and exact-match lookup; AI session indexing is optional and off by default
 - Shared team document quick open (Cmd+Shift+D) — a team-gated Quick Open tab with name filtering, unread/favorite cues, and direct navigation into Shared Documents
 - Mouse back/forward button support
 - Breadcrumb navigation
@@ -426,6 +426,7 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 - Multi-window support with per-project state persistence
 - Project Manager (Cmd+P)
 - System tray with session status and click-to-navigate
+- macOS menu bar fleet strip — names a session for a few seconds as it starts, finishes, blocks or fails, flags a stalled one, and disappears when nothing is running ("Show Fleet Status" in the tray menu)
 - Dock badge for sessions needing attention
 - OS notifications for session events
 - Sound notifications

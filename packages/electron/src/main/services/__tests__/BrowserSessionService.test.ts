@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Pure-function tests for BrowserSessionService helpers.
  *
@@ -11,7 +12,43 @@ import {
   clampBounds,
   isAllowedBrowserUrl,
   resolveBrowserPartitionName,
+  scaleBoundsForZoom,
+  selectIdleHeadlessSessions,
 } from '../BrowserSessionService';
+
+describe('scaleBoundsForZoom', () => {
+  const cssRect = { x: 200, y: 100, width: 800, height: 600 };
+
+  it('passes bounds through unchanged at 100%', () => {
+    expect(scaleBoundsForZoom(cssRect, 1)).toEqual(cssRect);
+  });
+
+  it('scales origin and size up when the window is zoomed in', () => {
+    // At 125% the renderer's CSS grid is 1.25x smaller than the window's
+    // device-independent grid, so the native view sits further out and larger.
+    expect(scaleBoundsForZoom(cssRect, 1.25)).toEqual({
+      x: 250,
+      y: 125,
+      width: 1000,
+      height: 750,
+    });
+  });
+
+  it('scales down when the window is zoomed out', () => {
+    expect(scaleBoundsForZoom(cssRect, 0.5)).toEqual({
+      x: 100,
+      y: 50,
+      width: 400,
+      height: 300,
+    });
+  });
+
+  it('falls back to 1x for an unusable zoom factor', () => {
+    for (const factor of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(scaleBoundsForZoom(cssRect, factor)).toEqual(cssRect);
+    }
+  });
+});
 
 describe('clampBounds', () => {
   const container = { width: 1000, height: 800 };
@@ -95,6 +132,64 @@ describe('isAllowedBrowserUrl', () => {
     expect(isAllowedBrowserUrl(null)).toBe(false);
     // @ts-expect-error
     expect(isAllowedBrowserUrl(undefined)).toBe(false);
+  });
+});
+
+describe('selectIdleHeadlessSessions', () => {
+  const TTL = 5 * 60 * 1000;
+  const NOW = 1_000_000_000;
+
+  it('reaps a headless session idle past the TTL', () => {
+    expect(
+      selectIdleHeadlessSessions(
+        [{ sessionId: 'agent-preview:1', headless: true, lastUsedAt: NOW - TTL - 1 }],
+        NOW,
+        TTL,
+      ),
+    ).toEqual(['agent-preview:1']);
+  });
+
+  it('reaps exactly at the TTL boundary', () => {
+    expect(
+      selectIdleHeadlessSessions(
+        [{ sessionId: 'agent-preview:1', headless: true, lastUsedAt: NOW - TTL }],
+        NOW,
+        TTL,
+      ),
+    ).toEqual(['agent-preview:1']);
+  });
+
+  it('spares a headless session used within the TTL', () => {
+    expect(
+      selectIdleHeadlessSessions(
+        [{ sessionId: 'agent-preview:1', headless: true, lastUsedAt: NOW - TTL + 1 }],
+        NOW,
+        TTL,
+      ),
+    ).toEqual([]);
+  });
+
+  it('never reaps editor-backed sessions, however old', () => {
+    expect(
+      selectIdleHeadlessSessions(
+        [{ sessionId: 'browser-virtual:tab-1', headless: false, lastUsedAt: 0 }],
+        NOW,
+        TTL,
+      ),
+    ).toEqual([]);
+  });
+
+  it('reaps only the idle headless sessions from a mixed set', () => {
+    const candidates = [
+      { sessionId: 'browser-virtual:tab-1', headless: false, lastUsedAt: 0 },
+      { sessionId: 'agent-preview:stale', headless: true, lastUsedAt: NOW - TTL * 3 },
+      { sessionId: 'agent-preview:active', headless: true, lastUsedAt: NOW - 1000 },
+    ];
+    expect(selectIdleHeadlessSessions(candidates, NOW, TTL)).toEqual(['agent-preview:stale']);
+  });
+
+  it('returns nothing for an empty session set', () => {
+    expect(selectIdleHeadlessSessions([], NOW, TTL)).toEqual([]);
   });
 });
 

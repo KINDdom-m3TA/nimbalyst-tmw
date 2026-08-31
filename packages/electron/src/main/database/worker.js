@@ -21,6 +21,7 @@ const path = require('path');
 const inspector = require('node:inspector');
 const { performance } = require('node:perf_hooks');
 const { serializeWorkerError } = require('./workerErrorSerialization');
+const { planInitFailureResponse } = require('./pgliteInitRecovery');
 
 // ---------------------------------------------------------------------------
 // CPU profile auto-capture for the PGLite worker.
@@ -458,9 +459,19 @@ class PGLiteWorker {
         console.warn('[PGLite Worker] Could not remove stale postmaster.pid:', e.message);
       }
 
-      // Attempt to initialize database, with automatic recovery on corruption
+      // Attempt to initialize database, with automatic recovery on corruption.
+      //
+      // The first failure never touches the user's data. `RuntimeError` is any
+      // WASM abort -- memory pressure, a bad allocation, an interrupted load --
+      // and treating one as proof of on-disk damage silently emptied
+      // established installs, which then came up looking healthy because the
+      // project list lives in electron-store rather than the database (#1347).
+      // So: try, retry the same directory, and only then consider renaming.
       let initAttempt = 0;
-      const maxAttempts = 2;
+      const maxAttempts = 3;
+      const renameAllowedFromAttempt = 2;
+      /** Set to the backup path only if we actually renamed the database aside. */
+      let renamedAsideDir = null;
 
       while (initAttempt < maxAttempts) {
         initAttempt++;
@@ -492,31 +503,75 @@ class PGLiteWorker {
 
           console.error(`[PGLite Worker] Database initialization failed (attempt ${initAttempt}/${maxAttempts}):`, errorStr);
 
-          // Check if this looks like corruption/abort (not a real lock)
-          const isCorruptionError = errorStr.includes('Aborted') || errorName === 'RuntimeError';
+          // Decision lives in pgliteInitRecovery.js so it can be tested
+          // without standing up a real PGLite.
+          const plan = planInitFailureResponse({
+            errorMessage: errorStr,
+            errorName,
+            attempt: initAttempt,
+            maxAttempts,
+            renameAllowedFromAttempt,
+            dataDirExists: fs.existsSync(this.dataDir),
+            // `isFreshDb` was captured before we touched anything, so it is
+            // the only trustworthy answer to "is this directory ours or the
+            // user's?" -- by now a failed attempt may have created it.
+            dataDirPredatesLaunch: !isFreshDb,
+          });
 
-          if (isCorruptionError && initAttempt < maxAttempts && fs.existsSync(this.dataDir)) {
-            // Database appears corrupted - move it and try fresh
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const backupDir = `${this.dataDir}.backup-${timestamp}`;
-
-            console.log('[PGLite Worker] Database appears corrupted, moving to backup:', backupDir);
-            console.log('[PGLite Worker] Creating fresh database...');
-
-            try {
-              fs.renameSync(this.dataDir, backupDir);
-              console.log('[PGLite Worker] Corrupted database backed up successfully');
-              console.log('[PGLite Worker] User data is preserved at:', backupDir);
-              // Continue to next attempt with fresh database directory
-              continue;
-            } catch (backupError) {
-              console.error('[PGLite Worker] Failed to backup corrupted database:', backupError);
-              // Fall through to re-throw the original error
+          if (plan.action === 'rethrow') {
+            if (plan.reason === 'preexisting-data-needs-consent') {
+              // Deliberate dead end. This database was here before we started,
+              // so it is the user's, and nothing readable from in here tells a
+              // corrupt one apart from a stumble. Failing up shows the recovery
+              // dialog with the backups we hold; renaming would hand back an
+              // app that starts empty and looks fine (#1347).
+              console.error(
+                '[PGLite Worker] Refusing to move a database that predates this launch; surfacing for recovery:',
+                this.dataDir,
+              );
+            } else {
+              console.error(`[PGLite Worker] Not recovering (${plan.reason})`);
             }
+            throw dbError;
           }
 
-          // Either not a corruption error, or we failed to recover - re-throw
-          throw dbError;
+          // Release whatever the half-built instance is holding before we point
+          // a second PGlite at the same directory.
+          try {
+            await this.db?.close();
+          } catch (closeError) {
+            console.warn('[PGLite Worker] Could not close failed instance:', closeError?.message || closeError);
+          }
+          this.db = null;
+
+          if (plan.action === 'retry') {
+            console.warn('[PGLite Worker] Init aborted; retrying the same data directory before any recovery');
+            continue;
+          }
+
+          // Repeated aborts on a directory *this launch created* -- an install
+          // that had no database when we started. Nothing on disk here is the
+          // user's, so moving it aside and starting over loses nothing. A
+          // directory that predates this launch never reaches this point.
+          // The launch heartbeat in `initialize.ts` reports the leftover
+          // directory either way, so this stops being invisible to us.
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const backupDir = `${this.dataDir}.backup-${timestamp}`;
+
+          console.log('[PGLite Worker] Half-built database still aborting after a retry, moving aside:', backupDir);
+          console.log('[PGLite Worker] Creating fresh database...');
+
+          try {
+            fs.renameSync(this.dataDir, backupDir);
+            renamedAsideDir = backupDir;
+            console.log('[PGLite Worker] Corrupted database backed up successfully');
+            console.log('[PGLite Worker] User data is preserved at:', backupDir);
+            // Continue to next attempt with fresh database directory
+            continue;
+          } catch (backupError) {
+            console.error('[PGLite Worker] Failed to backup corrupted database:', backupError);
+            throw dbError;
+          }
         }
       }
 
@@ -555,8 +610,10 @@ class PGLiteWorker {
         console.warn('[PGLite Worker] Startup CHECKPOINT failed (non-fatal):', ckptError?.message || ckptError);
       }
 
-      // Check if we recovered from corruption
-      const recovered = initAttempt > 1;
+      // Only a rename counts as recovery. `initAttempt > 1` no longer implies
+      // one: a retry on the same directory leaves the user's data in place and
+      // must not be reported as a corruption recovery.
+      const recovered = renamedAsideDir !== null;
 
       const totalInitTime = performance.now() - initStartTime;
       console.log(`[PGLite Worker] Total initialization took ${totalInitTime.toFixed(0)}ms`);
@@ -568,7 +625,7 @@ class PGLiteWorker {
           message: recovered ? 'Database recovered from corruption' : 'Database initialized successfully',
           dataDir: this.dataDir,
           recovered: recovered,
-          backupLocation: recovered ? `${this.dataDir}.backup-*` : null,
+          backupLocation: renamedAsideDir,
           initTimeMs: Math.round(totalInitTime)
         }
       };
@@ -1230,6 +1287,31 @@ class PGLiteWorker {
       `);
     } catch (error) {
       console.error('[PGLite Worker] Failed to add issue identity columns:', error);
+    }
+
+    // Migration: Add local_key for machine-private tracker numbers (`NIM.12`).
+    // Separate from issue_key because the room owns that column and rejects an
+    // item that already carries a different key. Never leaves this machine.
+    try {
+      const localKeyCheck = await this.db.query(`
+        SELECT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'tracker_items' AND column_name = 'local_key'
+        ) as has_local_key
+      `);
+      const { has_local_key } = localKeyCheck.rows[0] || {};
+      if (!has_local_key) {
+        await this.db.exec(`
+          ALTER TABLE tracker_items ADD COLUMN local_key TEXT;
+        `);
+      }
+      // The unique index is what stops a number being handed out twice, which
+      // is the failure that rolled back both previous attempts.
+      await this.db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tracker_workspace_local_key ON tracker_items(workspace, local_key) WHERE local_key IS NOT NULL;
+      `);
+    } catch (error) {
+      console.error('[PGLite Worker] Failed to add tracker local_key column:', error);
     }
 
     // Migration: Add content, archived, source columns for unified tracker system
@@ -2400,6 +2482,13 @@ class PGLiteWorker {
         CREATE UNIQUE INDEX IF NOT EXISTS idx_tracker_type_defs_ws_type
           ON tracker_type_defs (workspace, type);
       `);
+      // Last shared definition projected onto this workspace's YAML file
+      // (schema version 30). Mirror of SQLite
+      // 0030_tracker_type_defs_synced_model.sql. Added separately so databases
+      // created before team schema sync pick the column up on the next launch.
+      await this.db.exec(`
+        ALTER TABLE tracker_type_defs ADD COLUMN IF NOT EXISTS synced_model TEXT;
+      `);
       console.log('[PGLite Worker] tracker_type_defs table created successfully');
     } catch (error) {
       console.error('[PGLite Worker] Failed to create tracker_type_defs table:', error);
@@ -2806,6 +2895,12 @@ class PGLiteWorker {
         CREATE INDEX IF NOT EXISTS idx_tracker_personal_state_scope
           ON tracker_personal_state (user_email, scope);
       `);
+      // Personal triage snooze (schema version 29). Mirror of SQLite
+      // 0029_tracker_personal_snooze.sql. Added separately so databases created
+      // before the inbox existed pick the column up on the next launch.
+      await this.db.exec(`
+        ALTER TABLE tracker_personal_state ADD COLUMN IF NOT EXISTS snoozed_until BIGINT;
+      `);
       console.log('[PGLite Worker] tracker_personal_state table created successfully');
     } catch (error) {
       console.error('[PGLite Worker] Failed to create tracker_personal_state table:', error);
@@ -2836,6 +2931,33 @@ class PGLiteWorker {
       console.log('[PGLite Worker] tracker_type_navigation table created successfully');
     } catch (error) {
       console.error('[PGLite Worker] Failed to create tracker_type_navigation table:', error);
+      throw error;
+    }
+
+    // Migration: team-shared tracker saved views (schema version 28).
+    // Mirror of SQLite migration 0028_tracker_shared_saved_views.sql.
+    // Payload is stored as TEXT (not JSONB) so the row round-trips byte-for-byte
+    // through the sync lane; see DATABASE.md on the JSONB sub-extraction divergence.
+    try {
+      await this.db.exec(`
+        CREATE TABLE IF NOT EXISTS tracker_shared_saved_views (
+          workspace   TEXT NOT NULL,
+          view_id     TEXT NOT NULL,
+          payload     TEXT NOT NULL,
+          updated     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          deleted_at  TIMESTAMPTZ,
+          sync_id     BIGINT,
+          sync_status TEXT NOT NULL DEFAULT 'local',
+          PRIMARY KEY (workspace, view_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_tracker_shared_saved_views_sync
+          ON tracker_shared_saved_views (workspace, sync_status);
+        CREATE INDEX IF NOT EXISTS idx_tracker_shared_saved_views_cursor
+          ON tracker_shared_saved_views (workspace, sync_id);
+      `);
+      console.log('[PGLite Worker] tracker_shared_saved_views table created successfully');
+    } catch (error) {
+      console.error('[PGLite Worker] Failed to create tracker_shared_saved_views table:', error);
       throw error;
     }
 
@@ -3004,6 +3126,159 @@ class PGLiteWorker {
       console.log('[PGLite Worker] tool usage backfill state created successfully');
     } catch (error) {
       console.error('[PGLite Worker] Failed to create tool usage backfill state:', error);
+      throw error;
+    }
+
+    // Migration: commit sha -> AI session ledger (schema version 31).
+    // Mirror of SQLite 0031_session_commits.sql.
+    try {
+      await this.db.exec(`
+        CREATE TABLE IF NOT EXISTS session_commits (
+          commit_sha   TEXT NOT NULL,
+          session_id   TEXT NOT NULL,
+          workspace_id TEXT,
+          attribution  TEXT NOT NULL DEFAULT 'exact',
+          committed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (commit_sha, session_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_session_commits_session ON session_commits (session_id);
+
+        CREATE TABLE IF NOT EXISTS session_commit_backfill_meta (
+          singleton    INTEGER PRIMARY KEY CHECK (singleton = 1),
+          cutoff_at    TIMESTAMPTZ NOT NULL,
+          cursor_at    TIMESTAMPTZ,
+          completed_at TIMESTAMPTZ
+        );
+        INSERT INTO session_commit_backfill_meta (singleton, cutoff_at)
+        VALUES (1, NOW())
+        ON CONFLICT (singleton) DO NOTHING;
+      `);
+      console.log('[PGLite Worker] session_commits table created successfully');
+    } catch (error) {
+      console.error('[PGLite Worker] Failed to create session_commits table:', error);
+      throw error;
+    }
+
+    // Migration: workspace-scoped Feedback Request projection (schema version 32).
+    // Mirror of SQLite 0032_feedback_request_cache.sql.
+    try {
+      await this.db.exec(`
+        CREATE TABLE IF NOT EXISTS feedback_request_cache (
+          workspace_path TEXT NOT NULL,
+          org_id         TEXT NOT NULL,
+          viewer_user_id TEXT NOT NULL,
+          request_id     TEXT NOT NULL,
+          data           JSONB NOT NULL,
+          updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (workspace_path, org_id, viewer_user_id, request_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_feedback_request_cache_org
+          ON feedback_request_cache (workspace_path, org_id, viewer_user_id, updated_at);
+      `);
+      console.log('[PGLite Worker] feedback_request_cache table created successfully');
+    } catch (error) {
+      console.error('[PGLite Worker] Failed to create feedback_request_cache table:', error);
+      throw error;
+    }
+
+    // Migration: participant-filtered Feedback Request index (schema version 34).
+    // Mirror of SQLite 0034_feedback_request_index.sql.
+    try {
+      await this.db.exec(`
+        CREATE TABLE IF NOT EXISTS feedback_request_index (
+          workspace_path TEXT NOT NULL,
+          org_id         TEXT NOT NULL,
+          viewer_user_id TEXT NOT NULL,
+          request_id     TEXT NOT NULL,
+          data           JSONB NOT NULL,
+          created_at     TIMESTAMPTZ NOT NULL,
+          updated_at     TIMESTAMPTZ NOT NULL,
+          closed_at      TIMESTAMPTZ,
+          snapshot_id    TEXT,
+          PRIMARY KEY (workspace_path, org_id, viewer_user_id, request_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_feedback_request_index_org
+          ON feedback_request_index
+            (workspace_path, org_id, viewer_user_id, updated_at);
+
+        CREATE TABLE IF NOT EXISTS feedback_request_index_backfill (
+          workspace_path    TEXT NOT NULL,
+          org_id            TEXT NOT NULL,
+          viewer_user_id    TEXT NOT NULL,
+          cutoff_at         TIMESTAMPTZ NOT NULL,
+          cursor_request_id TEXT,
+          completed_at      TIMESTAMPTZ,
+          PRIMARY KEY (workspace_path, org_id, viewer_user_id)
+        );
+      `);
+      console.log('[PGLite Worker] feedback_request_index tables created successfully');
+    } catch (error) {
+      console.error('[PGLite Worker] Failed to create feedback_request_index tables:', error);
+      throw error;
+    }
+
+    // Migration: pure GitHub issues cache (schema version 35).
+    // Mirror of SQLite 0035_github_issues.sql, using native JSONB.
+    try {
+      await this.db.exec(`
+        CREATE TABLE IF NOT EXISTS github_issues (
+          id           TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          remote       TEXT NOT NULL,
+          number       INTEGER NOT NULL,
+          state        TEXT NOT NULL,
+          data         JSONB NOT NULL,
+          created_at   TIMESTAMPTZ NOT NULL,
+          updated_at   TIMESTAMPTZ NOT NULL,
+          fetched_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE (workspace_id, remote, number)
+        );
+        CREATE INDEX IF NOT EXISTS idx_github_issues_workspace_remote_state
+          ON github_issues (workspace_id, remote, state);
+        CREATE INDEX IF NOT EXISTS idx_github_issues_updated
+          ON github_issues (updated_at);
+
+        CREATE TABLE IF NOT EXISTS github_issue_comments (
+          issue_id   TEXT NOT NULL REFERENCES github_issues(id) ON DELETE CASCADE,
+          id         TEXT NOT NULL,
+          data       JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL,
+          fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (issue_id, id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_github_issue_comments_issue_created
+          ON github_issue_comments (issue_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS github_issue_events (
+          issue_id   TEXT NOT NULL REFERENCES github_issues(id) ON DELETE CASCADE,
+          id         TEXT NOT NULL,
+          event      TEXT NOT NULL,
+          data       JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL,
+          fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (issue_id, id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_github_issue_events_issue_created
+          ON github_issue_events (issue_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS github_issue_poll_state (
+          workspace_id           TEXT NOT NULL,
+          remote                 TEXT NOT NULL,
+          last_successful_poll_at TIMESTAMPTZ NOT NULL,
+          PRIMARY KEY (workspace_id, remote)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tracker_github_issue_overlay_url
+          ON tracker_items (workspace, LOWER(data->>'issueUrl'))
+          WHERE type = 'github-issue'
+            AND deleted_at IS NULL
+            AND data->>'issueUrl' IS NOT NULL;
+      `);
+      console.log('[PGLite Worker] github issues cache created successfully');
+    } catch (error) {
+      console.error('[PGLite Worker] Failed to create github issues cache:', error);
       throw error;
     }
   }

@@ -28,10 +28,46 @@ export {
 
 // Document comments configuration types
 export type {
+  CommentCapabilities,
   CommentsConfig,
   CommentMember,
   CommentMentionPayload,
+  CommentReplyPayload,
 } from './commenting/types';
+export type {
+  AgentCommentActor,
+  Comment,
+  CommentActor,
+  Thread,
+  UserCommentActor,
+} from './commenting';
+export {
+  CommentStore,
+  createComment,
+  createThread,
+  normalizeCommentActor,
+} from './commenting';
+export { CommentCollabProvider } from './commenting/CommentCollabProvider';
+export {
+  classifyCommentAnchorInput,
+  collabCommentAnchorAdapterRegistry,
+  collabCommentControllerRegistry,
+  CollabCommentControllerError,
+  createCollabCommentController,
+} from './commenting/CollabCommentControllerRegistry';
+export type {
+  CollabCommentController,
+  CommentAnchorInput,
+  CommentAnchorSelector,
+  CommentControllerErrorCode,
+  CommentControllerListResult,
+  CreateAnchoredCommentInput,
+  CreateAnchoredCommentResult,
+  NormalizedComment,
+  NormalizedCommentThread,
+  ReplyToCommentInput,
+  ReplyToCommentResult,
+} from './commenting/CollabCommentControllerRegistry';
 
 // Hooks
 export { useFlashMessage } from './hooks/useFlashMessage';
@@ -158,6 +194,15 @@ export {
   $convertSelectionToEnhancedMarkdownString
 } from './markdown';
 
+// In-place external content replacement (collaborator edit, file watcher,
+// agent write) that preserves the caret instead of remounting the editor.
+export {
+  applyExternalMarkdown,
+  externalContentUpdateTags,
+  mapOffsetAcrossChange,
+  EXTERNAL_CONTENT_UPDATE_TAG,
+} from './applyExternalMarkdown';
+
 // Markdown normalization utilities
 export {
   detectMarkdownIndentSize,
@@ -205,6 +250,7 @@ export { useDiffCommands, APPLY_MARKDOWN_REPLACE_COMMAND, LiveNodeKeyState } fro
 // Diff utilities (now from local plugin)
 export {
   applyMarkdownReplace,
+  applyTextReplacementsToString,
   $approveDiffs,
   $rejectDiffs,
   $hasDiffNodes,
@@ -213,6 +259,7 @@ export {
   scrollToChangeGroup,
   $approveChangeGroup,
   $rejectChangeGroup,
+  $clearResidualDiffMarkers,
   $getDiffState,
   APPROVE_DIFF_COMMAND,
   REJECT_DIFF_COMMAND,

@@ -13,6 +13,7 @@ import {
   fileDeletedAtomFamily,
   historyPendingTagCreatedAtomFamily,
 } from '../../store/atoms/fileWatch';
+import { assertFileSaveSucceeded } from '../../utils/fileSaveResult';
 
 export class DiskBackedStore implements DocumentBackingStore {
   private readonly filePath: string;
@@ -42,7 +43,14 @@ export class DiskBackedStore implements DocumentBackingStore {
     return result.content;
   }
 
-  async save(content: string | ArrayBuffer): Promise<void> {
+  /**
+   * `expectedDiskContent` reaches the main process as `lastKnownContent` and
+   * arms the conflict check in `FileHandlers.saveFile`. This used to be
+   * hardcoded `undefined`, which made every write through this store an
+   * unconditional overwrite -- including the autosaves of custom editors and
+   * every hidden editor (#3684).
+   */
+  async save(content: string | ArrayBuffer, expectedDiskContent?: string): Promise<void> {
     const now = Date.now();
     this.recentSaveTimestamps.add(now);
 
@@ -52,14 +60,16 @@ export class DiskBackedStore implements DocumentBackingStore {
     }, 5000);
 
     if (typeof content === 'string') {
-      await window.electronAPI.saveFile(content, this.filePath);
+      const result = await window.electronAPI.saveFile(content, this.filePath, expectedDiskContent, 'auto');
+      assertFileSaveSucceeded(result);
     } else {
       // Binary content -- convert ArrayBuffer to base64 for IPC
       // This path is for future binary file support
       const uint8 = new Uint8Array(content);
       const binary = Array.from(uint8, (b) => String.fromCharCode(b)).join('');
       const base64 = btoa(binary);
-      await window.electronAPI.saveFile(base64, this.filePath);
+      const result = await window.electronAPI.saveFile(base64, this.filePath, expectedDiskContent, 'auto');
+      assertFileSaveSucceeded(result);
     }
   }
 

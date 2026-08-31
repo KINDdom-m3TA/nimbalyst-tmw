@@ -16,6 +16,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { EditorHost } from '@nimbalyst/runtime';
 import { getExtensionLoader, getBaseThemeColors, hasExtensionEditorAPI, getExtensionEditorAPI, type ExtendedThemeColors } from '@nimbalyst/runtime';
 import { waitForEditorRegistration } from './waitForEditorRegistration';
+import { assertFileSaveSucceeded } from '../utils/fileSaveResult';
+import { createProjectFileSystemHost } from './projectFileSystemHost';
 // Note: Window globals for mockup annotations are declared in @nimbalyst/runtime
 
 /**
@@ -59,6 +61,7 @@ const CSS_VAR_MAP: Record<keyof ExtendedThemeColors, string> = {
   'toolbar-active': '--nim-toolbar-active',
   'highlight-bg': '--nim-highlight-bg',
   'highlight-border': '--nim-highlight-border',
+  'comment-mark': '--nim-comment-mark',
   'quote-text': '--nim-quote-text',
   'quote-border': '--nim-quote-border',
   'scrollbar-thumb': '--nim-scrollbar-thumb',
@@ -291,7 +294,8 @@ class OffscreenEditorRendererImpl {
 
       async saveContent(content: string | ArrayBuffer): Promise<void> {
         if (typeof content === 'string') {
-          await electronAPI.saveFile(content, filePath);
+          const result = await electronAPI.saveFile(content, filePath, undefined, 'auto');
+          assertFileSaveSucceeded(result);
         } else {
           throw new Error('Binary content saving not yet implemented for offscreen editors');
         }
@@ -299,7 +303,7 @@ class OffscreenEditorRendererImpl {
         isDirty = false;
       },
 
-      onSaveRequested(callback: () => void): () => void {
+      onSaveRequested(callback: () => void | Promise<void>): () => void {
         saveRequestCallbacks.push(callback);
         return () => {
           const index = saveRequestCallbacks.indexOf(callback);
@@ -359,6 +363,21 @@ class OffscreenEditorRendererImpl {
       setEditorContext(): void {
         // No editor context for offscreen editors
       },
+
+      /*
+       * Sibling-file reads, the same surface a visible tab gets.
+       *
+       * Without this an editor whose document references files next to it --
+       * an animation's `htmlFile` partials, a mockup's assets -- renders those
+       * regions as nothing here while looking correct in a tab, so a screenshot
+       * taken to check the work quietly disagrees with the work. Nothing about
+       * the offscreen path made `fs` impossible; it was simply never wired.
+       */
+      fs: createProjectFileSystemHost({
+        // Nothing on screen to refresh: this host exists to render once.
+        onAfterWrite: async () => {},
+      }),
+
       setEditorContextItems(): void {
         // No editor context for offscreen editors
       },

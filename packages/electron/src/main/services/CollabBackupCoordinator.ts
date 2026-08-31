@@ -14,15 +14,8 @@ import {
 import { getDatabase } from '../database/initialize';
 import { getCollabSyncWsUrl } from '../utils/collabSyncUrl';
 import { logger } from '../utils/logger';
-import {
-  fetchAndUnwrapOrgKey,
-  fetchTeamKeyStatus,
-  getArchivedOrgKeys,
-  getOrgKey,
-  getOrgKeyFingerprint,
-} from './OrgKeyService';
-import { findTeamForWorkspace, getOrgScopedJwt } from './TeamService';
-import { getEffectiveTrackerSyncPolicy, shouldSyncTrackerItem } from './TrackerPolicyService';
+import { findTeamForWorkspace, getOrgScopedIdentity, getOrgScopedJwt } from './TeamService';
+import { getEffectiveTrackerSharingPolicy, shouldSyncTrackerItem } from './TrackerPolicyService';
 import {
   getCollabBackupService,
   type CollabBackupKind,
@@ -66,61 +59,15 @@ interface ProjectRow {
   project_id: string | null;
 }
 
-async function importLegacyKey(rawKeyBase64: string): Promise<CryptoKey> {
-  const bytes = Buffer.from(rawKeyBase64, 'base64');
-  return crypto.subtle.importKey(
-    'raw',
-    bytes,
-    { name: 'AES-GCM', length: 256 },
-    true,
-    ['encrypt', 'decrypt'],
-  );
-}
-
 async function resolveRoomConfig(orgId: string, documentId: string): Promise<DocumentSyncConfig> {
-  const orgJwt = await getOrgScopedJwt(orgId);
-  const serverManaged = (await fetchTeamKeyStatus(orgId, orgJwt)).mode === 'server-managed';
-  let key = await getOrgKey(orgId);
-  if (!key) {
-    try {
-      key = await fetchAndUnwrapOrgKey(orgId, orgJwt);
-    } catch (error) {
-      logger.main.warn('[CollabBackup] Could not fetch org key for sweep', { orgId, error });
-    }
-  }
-  if (!serverManaged && !key) {
-    throw new Error('The current organization encryption key is unavailable');
-  }
-
-  const legacyDocumentKeys: CryptoKey[] = [];
-  if (serverManaged) {
-    if (key) legacyDocumentKeys.push(key);
-    for (const archived of getArchivedOrgKeys(orgId)) {
-      try {
-        legacyDocumentKeys.push(await importLegacyKey(archived.rawKeyBase64));
-      } catch (error) {
-        logger.main.warn('[CollabBackup] Could not import archived org key', {
-          orgId,
-          fingerprint: archived.fingerprint,
-          error,
-        });
-      }
-    }
-  }
-
+  const { teamMemberId } = await getOrgScopedIdentity(orgId);
   return {
     serverUrl: getCollabSyncWsUrl(),
     getJwt: () => getOrgScopedJwt(orgId),
     orgId,
-    keyCustody: serverManaged ? 'server-managed' : 'legacy-e2e',
-    documentKey: serverManaged ? undefined : (key ?? undefined),
-    legacyDocumentKey: serverManaged ? legacyDocumentKeys[0] : undefined,
-    legacyDocumentKeys: serverManaged ? legacyDocumentKeys : undefined,
-    orgKeyFingerprint: serverManaged ? undefined : (getOrgKeyFingerprint(orgId) ?? undefined),
-    userId: '',
+    teamMemberId,
     documentId,
     createWebSocket: ((url: string) => new WebSocket(url)) as unknown as DocumentSyncConfig['createWebSocket'],
-    reviewGateEnabled: false,
   };
 }
 
@@ -218,7 +165,7 @@ async function enumerateSweepItems(
       return row.sync_id != null || (row.sync_status != null && row.sync_status !== 'local');
     }
     return row.sync_id != null || (row.sync_status != null && row.sync_status !== 'local') || shouldSyncTrackerItem(
-      getEffectiveTrackerSyncPolicy(workspacePath, row.type),
+      getEffectiveTrackerSharingPolicy(workspacePath, row.type),
       data,
     );
   });
@@ -295,111 +242,6 @@ export async function backupCollabProject(
     skipped,
     failures,
   };
-}
-
-async function backupOriginProject(
-  orgId: string,
-  projectId: string | null,
-): Promise<CollabBackupSweepSummary> {
-  const db = getDatabase();
-  const origins = await db.query<OriginRow>(
-    `SELECT document_id, document_type, relative_path, source_basename
-       FROM collab_local_origins
-      WHERE org_id = $1
-        AND (project_id = $2 OR (project_id IS NULL AND $2 IS NULL))
-      ORDER BY document_id`,
-    [orgId, projectId],
-  );
-  const items: SweepItem[] = origins.rows.map((row) => ({
-    documentId: row.document_id,
-    documentType: row.document_type,
-    title: row.source_basename || row.relative_path,
-    relativePath: row.relative_path,
-    kind: 'document',
-  }));
-  const failures: Array<{ documentId: string; error: string }> = [];
-  let backedUp = 0;
-  let skipped = 0;
-  for (const item of items) {
-    try {
-      const result = await withSyncedDocument(orgId, item.documentId, async (provider) => {
-        const { plaintext, extension } = await captureViaCodecHost(
-          item.documentType,
-          provider.getYDoc(),
-        );
-        return getCollabBackupService().backupNow({
-          ...item,
-          orgId,
-          projectId,
-          extension,
-          plaintext,
-        });
-      });
-      if (result.success) backedUp += 1;
-      else {
-        if (result.skipped) skipped += 1;
-        failures.push({
-          documentId: item.documentId,
-          error: result.error ?? result.skipped ?? 'Backup failed',
-        });
-      }
-    } catch (error) {
-      failures.push({
-        documentId: item.documentId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-  return {
-    success: failures.length === 0,
-    orgId,
-    projectId,
-    total: items.length,
-    backedUp,
-    skipped,
-    failures,
-  };
-}
-
-/**
- * Sweep every locally-known project for an organization. Workspace-backed
- * projects include tracker bodies; origin-only projects are still captured so
- * a project with shared documents but no local tracker rows is not missed.
- */
-export async function backupCollabOrganization(
-  orgId: string,
-  workspacePaths: string[],
-): Promise<CollabBackupSweepSummary[]> {
-  const summaries: CollabBackupSweepSummary[] = [];
-  const coveredProjects = new Set<string>();
-  for (const workspacePath of workspacePaths) {
-    const summary = await backupCollabProject(workspacePath);
-    if (summary.orgId !== orgId) {
-      throw new Error(`Workspace ${workspacePath} does not belong to organization ${orgId}`);
-    }
-    summaries.push(summary);
-    coveredProjects.add(summary.projectId ?? '_primary');
-  }
-
-  const projects = await getDatabase().query<ProjectRow>(
-    'SELECT DISTINCT project_id FROM collab_local_origins WHERE org_id = $1',
-    [orgId],
-  );
-  for (const row of projects.rows) {
-    const key = row.project_id ?? '_primary';
-    if (coveredProjects.has(key)) continue;
-    // No local workspace backs this project, so we only know its shared
-    // documents (via collab_local_origins). Tracker bodies for a project with
-    // no local workspace are enumerated per-workspace and are NOT swept here --
-    // surface that gap rather than letting the sweep look complete (finding 3b).
-    logger.main.warn(
-      '[CollabBackup] Sweeping origin-only project with no local workspace; ' +
-      'shared documents are captured but tracker bodies (if any) are not',
-      { orgId, projectId: row.project_id },
-    );
-    summaries.push(await backupOriginProject(orgId, row.project_id));
-  }
-  return summaries;
 }
 
 export async function restoreCollabBackup(input: {

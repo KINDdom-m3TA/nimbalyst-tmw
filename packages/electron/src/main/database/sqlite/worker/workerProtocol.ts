@@ -114,6 +114,11 @@ export interface InitPayload {
   slowQueryThresholdMs?: number;
   /** Sample rate (0..1). */
   sampleRate?: number;
+  /**
+   * Backup generations to keep (1-3). Passed in because the worker thread
+   * cannot read electron-store; main resolves the setting and forwards it.
+   */
+  backupCopiesKept?: number;
 }
 
 export interface InitResult {
@@ -303,7 +308,23 @@ export type WorkerRequestType =
   | 'migrationRollback'
   | 'pragmaRead'
   | 'dashboardTableStats'
-  | 'walCheckpoint';
+  | 'walCheckpoint'
+  | 'toolRetentionEstimate'
+  | 'toolRetentionRun'
+  | 'rawMessagePruneRun'
+  | 'setBackupCopiesKept';
+
+/** Payload for the tool-output retention estimate and pass. */
+export interface ToolRetentionPayload {
+  retentionDays: number;
+  /** Cap on rows examined in one run; omit for "until done". */
+  maxRows?: number;
+  /**
+   * Prune lane only: delete frames that render nothing regardless of age.
+   * Ignored by the retention/tombstone lane, where the cutoff is load-bearing.
+   */
+  ignoreAge?: boolean;
+}
 
 export type WorkerEventType =
   | 'db:migration:phase'

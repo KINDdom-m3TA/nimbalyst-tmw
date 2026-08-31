@@ -4,6 +4,7 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { basename, join, dirname, extname } from 'path';
 import { windowStates, savingWindows, recentlyDeletedFiles, findWindowByFilePath, createWindow, getWindowId, windows, documentServices } from '../window/WindowManager';
 import { loadFileIntoWindow, saveFile } from '../file/FileOperations';
+import { shouldBlockEmptyOverwrite, wouldDiscardUnseenContent, writeRecoverySnapshot } from '../file/safeFileWrite';
 import { openFileWithDialog, openFile } from '../file/FileOpener';
 import { startFileWatcher, stopFileWatcher } from '../file/FileWatcher';
 import { AUTOSAVE_DELAY } from '../utils/constants';
@@ -17,6 +18,14 @@ import { addGitignoreBypass, removeGitignoreBypass } from '../file/WorkspaceEven
 import { pushFileToIndex } from '../services/DocSyncService';
 import { pushNewDocumentToSync } from '../file/WorkspaceWatcher';
 import { getDialogDefaultPath, rememberDialogSelection } from '../utils/dialogPaths';
+import { resolveClaudeConfigDir } from '@nimbalyst/runtime/ai/server/providers/claudeCode/claudeConfigDir';
+import {
+    FileSaveFailureTelemetryDeduper,
+    classifyFileSaveError,
+    getFileSaveSourceAnalytics,
+    normalizeFileSaveSource,
+    type FileSaveSource,
+} from './fileSaveErrors';
 
 // Helper function to get file type from extension
 function getFileType(filePath: string): string {
@@ -34,16 +43,6 @@ function getFileType(filePath: string): string {
     return typeMap[ext] || 'other';
 }
 
-// Helper function to categorize errors
-function categorizeError(error: any): string {
-    const message = error?.message?.toLowerCase() || String(error).toLowerCase();
-    if (message.includes('permission') || message.includes('eacces')) return 'permission';
-    if (message.includes('enoent') || message.includes('not found')) return 'not_found';
-    if (message.includes('enospc') || message.includes('disk full')) return 'disk_full';
-    if (message.includes('conflict')) return 'conflict';
-    return 'unknown';
-}
-
 // Helper function to get word count category
 function getWordCountCategory(content: string): 'small' | 'medium' | 'large' {
     const wordCount = content.split(/\s+/).filter(word => word.length > 0).length;
@@ -59,6 +58,7 @@ function hasFrontmatter(content: string): boolean {
 
 export function registerFileHandlers() {
     const analytics = AnalyticsService.getInstance();
+    const saveFailureTelemetry = new FileSaveFailureTelemetryDeduper();
 
     // Generic file dialog for extensions to select files
     // Returns the file path (not content) so extensions can load files themselves
@@ -107,7 +107,13 @@ export function registerFileHandlers() {
     });
 
     // Save file
-    safeHandle('save-file', async (event, content: string, specificFilePath: string, lastKnownContent?: string) => {
+    safeHandle('save-file', async (
+        event,
+        content: string,
+        specificFilePath: string,
+        lastKnownContent?: string,
+        requestedSaveSource?: FileSaveSource,
+    ) => {
         const window = BrowserWindow.fromWebContents(event.sender);
         if (!window) {
             console.error('[SAVE] ✗ No window found for event sender');
@@ -122,6 +128,8 @@ export function registerFileHandlers() {
         const state = windowStates.get(windowId);
         // ALWAYS use the specificFilePath provided
         const filePath = specificFilePath;
+        const saveSource = normalizeFileSaveSource(requestedSaveSource);
+        const saveSourceAnalytics = getFileSaveSourceAnalytics(saveSource);
 
         // console.log('[SAVE] save-file handler called at', new Date().toISOString(), 'for path:', filePath);
 
@@ -196,6 +204,44 @@ export function registerFileHandlers() {
                 return { success: false, deleted: true, filePath };
             }
 
+            // An editor that never finished mounting serializes to an empty
+            // buffer, and the conflict check above still passes because disk
+            // matches last-known. Without this the autosave that follows
+            // cleanly writes 0 bytes over the user's file (GitHub #647).
+            // Only reads disk when the incoming content is already blank.
+            if (content.trim().length === 0) {
+                let diskContent = '';
+                try {
+                    diskContent = readFileSync(filePath, 'utf-8');
+                } catch (readError) {
+                    console.error('[SAVE] Failed to read file for empty-write check:', readError);
+                }
+                if (shouldBlockEmptyOverwrite({ content, diskContent, source: saveSource })) {
+                    logger.main.warn(`[SAVE] Refused empty autosave over non-empty file: ${filePath}`);
+                    return { success: false, errorType: 'empty_write_blocked', filePath };
+                }
+            }
+
+            // #3684: a write with no baseline skipped the conflict check above,
+            // so nothing established that this writer ever saw what is on disk.
+            // Snapshot it before it is gone. Emitted *before* the destructive
+            // act, per .claude/rules/destructive-data-paths.md -- a crash
+            // mid-write must not take the evidence with it.
+            if (existsSync(filePath)) {
+                try {
+                    const diskContent = readFileSync(filePath, 'utf-8');
+                    if (wouldDiscardUnseenContent({ content, diskContent, lastKnownContent })) {
+                        const snapshotPath = writeRecoverySnapshot(filePath, diskContent, Date.now());
+                        logger.main.warn(
+                            `[SAVE] Unconditional overwrite of ${filePath}; discarded content saved to ${snapshotPath}`,
+                        );
+                    }
+                } catch (snapshotError) {
+                    // Best effort -- never block the write the user asked for.
+                    logger.main.error('[SAVE] Failed to snapshot discarded content:', snapshotError);
+                }
+            }
+
             // Mark that we're saving to prevent file watcher from reacting
             savingWindows.add(windowId);
             SessionFileWatcher.markEditorSave(filePath);
@@ -219,12 +265,11 @@ export function registerFileHandlers() {
                         // Add a small delay to ensure file is fully written before reading
                         setTimeout(async () => {
                             try {
+                                // refreshFileMetadata already calls
+                                // updateTrackerItemsCache for the same path;
+                                // calling it again here just doubled the
+                                // tracker_items queries on every save.
                                 await documentService.refreshFileMetadata(filePath);
-                                // Also refresh tracker items for this file
-                                const relativePath = relativeFilePath;
-                                // console.log('[SAVE] Updating tracker items for:', relativePath);
-                                await (documentService as any).updateTrackerItemsCache(relativePath);
-                                // console.log('[SAVE] Tracker items update completed');
                             } catch (err) {
                                 console.error('[SAVE] Failed to refresh metadata/tracker items:', err);
                             }
@@ -242,11 +287,12 @@ export function registerFileHandlers() {
 
             // Track successful file save
             analytics.sendEvent('file_saved', {
-                saveType: 'manual',
+                saveType: saveSourceAnalytics.saveType,
                 fileType: getFileType(filePath),
                 hasFrontmatter: hasFrontmatter(content),
                 wordCount: getWordCountCategory(content)
             });
+            saveFailureTelemetry.markSuccess(filePath);
 
             // Push file index update for .md files in sync-enabled projects
             if (filePath.endsWith('.md') && state?.workspacePath) {
@@ -258,14 +304,20 @@ export function registerFileHandlers() {
             console.error('[SAVE] ✗ Error saving file:', error);
             savingWindows.delete(windowId); // Clean up on error
 
-            // Track save failure
-            analytics.sendEvent('file_save_failed', {
-                errorType: categorizeError(error),
-                fileType: filePath ? getFileType(filePath) : 'unknown',
-                isAutoSave: false  // This handler is for manual saves
-            });
+            const classifiedError = classifyFileSaveError(error);
+            if (saveFailureTelemetry.shouldReport(filePath, saveSource, classifiedError.errorCode)) {
+                analytics.sendEvent('file_save_failed', {
+                    ...classifiedError,
+                    fileType: filePath ? getFileType(filePath) : 'unknown',
+                    isAutoSave: saveSourceAnalytics.isAutoSave,
+                });
+            }
 
-            return null;
+            return {
+                success: false,
+                filePath,
+                ...classifiedError,
+            };
         }
     });
 
@@ -331,9 +383,10 @@ export function registerFileHandlers() {
         } catch (error) {
             console.error('Error in save-file-as:', error);
 
+            const classifiedError = classifyFileSaveError(error);
             // Track save failure
             analytics.sendEvent('file_save_failed', {
-                errorType: categorizeError(error),
+                ...classifiedError,
                 fileType: state?.filePath ? getFileType(state.filePath) : 'unknown',
                 isAutoSave: false
             });
@@ -486,10 +539,10 @@ export function registerFileHandlers() {
         }
     });
 
-    // Write to global ~/.claude/ directory
+    // Write to the user-level Claude config directory
     safeHandle('write-global-claude-file', async (event, relativePath: string, content: string) => {
         try {
-            const claudeDir = join(homedir(), '.claude');
+            const claudeDir = resolveClaudeConfigDir();
             const absolutePath = join(claudeDir, relativePath);
             const directory = dirname(absolutePath);
 
@@ -518,10 +571,10 @@ export function registerFileHandlers() {
         }
     });
 
-    // Read from global ~/.claude/ directory
+    // Read from the user-level Claude config directory
     safeHandle('read-global-claude-file', async (event, relativePath: string) => {
         try {
-            const claudeDir = join(homedir(), '.claude');
+            const claudeDir = resolveClaudeConfigDir();
             const absolutePath = join(claudeDir, relativePath);
 
             console.log('[READ_GLOBAL] Reading from global .claude:', absolutePath);
@@ -564,11 +617,11 @@ export function registerFileHandlers() {
             let memoryFilePath: string;
 
             if (target === 'user') {
-                // User memory goes to ~/.claude/CLAUDE.md
-                const claudeDir = join(homedir(), '.claude');
+                // User memory goes to <claude config dir>/CLAUDE.md
+                const claudeDir = resolveClaudeConfigDir();
                 memoryFilePath = join(claudeDir, 'CLAUDE.md');
 
-                // Ensure the ~/.claude directory exists
+                // Ensure the config directory exists
                 if (!existsSync(claudeDir)) {
                     mkdirSync(claudeDir, { recursive: true });
                 }
@@ -615,7 +668,7 @@ export function registerFileHandlers() {
     // Get the resolved path for a memory file
     safeHandle('memory:get-path', async (_event, { target, workspacePath }: { target: 'user' | 'project'; workspacePath?: string }) => {
         if (target === 'user') {
-            return { filePath: join(homedir(), '.claude', 'CLAUDE.md') };
+            return { filePath: join(resolveClaudeConfigDir(), 'CLAUDE.md') };
         } else {
             if (!workspacePath) return { filePath: null };
             return { filePath: join(workspacePath, 'CLAUDE.md') };

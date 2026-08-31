@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import OpenAI from 'openai';
 import { BaseAgentProvider } from './BaseAgentProvider';
 import { buildUserMessageAddition } from './documentContextUtils';
+import { describeUnusableWorkspacePath } from './workspacePreconditions';
 import { buildClaudeCodeSystemPrompt, buildMetaAgentSystemPrompt, type MetaAgentWorkflowPreset } from '../../prompt';
 import { DEFAULT_MODELS } from '../../modelConstants';
 import { AIToolCall, AIToolResult } from '../../types';
@@ -16,9 +17,13 @@ import {
   ModelIdentifier,
   ChatAttachment,
 } from '../types';
+import { AgentCapabilities, BUILTIN_AGENT_CAPABILITIES } from '../agentCapabilities';
+import type { FileChangeFidelity } from '../providerFileTracking';
 import { CodexSDKProtocol } from '../protocols/CodexSDKProtocol';
 import { CodexAppServerProtocol, type CodexAppServerHostBindings } from '../protocols/CodexAppServerProtocol';
 import { AgentProtocol, ProtocolEvent, ProtocolSession } from '../protocols/ProtocolInterface';
+import { isNonRenderingAppServerItemStarted } from '../transcript/parsers/CodexAppServerRawParser';
+import { capAppServerItemParamsForStorage } from '../../../storage/toolOutputBudget';
 import { ToolPermissionService } from '../permissions/ToolPermissionService';
 import { PermissionMode, TrustChecker, PermissionPatternSaver, PermissionPatternChecker, SecurityLogger } from './ProviderPermissionMixin';
 import { CodexSdkModuleLike, loadCodexSdkModule } from './codex/codexSdkLoader';
@@ -83,6 +88,14 @@ interface PendingAskUserQuestionEntry {
   sessionId: string;
 }
 
+/**
+ * Codex plugin id (`<plugin>@<marketplace>`) for the ChatGPT desktop app's
+ * bundled browser plugin. It lives in the shared `~/.codex/config.toml`, so
+ * Nimbalyst's codex sessions inherit it; see `buildCodexConfigOverrides` for why
+ * we turn it off.
+ */
+const SHADOWING_CODEX_BROWSER_PLUGIN_ID = 'browser@openai-bundled';
+
 const PERSISTED_APP_SERVER_NOTIFICATION_METHODS = new Set([
   'item/started',
   'item/completed',
@@ -130,20 +143,32 @@ export class OpenAICodexProvider extends BaseAgentProvider {
   private static readonly MODEL_ID_CACHE_DURATION_MS = 5 * 60 * 1000;
   private static readonly MODEL_ID_CACHE_MAX_SIZE = 100;
   private static readonly MODEL_ID_CACHE = new Map<string, { fetchedAt: number; ids: Set<string> }>();
-  private static readonly KNOWN_SLASH_COMMANDS: ReadonlyArray<string> = [
-    'compact',
-    'diff',
-    'init',
-    'mcp',
-    'review',
-    'status',
-  ];
+  /**
+   * Slash commands this integration can actually service.
+   *
+   * Deliberately empty (#1252). This used to list Codex's *TUI* command names
+   * -- compact, diff, init, mcp, review, status -- which were never the right
+   * source for a protocol integration: none of them are interpreted by the
+   * app-server, so every one reached the model as literal prompt text and did
+   * nothing. Advertising a command that silently no-ops is worse than
+   * advertising none, because the user cannot tell the difference between
+   * "ignored" and "ran and did nothing".
+   *
+   * Compaction is now a real action wired to `thread/compact/start` via
+   * `compactSession()`, exposed through the Compact button rather than through
+   * a typed command. `review/start` is the obvious next candidate to wire the
+   * same way; add entries here only once the command is genuinely serviced.
+   */
+  private static readonly KNOWN_SLASH_COMMANDS: ReadonlyArray<string> = [];
 
   private readonly protocol: CodexProtocol;
   private readonly transport: CodexTransport;
   private readonly permissionService: ToolPermissionService;
   private readonly mcpConfigService: McpConfigService;
   private readonly pendingAskUserQuestions = new Map<string, PendingAskUserQuestionEntry>();
+  /** Latest MCP startup status per server name, for the session MCP chip (NIM-2962). */
+  private readonly appServerMcpStatuses = new Map<string, { name: string; status: string; error?: string }>();
+  private appServerMcpSessionId: string | undefined;
 
   /**
    * Per-session map of `rawItemId -> synthetic edit-group ID`. Used to
@@ -377,12 +402,21 @@ export class OpenAICodexProvider extends BaseAgentProvider {
     });
   }
 
-  getProviderName(): string {
+  getProviderName(): AIProviderType {
     return 'openai-codex';
   }
 
   getTransport(): CodexTransport {
     return this.transport;
+  }
+
+  /**
+   * The app-server emits `fileChange` items carrying path, kind and a unified
+   * diff per change. The legacy SDK transport emits none, so it can only offer
+   * the paths named in tool arguments.
+   */
+  getFileChangeFidelity(): FileChangeFidelity {
+    return this.transport === 'sdk' ? 'tool-args' : 'structured';
   }
 
   public static setTrustChecker(checker: TrustChecker | null): void {
@@ -847,6 +881,19 @@ export class OpenAICodexProvider extends BaseAgentProvider {
     return OpenAICodexProvider.getKnownSlashCommands();
   }
 
+  /**
+   * Skills codex can actually resolve for this workspace (#1253).
+   *
+   * Sourced from the transport's `skills/list`, which now includes Nimbalyst's
+   * exported skills because `registerSkillRoots` adds them as an extra root.
+   * Empty until the first session has started -- the `/` typeahead is
+   * synchronous, so it renders "no skills" rather than blocking on an RPC.
+   */
+  getSkills(): string[] {
+    const skillSource = this.protocol as unknown as { getSkillNames?: () => string[] };
+    return typeof skillSource.getSkillNames === 'function' ? skillSource.getSkillNames() : [];
+  }
+
   getProviderSessionData(sessionId: string): any {
     const { providerSessionId } = this.sessions.getProviderSessionData(sessionId);
     return {
@@ -910,8 +957,9 @@ export class OpenAICodexProvider extends BaseAgentProvider {
     workspacePath?: string,
     attachments?: ChatAttachment[]
   ): AsyncIterableIterator<StreamChunk> {
-    if (!workspacePath) {
-      yield { type: 'error', error: '[OpenAICodexProvider] workspacePath is required but was not provided' };
+    const unusableWorkspace = describeUnusableWorkspacePath(workspacePath);
+    if (unusableWorkspace || !workspacePath) {
+      yield { type: 'error', error: unusableWorkspace ?? 'No project folder is set for this session.' };
       return;
     }
 
@@ -953,7 +1001,7 @@ export class OpenAICodexProvider extends BaseAgentProvider {
     });
 
     if (sessionId) {
-      const metadataToLog: Record<string, unknown> = {};
+      const metadataToLog: Record<string, unknown> = this.withPromptProvenanceMetadata(documentContext);
       if (attachments && attachments.length > 0) {
         metadataToLog.attachments = attachments;
       }
@@ -1250,7 +1298,10 @@ export class OpenAICodexProvider extends BaseAgentProvider {
         // Route by `metadata.transport` set by `CodexAppServerProtocol`.
         const isAppServerEvent = event.type === 'raw_event'
           && (event as { metadata?: { transport?: string } }).metadata?.transport === 'app-server';
+
         if (isAppServerEvent) {
+          // NIM-2962: surface MCP server health instead of discarding it.
+          this.handleAppServerMcpStatus(event, sessionId);
           try {
             const { preEdit, postEdit } = await this.maybeBuildAppServerFileChangeSnapshots(event, sessionId);
             if (preEdit) yield preEdit;
@@ -1977,6 +2028,26 @@ export class OpenAICodexProvider extends BaseAgentProvider {
       // Codex SDK documents this config flag as the switch for surfacing
       // raw agent reasoning in streamed events.
       show_raw_agent_reasoning: true,
+
+      // Codex reads the shared `~/.codex/config.toml`, which the ChatGPT desktop
+      // app writes. Its bundled `browser` plugin injects a "control-in-app-browser"
+      // skill that steers the model at ChatGPT.app's in-app browser via the
+      // `node_repl` `js` tool. That browser only exists inside ChatGPT.app, so in
+      // Nimbalyst the model dead-ends on "No browser is available" -- and never
+      // reaches for our own `mcp__nimbalyst_browser` tools, which are deferred.
+      // Disabling the plugin per-session leaves the user's ChatGPT.app config
+      // untouched.
+      //
+      // The key needs different shapes per transport: app-server takes the
+      // override map as nested JSON and looks the plugin id up verbatim, while
+      // the legacy SDK flattens it into `--config a.b.c=value` dotted TOML paths
+      // (`serializeConfigOverrides`) without quoting -- and `@` is not legal in a
+      // TOML bare key, so the SDK path has to carry its own quotes.
+      plugins: {
+        [this.transport === 'sdk'
+          ? `"${SHADOWING_CODEX_BROWSER_PLUGIN_ID}"`
+          : SHADOWING_CODEX_BROWSER_PLUGIN_ID]: { enabled: false },
+      },
     };
 
     if (Object.keys(codexMcpServers).length > 0) {
@@ -2260,7 +2331,7 @@ export class OpenAICodexProvider extends BaseAgentProvider {
       if (!this.shouldPersistAppServerNotification(sessionId, method, params)) {
         return;
       }
-      const synthesizedRaw = { method, params };
+      const synthesizedRaw = { method, params: capAppServerItemParamsForStorage(params) };
       const content = JSON.stringify(synthesizedRaw);
       const rawItemId = this.extractAppServerItemId(params);
       const editGroupId = rawItemId
@@ -2355,6 +2426,18 @@ export class OpenAICodexProvider extends BaseAgentProvider {
   ): boolean {
     if (!PERSISTED_APP_SERVER_NOTIFICATION_METHODS.has(method)) {
       return false;
+    }
+
+    // An `item/started` for most item types produces no canonical descriptor --
+    // the matching `item/completed` carries the same item id plus the actual
+    // content. Skipping them removes roughly half of all persisted codex rows.
+    // The predicate lives with the parser so the two cannot drift; tool items
+    // that render a widget at start time (MCP prompts) are excluded there.
+    if (method === 'item/started') {
+      const itemType = (params as { item?: { type?: unknown } } | undefined)?.item?.type;
+      if (isNonRenderingAppServerItemStarted(itemType)) {
+        return false;
+      }
     }
 
     const notificationKey = this.buildAppServerNotificationKey(method, params);
@@ -2698,6 +2781,103 @@ export class OpenAICodexProvider extends BaseAgentProvider {
    *     so the host's existing `MessageStreamingHandler` plumbing fires
    *     unchanged
    */
+  /**
+   * Translate a codex `mcpServer/startupStatus/updated` notification into the
+   * `mcpServerStatus:changed` event the host already listens for.
+   *
+   * NIM-2962: the protocol layer used to drop this notification as
+   * "informational", so a server that failed to start took its tools away
+   * with nothing shown anywhere. ClaudeCodeProvider already emits this exact
+   * event into a pipeline that ends at the session's MCP chip, so Codex feeds
+   * that pipeline rather than growing a parallel one.
+   *
+   * Note this is NOT the fatal-worker bug the original report suspected:
+   * against a live app-server the other servers still reached `ready` and the
+   * turn ran normally. One bad server is survivable; an invisible one is not.
+   */
+  /**
+   * Compact the live thread's context (#1252).
+   *
+   * Requires a live protocol session: compaction acts on the running codex
+   * child, so there is nothing to compact before the first turn. Callers should
+   * gate the UI on `supportsCompaction()` and handle the throw for the
+   * not-yet-started case rather than silently no-op'ing, which is the bug this
+   * replaces.
+   */
+  async compactSession(sessionId: string): Promise<void> {
+    const session = this.liveProtocolSessions.get(sessionId);
+    if (!session) {
+      throw new Error('Cannot compact: this Codex session has no active thread yet.');
+    }
+    if (typeof this.protocol.compactSession !== 'function') {
+      throw new Error(`Cannot compact: the ${this.protocol.platform} transport does not support compaction.`);
+    }
+    await this.protocol.compactSession(session);
+  }
+
+  /** Whether this provider's active transport can compact in-place. */
+  supportsCompaction(): boolean {
+    return typeof this.protocol.compactSession === 'function';
+  }
+
+  /**
+   * Narrows the provider-type declaration to the transport actually running:
+   * `thread/compact/start` exists on the app-server, not on the legacy SDK
+   * path, and this provider can be constructed with either.
+   */
+  getAgentCapabilities(): AgentCapabilities {
+    return {
+      ...BUILTIN_AGENT_CAPABILITIES['openai-codex'],
+      compaction: this.supportsCompaction() ? 'rpc' : 'unsupported',
+    };
+  }
+
+  handleAppServerMcpStatus(event: ProtocolEvent, sessionId: string | undefined): void {
+    const metadata = (event as { metadata?: { transport?: string; method?: string; params?: unknown } }).metadata;
+    if (event.type !== 'raw_event') return;
+    if (metadata?.transport !== 'app-server') return;
+    if (metadata?.method !== 'mcpServer/startupStatus/updated') return;
+
+    const params = metadata.params as {
+      name?: unknown;
+      status?: unknown;
+      error?: unknown;
+      failureReason?: unknown;
+    } | undefined;
+    const name = typeof params?.name === 'string' ? params.name : '';
+    if (!name) return;
+
+    // Codex states are starting | ready | failed; the host vocabulary is the
+    // one in MCPServerConfig's KNOWN_STATES.
+    const codexStatus = typeof params?.status === 'string' ? params.status : '';
+    const status = codexStatus === 'ready'
+      ? 'connected'
+      : codexStatus === 'starting'
+        ? 'pending'
+        : codexStatus === 'failed'
+          ? 'failed'
+          : codexStatus;
+    if (!status) return;
+
+    const error = typeof params?.error === 'string' && params.error
+      ? params.error
+      : typeof params?.failureReason === 'string' && params.failureReason
+        ? params.failureReason
+        : undefined;
+
+    const previous = this.appServerMcpStatuses.get(name);
+    if (previous && previous.status === status && previous.error === error) return;
+
+    this.appServerMcpStatuses.set(name, { name, status, ...(error ? { error } : {}) });
+    this.emit('mcpServerStatus:changed', {
+      sessionId: sessionId ?? this.appServerMcpSessionId,
+      servers: Array.from(this.appServerMcpStatuses.values()),
+      lastCheckedAt: Date.now(),
+      configuredNames: Array.from(this.appServerMcpStatuses.keys()),
+      withheldNames: null,
+    });
+  }
+
   private async maybeBuildAppServerFileChangeSnapshots(
     event: ProtocolEvent,
     sessionId: string | undefined,

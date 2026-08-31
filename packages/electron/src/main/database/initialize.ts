@@ -9,7 +9,11 @@ import * as fsp from 'fs/promises';
 import path from 'path';
 import { database, legacyPgliteDatabase } from './PGLiteDatabaseWorker';
 import { CORRUPTED_METADATA_WIPE_SQL } from './corruptedMetadataWipe';
-import { resolveBackend } from './sqlite/BackendSelector';
+import { commitFreshInstallSqlite, resolveBackend } from './sqlite/BackendSelector';
+import { refreshMigrationFlagInBackground } from './sqlite/migrationFlag';
+import { dirSizeBytes } from './sqlite/dirSize';
+import { findRecoveryArtifacts, largestDirBytes } from './sqlite/recoveryArtifacts';
+import { runForcedMigration } from './bootMigration';
 import { SQLiteDatabaseProxy } from './sqlite/SQLiteDatabaseProxy';
 import { logger } from '../utils/logger';
 import { AnalyticsService } from '../services/analytics/AnalyticsService';
@@ -21,13 +25,30 @@ import { checkWorktreeArchiveConsistency, createWorktreeStore } from '../service
 import { archiveProgressManager } from '../services/ArchiveProgressManager';
 import { GitWorktreeService } from '../services/GitWorktreeService';
 import { timeStartupPhase } from '../utils/startupTiming';
+import { getDatabaseMaintenanceSettings } from '../utils/store';
 
 // Backup service instance — only used by the PGLite path now. The SQLite
 // backend constructs SQLiteBackupService inside the worker during init, so
 // nothing on main holds a reference.
 let backupService: DatabaseBackupService | SQLiteBackupService | null = null;
 let periodicBackupTimer: NodeJS.Timeout | null = null;
-const BACKUP_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+let startupBackupTimer: NodeJS.Timeout | null = null;
+/**
+ * How long after database init the catch-up staleness backup waits. Long
+ * enough for the launch query burst to drain; short enough that a session that
+ * only lasts a few minutes still gets its overdue snapshot.
+ */
+const STARTUP_BACKUP_DELAY_MS = 2 * 60_000;
+/**
+ * Periodic backup cadence, from settings. Was a hardcoded 4 hours against a
+ * rolling-3 of full copies, which made a 4.6 GiB database occupy 18.5 GiB on
+ * disk with no user control (#1248). 0 hours means "only back up on quit".
+ */
+function getBackupIntervalMs(): number {
+  const hours = getDatabaseMaintenanceSettings().backupIntervalHours;
+  if (!Number.isFinite(hours) || hours <= 0) return 0;
+  return hours * 60 * 60 * 1000;
+}
 let sqliteDatabase: SQLiteDatabaseProxy | null = null;
 // Lazy-constructed SQLiteDatabaseProxy used by the migration IPC handlers
 // when PGLite is the live backend. The migration code runs inside the
@@ -132,26 +153,75 @@ export async function initializeDatabase(): Promise<SessionStore> {
     //   - fresh install      -> SQLite (set by the migration flow)
     // For now the boot path always opens PGLite; the actual switchover is
     // a follow-up step in the migration plan (see service-layer audit).
-    const backendChoice = resolveBackend({ userDataPath });
+    let backendChoice = resolveBackend({ userDataPath });
     logger.main.info(
       `[Database] Backend selector resolved to '${backendChoice.backend}' (reason: ${backendChoice.reason})`,
     );
 
-    // Heartbeat: when SQLite is active but a preserved `pglite-db.migrated-*`
-    // directory still exists, surface it so we can decide when to retire the
-    // PGLite reader code. Per the plan, the rollback window stays open until
-    // fleet telemetry shows < 1% of installs carry this directory.
+    // Persist a fresh install's SQLite decision immediately, before the
+    // kill-switch refresh below or anything else can touch the flag file.
+    // Leaving it unwritten meant the decision was recomputed every launch and
+    // whoever wrote the file first got to pick the backend (#1347).
+    if (backendChoice.reason === 'fresh-install-defaults-sqlite') {
+      try {
+        commitFreshInstallSqlite(userDataPath);
+      } catch (flagErr) {
+        logger.main.warn('[Database] failed to persist fresh-install backend flag', flagErr);
+      }
+    }
+
+    // Unconditional per-launch heartbeat. Until this shipped there was no way
+    // to size the population still on PGLite: `database_error` carries the
+    // backend but only fires on failure, and `pglite_legacy_dir_present` only
+    // fires *after* a migration. `pglite_dir_size_bytes` is what tells us how
+    // long a forced migration would take for the heavy tail.
     try {
-      const migratedPresent = fs
-        .readdirSync(userDataPath)
-        .some((d) => d.startsWith('pglite-db.migrated-'));
-      if (migratedPresent) {
+      AnalyticsService.getInstance().sendEvent('database_backend_active', {
+        active_backend: backendChoice.backend,
+        reason: backendChoice.reason,
+        pglite_dir_size_bytes: dirSizeBytes(path.join(userDataPath, 'pglite-db')),
+        migration_attempts: backendChoice.state?.migrationAttempts?.count ?? 0,
+      });
+    } catch (heartbeatErr) {
+      logger.main.warn('[Database] backend heartbeat failed', heartbeatErr);
+    }
+
+    // Keep the kill switch warm for the next launch. Never awaited — the boot
+    // path reads only the disk cache.
+    refreshMigrationFlagInBackground(userDataPath);
+
+    // Heartbeats for leftover PGLite directories, from one scan of userData.
+    //
+    // `pglite-db.migrated-*`: a preserved pre-migration store. The rollback
+    // window stays open until fleet telemetry shows < 1% of installs carry it.
+    //
+    // `pglite-db.backup-*`: the worker decided the database was corrupt and
+    // renamed it aside. This had no fleet signal at all, which is why an
+    // established install could run for hours on an empty database with
+    // nothing upstream noticing (#1347). Reporting the backup's size next to
+    // the live directory's is what distinguishes a real wipe -- megabytes
+    // parked in the backup, near-nothing live -- from routine noise.
+    try {
+      const artifacts = findRecoveryArtifacts(userDataPath);
+      if (artifacts.migratedDirs.length > 0) {
         AnalyticsService.getInstance().sendEvent('pglite_legacy_dir_present', {
           active_backend: backendChoice.backend,
         });
       }
+      if (artifacts.corruptionBackupDirs.length > 0) {
+        AnalyticsService.getInstance().sendEvent('pglite_corruption_backup_present', {
+          active_backend: backendChoice.backend,
+          reason: backendChoice.reason,
+          backup_dir_count: artifacts.corruptionBackupDirs.length,
+          backup_dir_bytes: largestDirBytes(userDataPath, artifacts.corruptionBackupDirs),
+          live_pglite_dir_bytes: dirSizeBytes(path.join(userDataPath, 'pglite-db')),
+        });
+        logger.main.warn(
+          `[Database] ${artifacts.corruptionBackupDirs.length} renamed-aside PGLite database(s) present; the newest is ${artifacts.corruptionBackupDirs[artifacts.corruptionBackupDirs.length - 1]}`,
+        );
+      }
     } catch (heartbeatErr) {
-      logger.main.warn('[Database] legacy-dir heartbeat failed', heartbeatErr);
+      logger.main.warn('[Database] recovery-artifact heartbeat failed', heartbeatErr);
     }
 
     if (backendChoice.backend === 'sqlite') {
@@ -172,12 +242,47 @@ export async function initializeDatabase(): Promise<SessionStore> {
       await timeStartupPhase('SQLite.initialize', () => database.initialize());
       logger.main.info('[Database] SQLite initialized successfully (worker-hosted)');
     } else {
+      // Opening PGLite here CREATES `pglite-db/` when it is absent, so this is
+      // the exact point at which #1347 turned a bad flag file into an empty
+      // database. `resolveBackend` now heals that contradiction before we get
+      // here, which leaves only two ways to reach this line without a store:
+      // a rollback install whose PGLite was moved by hand, or a bug in the
+      // guard. Neither may be silent again.
+      if (!fs.existsSync(dbPath)) {
+        logger.main.error(
+          `[Database] Resolved to PGLite (reason: ${backendChoice.reason}) but ${dbPath} does not exist; ` +
+            'a new empty database is about to be created. If this install had sessions, they are not in PGLite.',
+        );
+      }
       backupService = new DatabaseBackupService(dbPath, legacyPgliteDatabase);
       await timeStartupPhase('BackupService.initialize', () => backupService!.initialize());
       legacyPgliteDatabase.setBackupService(backupService);
       database.useDatabase(legacyPgliteDatabase, 'pglite');
       await timeStartupPhase('PGLite.initialize', () => database.initialize());
       logger.main.info('[Database] PGLite initialized successfully');
+
+      // Forced migration to SQLite. This runs *after* PGLite is open because
+      // the migrator reads source rows through the live worker (see the
+      // `__ELECTRON_LOG__` trap documented on `LivePgliteReader`). Anything
+      // short of a successful cutover falls through and the user keeps
+      // running on the PGLite store that is already initialized above.
+      if (backendChoice.migrationDue) {
+        const migrated = await runForcedMigration({
+          userDataPath,
+          schemaDir: resolveSchemaDir(),
+          resolved: backendChoice,
+          proxy: await getMigrationProxy(),
+        }).catch((err) => {
+          logger.main.error('[Database] Forced migration wiring failed; staying on PGLite', err);
+          return false;
+        });
+        if (migrated) {
+          // app.relaunch() + app.quit() are already in flight. Park here so
+          // nothing else initializes against a database that is being torn
+          // down; the process exits out from under this promise.
+          await new Promise<never>(() => {});
+        }
+      }
     }
 
     logger.main.info('[Database] Backup service initialized', {
@@ -332,31 +437,46 @@ export async function initializeDatabase(): Promise<SessionStore> {
       }
 
       // If we missed a backup window (e.g. macOS slept through the 4h
-      // setInterval), fire one now. setInterval pauses during system sleep
-      // and does NOT catch up on wake, so a single overnight sleep silently
-      // skips the snapshot.
-      void runStalenessBackup('startup');
+      // setInterval), fire one. setInterval pauses during system sleep and
+      // does NOT catch up on wake, so a single overnight sleep silently skips
+      // the snapshot.
+      //
+      // Deferred rather than immediate: launch queues hundreds of queries
+      // (project restore, sync handshake, tracker and document loads) and the
+      // online copy competes with all of them for the SQLite worker — ~44s of
+      // it on a 6.3 GB store. Let the burst drain first; a catch-up snapshot
+      // that is already hours stale is not urgent to the minute.
+      startupBackupTimer = setTimeout(() => {
+        startupBackupTimer = null;
+        void runStalenessBackup('startup');
+      }, STARTUP_BACKUP_DELAY_MS);
+      startupBackupTimer.unref?.();
 
-      periodicBackupTimer = setInterval(async () => {
-        logger.main.info('[Database] Running periodic backup...');
-        const result = await database.createBackup();
-        if (result.success) {
-          logger.main.info('[Database] Periodic backup completed successfully');
-        } else {
-          logger.main.warn('[Database] Periodic backup failed:', result.error);
-        }
-      }, BACKUP_INTERVAL_MS);
+      const backupIntervalMs = getBackupIntervalMs();
+      if (backupIntervalMs > 0) {
+        periodicBackupTimer = setInterval(async () => {
+          logger.main.info('[Database] Running periodic backup...');
+          const result = await database.createBackup();
+          if (result.success) {
+            logger.main.info('[Database] Periodic backup completed successfully');
+          } else {
+            logger.main.warn('[Database] Periodic backup failed:', result.error);
+          }
+        }, backupIntervalMs);
 
-      // Cover the macOS-sleep case: when the laptop wakes after sleeping
-      // longer than BACKUP_INTERVAL_MS, the setInterval timer has effectively
-      // been paused — we may have just missed one or more backup windows.
-      // Check staleness on resume and snapshot if needed.
-      powerMonitor.on('resume', () => {
-        logger.main.info('[Database] System resumed from sleep; checking backup staleness');
-        void runStalenessBackup('resume');
-      });
+        // Cover the macOS-sleep case: when the laptop wakes after sleeping
+        // longer than the interval, the setInterval timer has effectively
+        // been paused — we may have just missed one or more backup windows.
+        // Check staleness on resume and snapshot if needed.
+        powerMonitor.on('resume', () => {
+          logger.main.info('[Database] System resumed from sleep; checking backup staleness');
+          void runStalenessBackup('resume');
+        });
 
-      logger.main.info(`[Database] Periodic backup enabled (every ${BACKUP_INTERVAL_MS / (60 * 60 * 1000)} hours)`);
+        logger.main.info(`[Database] Periodic backup enabled (every ${backupIntervalMs / (60 * 60 * 1000)} hours)`);
+      } else {
+        logger.main.info('[Database] Periodic backup disabled by setting; backing up on quit only');
+      }
     }
 
     // Note: Database backup on quit is handled in main/index.ts before-quit handler
@@ -391,7 +511,8 @@ export function getLiveSqliteDatabaseProxy(): SQLiteDatabaseProxy | null {
 }
 
 /**
- * Run a backup if the last successful one is older than BACKUP_INTERVAL_MS.
+ * Run a backup if the last successful one is older than the configured
+ * interval.
  * Used at startup (to catch up after Nimbalyst was closed during a backup
  * window) and on system resume (to catch up after macOS pauses setInterval
  * during sleep). The interval itself runs unchanged; this is purely an
@@ -430,7 +551,10 @@ async function runStalenessBackup(trigger: 'startup' | 'resume'): Promise<void> 
     }
 
     const ageMs = Date.now() - lastSuccessMs;
-    if (lastSuccessMs > 0 && ageMs < BACKUP_INTERVAL_MS) {
+    // At "on quit only" there is no window to be stale against, so fall back to
+    // a day before a catch-up snapshot is worth the disk write.
+    const stalenessWindowMs = getBackupIntervalMs() || 24 * 60 * 60 * 1000;
+    if (lastSuccessMs > 0 && ageMs < stalenessWindowMs) {
       logger.main.info(`[Database] Backup not stale on ${trigger} (age ${Math.round(ageMs / 60000)}m); skipping`);
       return;
     }
@@ -505,15 +629,20 @@ function unmangleIsoTimestamp(stamp: string): string {
 }
 
 /**
- * Stop the periodic-backup interval. Must be called before db.close() during
- * shutdown, otherwise the timer can fire after the SQLite handle is closed
- * and throws "The database connection is not open" from inside the better-
- * sqlite3 Online Backup API's setImmediate-driven step loop.
+ * Stop the periodic-backup interval and the deferred startup backup. Must be
+ * called before db.close() during shutdown, otherwise a timer can fire after
+ * the SQLite handle is closed and throw "The database connection is not open"
+ * from inside the better-sqlite3 Online Backup API's setImmediate-driven step
+ * loop.
  */
 export function stopPeriodicBackupTimer(): void {
   if (periodicBackupTimer) {
     clearInterval(periodicBackupTimer);
     periodicBackupTimer = null;
+  }
+  if (startupBackupTimer) {
+    clearTimeout(startupBackupTimer);
+    startupBackupTimer = null;
   }
 }
 

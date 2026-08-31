@@ -14,6 +14,9 @@ export type ApplicationSettingsCategory =
   | 'openai-codex'
   | 'opencode'
   | 'copilot-cli'
+  | 'grok-build'
+  | 'cursor-agent'
+  | 'antigravity-gemini-agent'
   | 'lmstudio'
   | 'marketplace'
   | 'installed-extensions'
@@ -97,6 +100,8 @@ export type SettingsDestination =
 export interface SettingsAvailabilityContext {
   developerMode: boolean;
   showDirectChatProviders: boolean;
+  /** Teams beta gate — see `teamsConfiguredAtom`. Hides org/sharing routes. */
+  teamsConfigured: boolean;
 }
 
 export interface BuiltinSettingsRoute {
@@ -127,6 +132,7 @@ export type SettingsRoute = BuiltinSettingsRoute | ExtensionSettingsRoute;
 const developerOnly = ({ developerMode }: SettingsAvailabilityContext) => developerMode;
 const directChatProvidersVisible = ({ showDirectChatProviders }: SettingsAvailabilityContext) =>
   showDirectChatProviders;
+const teamsVisible = ({ teamsConfigured }: SettingsAvailabilityContext) => teamsConfigured;
 
 const builtinSettingsRouteDefinitions: readonly Omit<BuiltinSettingsRoute, 'source'>[] = [
   { id: 'notifications', scope: 'application', group: 'Application', label: 'Notifications', icon: 'notifications' },
@@ -140,6 +146,9 @@ const builtinSettingsRouteDefinitions: readonly Omit<BuiltinSettingsRoute, 'sour
   { id: 'openai-codex', scope: 'application', group: 'Agent Providers', label: 'OpenAI Codex', icon: 'smart_toy' },
   { id: 'opencode', scope: 'application', group: 'Agent Providers', label: 'OpenCode', icon: 'terminal', isAlpha: true },
   { id: 'copilot-cli', scope: 'application', group: 'Agent Providers', label: 'GitHub Copilot', icon: 'terminal', isAlpha: true },
+  { id: 'grok-build', scope: 'application', group: 'Agent Providers', label: 'Grok Build', icon: 'terminal', isAlpha: true },
+  { id: 'cursor-agent', scope: 'application', group: 'Agent Providers', label: 'Cursor Agent', icon: 'terminal', isAlpha: true },
+  { id: 'antigravity-gemini-agent', scope: 'application', group: 'Agent Providers', label: 'Gemini', icon: 'smart_toy', isAlpha: true },
   { id: 'claude', scope: 'application', group: 'Chat Providers', label: 'Claude Chat', icon: 'chat', isAvailable: directChatProvidersVisible },
   { id: 'openai', scope: 'application', group: 'Chat Providers', label: 'OpenAI', icon: 'chat', isAvailable: directChatProvidersVisible },
   { id: 'lmstudio', scope: 'application', group: 'Chat Providers', label: 'LM Studio', icon: 'memory', isAvailable: directChatProvidersVisible },
@@ -155,7 +164,7 @@ const builtinSettingsRouteDefinitions: readonly Omit<BuiltinSettingsRoute, 'sour
   { id: 'account-devices', scope: 'account', group: 'Account', label: 'Devices', icon: 'devices' },
   { id: 'account-shared-links', scope: 'account', group: 'Account', label: 'Shared Links', icon: 'link' },
 
-  { id: 'project-sharing', scope: 'project', group: 'Project', label: 'Sharing', icon: 'group', isAlpha: true },
+  { id: 'project-sharing', scope: 'project', group: 'Project', label: 'Sharing', icon: 'group', isAlpha: true, isAvailable: teamsVisible },
   { id: 'project-agent-permissions', scope: 'project', group: 'Project', label: 'Agent Permissions', icon: 'shield' },
   { id: 'project-trackers', scope: 'project', group: 'Project', label: 'Trackers', icon: 'assignment' },
   { id: 'project-ai-providers', scope: 'project', group: 'Project', label: 'AI Providers', icon: 'smart_toy' },
@@ -241,7 +250,15 @@ export interface LegacySettingsLink {
 
 export function normalizeSettingsDestination(link: LegacySettingsLink): SettingsDestination | null {
   const legacyCategory = link.category;
-  const rawScope = link.scope ?? 'application';
+  // A scope-less link that names a real route must resolve to THAT route's
+  // scope. Defaulting straight to 'application' made any account- or
+  // project-scoped id fall through to the application default instead:
+  // `{ category: 'account' }` silently became Application -> Notifications,
+  // which is where the invite-deep-link sign-in prompt was sending people.
+  const routeScope = legacyCategory
+    ? settingsRoutes.find((route) => route.id === legacyCategory)?.scope
+    : undefined;
+  const rawScope = link.scope ?? routeScope ?? 'application';
 
   if (rawScope === 'organization') return null;
   if (

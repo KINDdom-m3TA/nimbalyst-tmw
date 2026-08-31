@@ -20,7 +20,8 @@
 
 import { atom } from 'jotai';
 import { atomFamily } from '../debug/atomFamilyRegistry';
-import { ModelIdentifier } from '@nimbalyst/runtime/ai/server/types';
+import { resolveProviderFromModel } from '../../utils/modelUtils';
+import type { SessionLaunchSource } from '../../../shared/analytics/sessionLaunch';
 import { errorNotificationService } from '../../services/ErrorNotificationService';
 import {
   store,
@@ -94,8 +95,16 @@ export interface CreateNewSessionOptions {
   model?: string;
   metadata?: Record<string, unknown>;
   mode?: 'agent' | 'planning';
+  /** Session title. Defaults to 'New Session'. */
+  title?: string;
   /** Select the new session in Agent mode. Defaults to true for existing callers. */
   selectSession?: boolean;
+  /**
+   * Which surface asked for this session, for `create_ai_session` analytics.
+   * Optional: a caller that omits it is reported as `unknown` rather than being
+   * guessed at, because a wrong attribution is worse than a missing one here.
+   */
+  launchSource?: SessionLaunchSource;
 }
 
 // ============================================================
@@ -405,27 +414,31 @@ export const createNewSessionActionAtom = atom(
       ? { initialDraft: input }
       : input ?? {};
     const model = options.model ?? get(defaultAgentModelAtom);
+    const title = options.title ?? 'New Session';
 
     try {
       const sessionId = options.sessionId ?? crypto.randomUUID();
-      const parsedModel = model ? ModelIdentifier.tryParse(model) : null;
-      const provider = parsedModel?.provider || 'claude-code';
+      const provider = resolveProviderFromModel(model);
       const result = await window.electronAPI.invoke('sessions:create', {
         session: {
           id: sessionId,
           provider,
           model,
-          title: 'New Session',
+          title,
           mode: options.mode,
           metadata: options.metadata,
         },
         workspaceId: workspacePath,
+        launchSource: options.launchSource,
+        // A boolean, never the draft. The prompt text has no business crossing
+        // into a payload that feeds an analytics emitter.
+        hadPrefilledPrompt: !!options.initialDraft,
       });
 
       if (result.success && result.id) {
         set(addSessionFullAtom, {
           id: result.id,
-          title: 'New Session',
+          title,
           createdAt: Date.now(),
           updatedAt: Date.now(),
           provider,
@@ -500,8 +513,7 @@ export const createNewWorktreeSessionActionAtom = atom(
 
       const worktree = worktreeResult.worktree;
       const sessionId = crypto.randomUUID();
-      const parsedModel = defaultModel ? ModelIdentifier.tryParse(defaultModel) : null;
-      const provider = parsedModel?.provider || 'claude-code';
+      const provider = resolveProviderFromModel(defaultModel);
       const result: SessionCreateResult = await window.electronAPI.invoke('sessions:create', {
         session: {
           id: sessionId,
@@ -511,6 +523,7 @@ export const createNewWorktreeSessionActionAtom = atom(
           worktreeId: worktree.id,
         },
         workspaceId: workspacePath,
+        launchSource: 'worktree' satisfies SessionLaunchSource,
       });
 
       if (result.success && result.id) {
@@ -575,8 +588,7 @@ export const createWorktreeSessionCoreActionAtom = atom(
 
     const worktree = worktreeResult.worktree;
     const sessionId = crypto.randomUUID();
-    const parsedModel = defaultModel ? ModelIdentifier.tryParse(defaultModel) : null;
-    const provider = parsedModel?.provider || 'claude-code';
+    const provider = resolveProviderFromModel(defaultModel);
     const result = await window.electronAPI.invoke('sessions:create', {
       session: {
         id: sessionId,
@@ -586,6 +598,7 @@ export const createWorktreeSessionCoreActionAtom = atom(
         worktreeId: worktree.id,
       },
       workspaceId: workspacePath,
+      launchSource: 'worktree' satisfies SessionLaunchSource,
     });
 
     if (result.success && result.id) {
@@ -699,8 +712,10 @@ export const requestSessionQuickOpenActionAtom = atom(null, (get, set) => {
 // the module-level `store` without grabbing a setter inside a hook.
 // ============================================================
 
-export function dispatchCreateNewSession(initialDraft?: string): Promise<string | undefined> {
-  return store.set(createNewSessionActionAtom, initialDraft) as Promise<string | undefined>;
+export function dispatchCreateNewSession(
+  input?: string | CreateNewSessionOptions,
+): Promise<string | undefined> {
+  return store.set(createNewSessionActionAtom, input) as Promise<string | undefined>;
 }
 
 export function dispatchCreateNewWorktreeSession(

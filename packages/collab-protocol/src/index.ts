@@ -6,11 +6,19 @@
  * server. Both sides must import from here; there is no other copy.
  */
 
-export * from './roomIds.js';
-export * from './inbox.js';
-export * from './personal.js';
-export * from './teamDocument.js';
-export * from './teamDocumentHistory.js';
-export * from './teamTracker.js';
-export * from './teamRoom.js';
-export * from './projectSync.js';
+export * from "./identityScope.js";
+export * from "./roomIds.js";
+export * from "./collabUri.js";
+export * from "./comments.js";
+export * from "./structuredInput.js";
+export * from "./feedbackRequest.js";
+export * from "./feedbackRequestRoom.js";
+export * from "./conversation.js";
+export * from "./conversationRoom.js";
+export * from "./teamInbox.js";
+export * from "./personal.js";
+export * from "./teamDocument.js";
+export * from "./teamDocumentHistory.js";
+export * from "./teamTracker.js";
+export * from "./teamRoom.js";
+export * from "./projectSync.js";

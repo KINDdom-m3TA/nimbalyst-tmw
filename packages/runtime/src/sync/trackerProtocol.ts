@@ -2,7 +2,7 @@
  * Tracker sync wire protocol (metadata layer) + client-side projections.
  *
  * Wire-protocol message shapes (`TrackerClientMessage`, `TrackerServerMessage`,
- * `EncryptedTrackerItemEnvelope`, `SyncId`, `TrackerRoomConfig`,
+ * `TrackerItemEnvelope`, `SyncId`, `TrackerRoomConfig`,
  * `TrackerMutationRejectCode`) come from `@nimbalyst/collab-protocol` and are
  * shared with the sync server. This file adds the decrypted payload shape
  * (`TrackerItemPayload`), the PGLite cache schema, and the four-state
@@ -20,24 +20,30 @@ import type {
 
 export type {
   SyncId,
-  EncryptedTrackerItemEnvelope,
+  TrackerItemEnvelope,
   TrackerRoomConfig,
   TrackerMutationRejectCode,
   TrackerClientMessage,
   TrackerServerMessage,
-  EncryptedTrackerSchemaEnvelope,
-  EncryptedTrackerNavigationEnvelope,
+  TrackerSchemaEnvelope,
+  TrackerNavigationEnvelope,
+  TrackerSavedViewEnvelope,
   TrackerSyncRequestMessage,
   TrackerMutationRequestMessage,
+  TrackerMutationBatchRequestMessage,
   TrackerSetConfigMessage,
   TrackerPingMessage,
   TrackerSchemaSyncRequestMessage,
   TrackerSchemaMutationRequestMessage,
   TrackerNavigationSyncRequestMessage,
   TrackerNavigationMutationRequestMessage,
+  TrackerSavedViewSyncRequestMessage,
+  TrackerSavedViewMutationRequestMessage,
+  TrackerPresenceMessage,
   TrackerSyncResponseMessage,
   TrackerDeltaMessage,
   TrackerMutationAckMessage,
+  TrackerMutationBatchAckMessage,
   TrackerConfigBroadcastMessage,
   TrackerSchemaSyncResponseMessage,
   TrackerSchemaDeltaMessage,
@@ -45,6 +51,12 @@ export type {
   TrackerNavigationSyncResponseMessage,
   TrackerNavigationDeltaMessage,
   TrackerNavigationMutationAckMessage,
+  TrackerSavedViewSyncResponseMessage,
+  TrackerSavedViewDeltaMessage,
+  TrackerSavedViewMutationAckMessage,
+  TrackerPresenceRosterMessage,
+  TrackerPresenceDeltaMessage,
+  TrackerPresenceMember,
   TrackerPongMessage,
   TrackerRoomMovedMessage,
   TrackerErrorMessage,
@@ -82,7 +94,8 @@ export function buildTrackerRoomId(orgId: string, teamProjectId: TeamProjectId):
 // ============================================================================
 
 /**
- * Decrypted payload. JSON-serialized inside `encryptedPayload`.
+ * The payload itself. JSON-serialized inside `encryptedPayload`, which
+ * carries plaintext despite its name (see `teamTracker.ts`).
  *
  * The shape is intentionally typeless at the field level: `fields` is the
  * user-defined business data bag (title, status, priority, etc.) keyed by
@@ -199,6 +212,15 @@ export interface TrackerPayloadSystem {
    * any other item; only the importer owner can re-snapshot (auth is local).
    */
   origin?: TrackerOrigin;
+  /**
+   * When a person retired this item from the triage inbox without changing it.
+   * Shared rather than personal (unlike the snooze in `tracker_personal_state`)
+   * so one teammate's triage pass clears the item for everyone. LWW per
+   * `syncId`. Optional — older clients omit it and newer clients tolerate its
+   * absence.
+   */
+  triagedAt?: string;
+  triagedBy?: TrackerIdentity | null;
   /** Client-asserted creation timestamp (ms). */
   createdAt?: string;
   /** Client-asserted last-update timestamp (ms). Server clock is `syncId`. */

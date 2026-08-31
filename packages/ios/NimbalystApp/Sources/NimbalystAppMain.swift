@@ -7,6 +7,16 @@ import NimbalystNative
 class AppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        // Must happen here: iOS delivers the notification tap that launched the
+        // app only to a delegate claimed before launch finishes.
+        NotificationManager.registerAsNotificationCenterDelegate()
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
         NotificationManager.shared.didRegisterForRemoteNotifications(withDeviceToken: deviceToken)
@@ -91,56 +101,27 @@ struct NimbalystAppMain: App {
         }
     }
 
-    /// Handle `nimbalyst://` deep links.
-    /// - `nimbalyst://auth/callback?session_token=...&session_jwt=...` — Stytch auth callback
-    /// - `nimbalyst://pair?data=<base64-encoded-JSON>` — QR pairing from Camera app
+    /// Handle allowlisted `nimbalyst://` deep links.
+    /// Pairing payloads are accepted only through the in-app QR scanner.
     private func handleDeepLink(_ url: URL) {
         NSLog("[DeepLink] handleDeepLink called with scheme=\(url.scheme ?? "nil"), host=\(url.host ?? "nil"), path=\(url.path)")
-        guard url.scheme == "nimbalyst" else {
-            NSLog("[DeepLink] Ignored: wrong scheme")
-            return
-        }
 
-        if url.host == "auth" {
+        switch NimbalystExternalURLRouter.route(url) {
+        case .authCallback:
             NSLog("[DeepLink] Routing to authManager.handleCallback")
             appState.authManager.handleCallback(url)
-        } else if url.host == "pair" {
-            NSLog("[DeepLink] Routing to QR pairing")
-            handlePairDeepLink(url)
-        } else {
-            NSLog("[DeepLink] Ignored: unknown host")
-        }
-    }
-
-    /// Handle `nimbalyst://pair?data=<base64>` deep link from Camera QR scan.
-    /// Decodes the base64 payload and feeds it into the same pairing flow
-    /// as the in-app QR scanner.
-    private func handlePairDeepLink(_ url: URL) {
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let dataParam = components.queryItems?.first(where: { $0.name == "data" })?.value,
-              let decoded = Data(base64Encoded: dataParam),
-              let jsonString = String(data: decoded, encoding: .utf8) else {
-            NSLog("[DeepLink] pair: failed to decode base64 data parameter")
-            return
-        }
-
-        guard let pairingData = QRPairingData.parse(jsonString) else {
-            NSLog("[DeepLink] pair: failed to parse pairing data from decoded JSON")
-            return
-        }
-
-        do {
-            try appState.pair(
-                with: pairingData.seed,
-                serverUrl: pairingData.serverUrl,
-                userId: pairingData.userId,
-                analyticsId: pairingData.analyticsId,
-                personalOrgId: pairingData.personalOrgId,
-                personalUserId: pairingData.personalUserId
-            )
-            NSLog("[DeepLink] pair: pairing successful")
-        } catch {
-            NSLog("[DeepLink] pair: pairing failed: \(error.localizedDescription)")
+        case .openPairingScanner:
+            // Surface the in-app scanner only; the link's payload is never applied.
+            NSLog("[DeepLink] Opening in-app pairing scanner (payload ignored)")
+            appState.pairingScannerRequested = true
+        case .session(let sessionId):
+            // Same channel a notification tap uses, so the Live Activity gets
+            // the navigation that was already built and tested for pushes
+            // instead of a second path that has to be kept in step with it.
+            NSLog("[DeepLink] Opening session \(sessionId)")
+            NotificationManager.shared.pendingSessionId = sessionId
+        case .unsupported:
+            NSLog("[DeepLink] Ignored: URL is not allowlisted")
         }
     }
 }

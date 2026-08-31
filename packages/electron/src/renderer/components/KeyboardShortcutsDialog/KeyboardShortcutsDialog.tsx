@@ -120,6 +120,7 @@ export function KeyboardShortcutsDialog({ isOpen, onClose }: KeyboardShortcutsDi
       shortcuts: [
         { label: 'New File / New Session', shortcut: KeyboardShortcuts.file.newFile }, // shared/KeyboardShortcuts.ts:9 - Cmd+N
         { label: 'Launch Session Popup', shortcut: KeyboardShortcuts.file.sessionLaunchPopup }, // shared/KeyboardShortcuts.ts:11 - Cmd+Shift+N
+        { label: 'New Tracker Item', shortcut: KeyboardShortcuts.file.trackerQuickCreate },
         { label: 'New Browser Tab', shortcut: KeyboardShortcuts.file.newBrowserTab }, // shared/KeyboardShortcuts.ts:12 - Cmd+Shift+B
         { label: 'Open File', shortcut: KeyboardShortcuts.file.open }, // shared/KeyboardShortcuts.ts:13 - Cmd+O
         { label: 'Save', shortcut: KeyboardShortcuts.file.save }, // shared/KeyboardShortcuts.ts:14 - Cmd+S
@@ -161,7 +162,9 @@ export function KeyboardShortcutsDialog({ isOpen, onClose }: KeyboardShortcutsDi
         { label: 'Toggle Claude CLI Terminal Drawer', shortcut: KeyboardShortcuts.view.toggleCliTerminalDrawer }, // Ctrl+Shift+` — active claude-code-cli session only
         { label: 'Tracker Mode', shortcut: KeyboardShortcuts.view.trackerMode }, // shared/KeyboardShortcuts.ts:49 - Cmd+T
         { label: 'Shared Documents', shortcut: KeyboardShortcuts.view.collabMode }, // shared/KeyboardShortcuts.ts:50 - Cmd+D
+        { label: 'Organization', shortcut: KeyboardShortcuts.view.orgMode }, // Cmd+Alt+M — only when the project belongs to an organization
         { label: 'Toggle Sidebar', shortcut: KeyboardShortcuts.view.toggleSidebar }, // shared/KeyboardShortcuts.ts:51 - Cmd+B
+        { label: 'Toggle Expanded Tab', shortcut: KeyboardShortcuts.view.toggleExpandedTab }, // Shift+Escape — same as double-clicking a tab
         { label: 'Navigate Back', shortcut: KeyboardShortcuts.view.navigateBack }, // shared/KeyboardShortcuts.ts:52 - Cmd+[
         { label: 'Navigate Forward', shortcut: KeyboardShortcuts.view.navigateForward }, // shared/KeyboardShortcuts.ts:53 - Cmd+]
         { label: 'Next Tab', shortcut: KeyboardShortcuts.view.nextTab }, // shared/KeyboardShortcuts.ts:56 - Cmd+Option+Right
@@ -180,11 +183,38 @@ export function KeyboardShortcutsDialog({ isOpen, onClose }: KeyboardShortcutsDi
         { label: 'Session Quick Open', shortcut: KeyboardShortcuts.window.sessionQuickOpen }, // shared/KeyboardShortcuts.ts:77 - Cmd+L
         { label: 'Prompt Quick Open', shortcut: KeyboardShortcuts.window.promptQuickOpen }, // shared/KeyboardShortcuts.ts:78 - Cmd+Shift+L
         { label: 'Content Search', shortcut: KeyboardShortcuts.window.contentSearch }, // shared/KeyboardShortcuts.ts:79 - Cmd+Shift+F
-        { label: 'Global Search (semantic)', shortcut: KeyboardShortcuts.window.globalSearch }, // shared/KeyboardShortcuts.ts - Cmd+Shift+O
+        { label: 'Memory Search', shortcut: KeyboardShortcuts.window.globalSearch }, // shared/KeyboardShortcuts.ts - Cmd+Shift+O
         { label: 'Team Quick Open', shortcut: KeyboardShortcuts.window.teamQuickOpen }, // shared/KeyboardShortcuts.ts - Cmd+Shift+D
+        { label: 'Organization Messages', shortcut: KeyboardShortcuts.window.organizationManager },
         { label: 'New Worktree', shortcut: KeyboardShortcuts.window.newWorktree }, // shared/KeyboardShortcuts.ts:81 - Cmd+Alt+W
         { label: 'Settings', shortcut: KeyboardShortcuts.window.aiModels }, // shared/KeyboardShortcuts.ts:82 - Cmd+,
         { label: 'Minimize', shortcut: KeyboardShortcuts.window.minimize }, // shared/KeyboardShortcuts.ts:83 - Cmd+M
+      ],
+    },
+    {
+      // Live only while the Organization window is focused — the application
+      // menu swaps them in and out with it, so Cmd+K and Cmd+F keep their
+      // project-window meanings everywhere else.
+      title: 'Organization Window — Messages',
+      shortcuts: [
+        { label: 'New Message', shortcut: KeyboardShortcuts.orgWindow.newMessage }, // shared/KeyboardShortcuts.ts - Cmd+K
+        { label: 'Go to Inbox', shortcut: KeyboardShortcuts.orgWindow.goToInbox }, // shared/KeyboardShortcuts.ts - Cmd+I
+        { label: 'Search Messages', shortcut: KeyboardShortcuts.orgWindow.searchMessages }, // shared/KeyboardShortcuts.ts - Cmd+F
+        { label: 'Next Conversation', shortcut: KeyboardShortcuts.orgWindow.nextConversation }, // shared/KeyboardShortcuts.ts - Cmd+Shift+]
+        { label: 'Previous Conversation', shortcut: KeyboardShortcuts.orgWindow.previousConversation }, // shared/KeyboardShortcuts.ts - Cmd+Shift+[
+        { label: 'Mark All as Read', shortcut: KeyboardShortcuts.orgWindow.markAllRead }, // shared/KeyboardShortcuts.ts - Cmd+Shift+U
+      ],
+    },
+    {
+      title: 'Tracker Grid',
+      shortcuts: [
+        { label: 'Move between cells', shortcut: 'Arrow keys / Tab' },
+        { label: 'Edit focused cell', shortcut: 'F2 or start typing' },
+        { label: 'Open focused item details', shortcut: 'Enter' },
+        { label: 'Commit edit / next row', shortcut: 'Enter (while editing)' },
+        { label: 'Cancel edit / close details', shortcut: 'Escape' },
+        { label: 'Undo last grid edit', shortcut: IS_MAC ? '⌘+Z' : 'Ctrl+Z' },
+        { label: 'Redo grid edit', shortcut: IS_MAC ? '⌘+Shift+Z' : 'Ctrl+Shift+Z' },
       ],
     },
   ];
@@ -244,7 +274,7 @@ export function KeyboardShortcutsDialog({ isOpen, onClose }: KeyboardShortcutsDi
   if (developerMode) {
     const viewGroup = generalShortcuts.find((group) => group.title === 'View');
     viewGroup?.shortcuts.splice(8, 0, {
-      label: 'Pull Requests',
+      label: 'GitHub',
       shortcut: KeyboardShortcuts.view.prReviewMode,
     });
   }

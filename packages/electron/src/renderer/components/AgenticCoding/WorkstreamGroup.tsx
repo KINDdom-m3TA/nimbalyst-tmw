@@ -6,6 +6,7 @@ import {
   sessionUnreadAtom,
   sessionPendingPromptAtom,
   sessionHasPendingInteractivePromptAtom,
+  sessionListTitleAtom,
   groupSessionStatusAtom,
   reparentSessionAtom,
   refreshSessionListAtom,
@@ -15,10 +16,13 @@ import {
   buildShareUrl,
 } from '../../store';
 import { errorNotificationService } from '../../services/ErrorNotificationService';
+import { WorktreeIcon } from '../common/WorktreeIcon';
 import { dialogRef, DIALOG_IDS } from '../../dialogs';
 import type { ShareDialogData } from '../../dialogs';
 import { SessionContextMenu } from './SessionContextMenu';
 import { SessionRelativeTime } from './SessionRelativeTime';
+import { FullTitleTooltip } from './FullTitleTooltip';
+import { sessionAgentWakePendingAtom } from '../../store/atoms/teamInbox';
 
 /**
  * Unified component for rendering expandable session groups in the session history.
@@ -607,13 +611,7 @@ export const WorkstreamGroup: React.FC<WorkstreamGroupProps> = ({
             isActive ? 'text-[var(--nim-primary)]' : 'text-[var(--nim-text-muted)]'
           } [&_svg]:w-full [&_svg]:h-full`}>
             {type === 'worktree' ? (
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <rect x="3" y="2" width="3" height="3" rx="0.5" stroke="currentColor" strokeWidth="1.5" fill="none"/>
-                <rect x="10" y="2" width="3" height="3" rx="0.5" stroke="currentColor" strokeWidth="1.5" fill="none"/>
-                <rect x="3" y="11" width="3" height="3" rx="0.5" stroke="currentColor" strokeWidth="1.5" fill="none"/>
-                <path d="M4.5 5v3.5a1.5 1.5 0 0 0 1.5 1.5h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                <path d="M11.5 5v5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-              </svg>
+              <WorktreeIcon size={16} />
             ) : (
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <circle cx="8" cy="4" r="1.5" fill="currentColor"/>
@@ -651,7 +649,12 @@ export const WorkstreamGroup: React.FC<WorkstreamGroupProps> = ({
                   onClick={(e) => e.stopPropagation()}
                 />
               ) : (
-                <span className="workstream-group-name font-medium text-[var(--nim-text)] whitespace-nowrap overflow-hidden text-ellipsis">{displayTitle}</span>
+                <FullTitleTooltip
+                  label={displayTitle}
+                  className="workstream-group-name font-medium text-[var(--nim-text)] whitespace-nowrap overflow-hidden text-ellipsis"
+                >
+                  {displayTitle}
+                </FullTitleTooltip>
               )}
               {displayIsPinned && !isRenamingWorktree && (
                 <MaterialSymbol icon="push_pin" size={12} className="workstream-group-pin-icon shrink-0 text-[var(--nim-text-faint)] opacity-70" />
@@ -980,6 +983,7 @@ const WorkstreamSessionStatusIndicator = memo<{ sessionId: string; uncommittedCo
   const hasPendingInteractivePrompt = useAtomValue(sessionHasPendingInteractivePromptAtom(sessionId));
   const isProcessing = useAtomValue(sessionProcessingAtom(sessionId));
   const hasPendingPrompt = useAtomValue(sessionPendingPromptAtom(sessionId));
+  const hasAgentWakePending = useAtomValue(sessionAgentWakePendingAtom(sessionId));
   const hasUnread = useAtomValue(sessionUnreadAtom(sessionId));
 
   // Priority: interactive prompt > processing > pending prompt > unread > uncommitted count
@@ -995,6 +999,14 @@ const WorkstreamSessionStatusIndicator = memo<{ sessionId: string; uncommittedCo
     return (
       <div className="workstream-session-item-status processing flex items-center justify-center text-[var(--nim-primary)] animate-spin" title="Processing...">
         <MaterialSymbol icon="progress_activity" size={12} />
+      </div>
+    );
+  }
+
+  if (hasAgentWakePending) {
+    return (
+      <div className="workstream-session-item-status agent-wake-pending flex items-center justify-center text-[var(--nim-warning)]" title="Room message pending agent dispatch">
+        <MaterialSymbol icon="hourglass_top" size={12} />
       </div>
     );
   }
@@ -1062,7 +1074,8 @@ const WorkstreamSessionItem: React.FC<WorkstreamSessionItemProps> = ({
   const renameInputRef = useRef<HTMLInputElement>(null);
   const shareInfo = useAtomValue(sessionShareAtom(session.id));
 
-  const displayTitle = session.title || 'Untitled Session';
+  const currentTitle = useAtomValue(sessionListTitleAtom(session.id));
+  const displayTitle = currentTitle || session.title || 'Untitled Session';
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -1175,9 +1188,14 @@ const WorkstreamSessionItem: React.FC<WorkstreamSessionItemProps> = ({
         />
       ) : (
         <>
-          <span className={`workstream-session-item-title flex-1 text-xs text-[var(--nim-text)] whitespace-nowrap overflow-hidden text-ellipsis ${
-            isActive ? 'font-medium' : ''
-          }`}>{displayTitle}</span>
+          <FullTitleTooltip
+            label={displayTitle}
+            className={`workstream-session-item-title flex-1 text-xs text-[var(--nim-text)] whitespace-nowrap overflow-hidden text-ellipsis ${
+              isActive ? 'font-medium' : ''
+            }`}
+          >
+            {displayTitle}
+          </FullTitleTooltip>
           <span className="workstream-session-item-timestamp shrink-0 text-[0.6875rem] text-[var(--nim-text-faint)] ml-2">
             <SessionRelativeTime sessionId={session.id} fallbackTimestamp={session.updatedAt || session.createdAt} />
           </span>

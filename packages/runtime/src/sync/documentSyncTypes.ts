@@ -1,14 +1,19 @@
 /**
- * Types for DocumentSync -- client-side Yjs + encryption layer.
+ * Types for DocumentSync -- client-side Yjs sync layer.
  *
  * Wire-protocol message shapes come from `@nimbalyst/collab-protocol` and
  * are shared with the sync server. This file adds the client-side config
  * surface, review-gate state, and awareness types the renderer consumes.
  */
 
-import type { KeyEnvelopeMessage as ProtocolKeyEnvelopeMessage } from '@nimbalyst/collab-protocol';
 import type { Doc } from 'yjs';
 import type { LocalDocumentReplica } from './LocalDocumentReplica';
+import type {
+  PersonalJwt,
+  PersonalMemberId,
+  TeamJwt,
+  TeamMemberId,
+} from '../auth/jwtScopes';
 
 export type {
   DocClientMessage,
@@ -17,8 +22,6 @@ export type {
   DocUpdateMessage,
   DocCompactMessage,
   DocAwarenessMessage,
-  AddKeyEnvelopeMessage,
-  RequestKeyEnvelopeMessage,
   DocSetMetadataMessage,
   DocSyncResponseMessage,
   DocUpdateBroadcastMessage,
@@ -29,14 +32,11 @@ export type {
   EncryptedDocSnapshot,
 } from '@nimbalyst/collab-protocol';
 
-/** Wire key-envelope delivery message (`type: 'keyEnvelope'`). */
-export type DocKeyEnvelopeMessage = ProtocolKeyEnvelopeMessage;
-
 // ============================================================================
 // Configuration
 // ============================================================================
 
-export interface DocumentSyncConfig {
+interface DocumentSyncCommonConfig {
   /** Existing durable replica to attach to. The provider never destroys it. */
   replica?: LocalDocumentReplica;
 
@@ -45,63 +45,11 @@ export interface DocumentSyncConfig {
   /** WebSocket server URL (e.g., wss://sync.nimbalyst.com) */
   serverUrl: string;
 
-  /**
-   * Function to get a fresh JWT for WebSocket auth.
-   * `forceRefresh` (NIM-949) bypasses any cached org-scoped token so a reconnect
-   * after an auth-style rejection (HTTP 400 wrong-org/expired) re-exchanges.
-   */
-  getJwt: (opts?: { forceRefresh?: boolean }) => Promise<string>;
-
   /** B2B organization ID */
   orgId: string;
 
-  /**
-   * Epic H2 key custody. `legacy-e2e` (default): the client encrypts/decrypts
-   * Yjs updates with `documentKey` (zero-knowledge). `server-managed`: the
-   * server holds the per-team DEK and encrypts at rest, so the client sends and
-   * receives PLAINTEXT (base64 raw bytes, no iv) and `documentKey` is unused.
-   */
-  keyCustody?: 'legacy-e2e' | 'server-managed';
-
-  /**
-   * AES-256-GCM key for encrypting/decrypting Yjs updates. Required in
-   * `legacy-e2e` mode; unused (and optional) in `server-managed` mode.
-   */
-  documentKey?: CryptoKey;
-
-  /**
-   * Legacy org key for reading PRE-MIGRATION rows in `server-managed` mode.
-   *
-   * When a team migrates legacy-e2e -> server-managed, rows written before the
-   * flip are still AES-ciphertext (the server passes them through with their
-   * original iv; only DEK-fingerprinted rows are server-decrypted to plaintext
-   * with an empty-iv sentinel). To read those old rows the client must AES-
-   * decrypt them with the original org key. This holds that key so server-
-   * managed docs can still surface their legacy history. Optional: absent when
-   * the legacy envelope is unavailable (those rows then skip, never crash).
-   */
-  legacyDocumentKey?: CryptoKey;
-
-  /**
-   * NIM-959: every candidate legacy org-key epoch for reading PRE-MIGRATION
-   * rows in `server-managed` mode. A team that rotated its org key while still
-   * legacy-e2e can have content rows spanning multiple epochs; the doc-content
-   * read path must try each (the doc INDEX path already does this for titles,
-   * NIM-906/910). `decryptFromWire` tries these in order until one succeeds, so
-   * a snapshot written under a now-archived epoch still decrypts instead of
-   * blanking the document body. Superset of `legacyDocumentKey` when present.
-   */
-  legacyDocumentKeys?: CryptoKey[];
-
-  /** Current user's ID */
-  userId: string;
-
   /** Document ID (used to construct room ID) */
   documentId: string;
-
-  /** Org key fingerprint for key epoch enforcement. If provided, the server
-   *  rejects writes with a stale fingerprint after key rotation. */
-  orgKeyFingerprint?: string;
 
   /** Called when a remote Yjs update is applied to the Y.Doc */
   onRemoteUpdate?: (origin: string) => void;
@@ -113,11 +61,32 @@ export interface DocumentSyncConfig {
    */
   onContentChanged?: (yDoc: Doc) => void;
 
+  /**
+   * Called once for each locally-originated Yjs update after runtime has
+   * excluded remote, snapshot, persisted-pending, and replica-internal origins.
+   * Hosts can use this boundary for lifecycle-level product telemetry without
+   * importing analytics into the runtime package.
+   */
+  onLocalUpdate?: () => void;
+
   /** Called when awareness state changes from remote users */
   onAwarenessUpdate?: (states: Map<string, AwarenessState>) => void;
 
   /** Called when connection status changes */
   onStatusChange?: (status: DocumentSyncStatus) => void;
+
+  /**
+   * Called when an update reached the Y.Doc but a listener threw while handling
+   * it -- in practice, the Lexical binding aborting.
+   *
+   * This is NOT a payload problem and deliberately does not stop sync, but the
+   * host has to know: the document is in the Y.Doc and did not paint, so an
+   * editor left on screen shows an empty document that looks blank rather than
+   * broken. That is exactly how an unregistered `tracker-reference` node
+   * reached production as "some docs still don't load" with nothing but a
+   * console error to show for it.
+   */
+  onEditorBindingError?: (error: unknown) => void;
 
   /** Structured, content-free desktop observability sink. */
   onOfflineMetric?: (event: {
@@ -140,12 +109,6 @@ export interface DocumentSyncConfig {
   ) => void | Promise<void>;
 
   /**
-   * Called when the review gate state changes (remote changes arrive or are accepted/rejected).
-   * Allows UI to show pending review indicators.
-   */
-  onReviewStateChange?: (state: ReviewGateState) => void;
-
-  /**
    * Called once after the initial sync response from the server completes.
    * `isEmpty` is true if the server had no existing content for this room.
    *
@@ -157,35 +120,11 @@ export interface DocumentSyncConfig {
   onFirstSyncComplete?: (isEmpty: boolean) => void;
 
   /**
-   * Called when a key envelope is received from the server.
-   * The consumer should verify `senderPublicKey` against the sender's
-   * registered identity key (from TeamRoom) before using the envelope
-   * to unwrap the document key. Use ECDHKeyManager.unwrapDocumentKeyVerified().
-   */
-  onKeyEnvelope?: (envelope: {
-    wrappedKey: string;
-    iv: string;
-    senderPublicKey: string;
-    senderUserId: string;
-  }) => void;
-
-  /**
    * Epic H3 P1: called when the server reports this document room was relocated
    * to another org by the move engine. The doc id is unchanged; the host should
    * re-resolve which org owns the document and reconnect.
    */
   onRoomMoved?: (dest: { destOrgId: string }) => void;
-
-  /**
-   * Enable the review gate for remote changes.
-   * When true, remote updates are applied to the Y.Doc (for CRDT correctness and live preview)
-   * but marked as "unreviewed" -- the host application should not autosave until
-   * acceptRemoteChanges() is called.
-   *
-   * When false (default), all remote updates are treated as accepted immediately.
-   * Use false for single-user multi-device sync (no review needed for your own edits).
-   */
-  reviewGateEnabled?: boolean;
 
   /**
    * Override the WebSocket URL construction.
@@ -204,22 +143,29 @@ export interface DocumentSyncConfig {
   createWebSocket?: (url: string) => WebSocket;
 }
 
-// ============================================================================
-// Review Gate
-// ============================================================================
+type TeamDocumentSyncIdentity = {
+  /** Fresh team-org JWT for a shared document room. */
+  getJwt: (opts?: { forceRefresh?: boolean }) => Promise<TeamJwt>;
+  teamMemberId: TeamMemberId;
+  personalMemberId?: never;
+};
 
-/**
- * State of the review gate for remote changes.
- * Mirrors the AI "pending review" pattern: remote edits are visible in the editor
- * but not saved to disk until the user explicitly accepts them.
- */
-export interface ReviewGateState {
-  /** Whether there are any unreviewed remote changes */
-  hasUnreviewed: boolean;
-  /** Number of buffered remote update operations */
-  unreviewedCount: number;
-  /** User IDs that contributed unreviewed changes */
-  unreviewedAuthors: string[];
+type PersonalDocumentSyncIdentity = {
+  /** Fresh personal-org JWT for a personal/mobile document room. */
+  getJwt: (opts?: { forceRefresh?: boolean }) => Promise<PersonalJwt>;
+  personalMemberId: PersonalMemberId;
+  teamMemberId?: never;
+};
+
+/** JWT scope and room member identity must travel as one compiler-checked pair. */
+export type DocumentSyncConfig = DocumentSyncCommonConfig & (
+  TeamDocumentSyncIdentity | PersonalDocumentSyncIdentity
+);
+
+export type DocumentSyncMemberId = TeamMemberId | PersonalMemberId;
+
+export function documentSyncMemberId(config: DocumentSyncConfig): DocumentSyncMemberId {
+  return config.teamMemberId ?? config.personalMemberId;
 }
 
 // ============================================================================
@@ -265,6 +211,12 @@ export type AwarenessState = Record<string, unknown> & {
    *  the extension path so the SDK hook can dedupe remote collaborators by
    *  stable user id rather than y-protocols clientID. */
   user: { name: string; color: string; id?: string; [k: string]: unknown };
+  /**
+   * Additive, ephemeral departure marker. Updated clients delete the sender's
+   * remote state immediately; older clients ignore it and fall back to their
+   * existing stale-state cleanup while retaining the required user block.
+   */
+  nimbalystDeparture?: { version: 1 };
   /** Lexical-style cursor block (markdown path only). */
   cursor?: {
     anchor: SerializedRelativePosition;

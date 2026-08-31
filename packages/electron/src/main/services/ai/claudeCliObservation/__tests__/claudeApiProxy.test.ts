@@ -185,6 +185,35 @@ describe("claudeApiProxy", () => {
     expect(upstreamHeaders["host"]).toContain("127.0.0.1");
   });
 
+  it("reports the 1M-context beta flag from the outbound request headers", async () => {
+    // NIM-2170: the CLI sends `context-1m-2025-08-07` only when the account +
+    // model are entitled to the extended window, so the observation layer reads
+    // its presence as the live context-window signal (there is none in the SSE).
+    upstream = await startFakeUpstream();
+
+    const infos: Array<{ context1m: boolean }> = [];
+    proxy = await startClaudeApiProxy(
+      {
+        onSSEEvent: () => {},
+        onRequestBody: (_body, info) => infos.push(info),
+        onProxyError: (err) => {
+          throw err;
+        },
+      },
+      { upstreamUrl: upstream.url },
+    );
+
+    const body = JSON.stringify({ model: "claude-x", messages: [{ role: "user", content: "hi" }] });
+    await postToProxy(proxy.port, body, {
+      "anthropic-beta": "oauth-2025-04-20,context-1m-2025-08-07",
+    });
+    await postToProxy(proxy.port, body, { "anthropic-beta": "oauth-2025-04-20" });
+
+    expect(infos.map((i) => i.context1m)).toEqual([true, false]);
+    // The header is forwarded upstream untouched — we only read it.
+    expect(upstream.lastHeaders()["anthropic-beta"]).toBe("oauth-2025-04-20");
+  });
+
   it("forwards to /v1/messages unchanged when the upstream has no base path (default shape)", async () => {
     upstream = await startFakeUpstream();
 
@@ -293,5 +322,122 @@ describe("claudeApiProxy", () => {
     expect(errors[0].statusCode).toBe(429);
     expect(errors[0].retryAfter).toBe("42");
     expect(errors[0].body).toContain("rate_limit_error");
+  });
+
+  it("neither observes nor tees a side request the filter rejects", async () => {
+    // The CLI's prompt-suggestion fork rides the same connection. Teeing it would
+    // persist a predicted *user* prompt as an assistant turn.
+    upstream = await startFakeUpstream();
+
+    const sseEvents: SSEEvent[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    proxy = await startClaudeApiProxy(
+      {
+        onSSEEvent: (event) => sseEvents.push(event),
+        onRequestBody: (body) => bodies.push(body),
+        onProxyError: (err) => { throw err; },
+      },
+      { upstreamUrl: upstream.url },
+    );
+
+    const res = await postToProxy(
+      proxy.port,
+      JSON.stringify({
+        model: "claude-x",
+        messages: [
+          { role: "user", content: "hi" },
+          { role: "assistant", content: [{ type: "text", text: "hello" }] },
+          { role: "user", content: "[SUGGESTION MODE: Suggest what the user might naturally type next]" },
+        ],
+      }),
+      {},
+    );
+
+    expect(bodies).toEqual([]);
+    expect(sseEvents).toEqual([]);
+    // Passthrough is unconditional — the CLI still gets its suggestion.
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('"type":"message_stop"');
+  });
+
+  it("suppresses onUpstreamError for an unobserved side request, and still forwards the error body", async () => {
+    // The fork's own 400s are not the user's turn failing, so they must not
+    // render as a failed turn — but the bytes still have to reach the CLI.
+    const errorBody = JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "nope" } });
+    upstream = await startFakeErrorUpstream(400, errorBody);
+
+    const errors: Array<{ statusCode: number }> = [];
+    proxy = await startClaudeApiProxy(
+      {
+        onSSEEvent: () => {},
+        onUpstreamError: (info) => errors.push(info),
+        onProxyError: (err) => { throw err; },
+      },
+      { upstreamUrl: upstream.url },
+    );
+
+    const res = await postToProxy(
+      proxy.port,
+      JSON.stringify({
+        model: "claude-x",
+        messages: [{ role: "user", content: "[SUGGESTION MODE: predict the next prompt]" }],
+      }),
+      {},
+    );
+
+    expect(errors).toEqual([]);
+    expect(res.status).toBe(400);
+    expect(res.body).toContain("invalid_request_error");
+  });
+
+  it("does not observe a /v1/messages body it cannot parse", async () => {
+    // The classifier has to read the body to recognise a side request, so a body
+    // it cannot parse is a body it cannot clear. Failing open would observe the
+    // one request we know least about; the filter is only worth having if an
+    // unreadable body is treated as unobservable.
+    upstream = await startFakeUpstream();
+
+    const sseEvents: SSEEvent[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    proxy = await startClaudeApiProxy(
+      {
+        onSSEEvent: (event) => sseEvents.push(event),
+        onRequestBody: (body) => bodies.push(body),
+        onProxyError: (err) => { throw err; },
+      },
+      { upstreamUrl: upstream.url },
+    );
+
+    const res = await postToProxy(proxy.port, "{not json at all", {});
+
+    expect(bodies).toEqual([]);
+    expect(sseEvents).toEqual([]);
+    // Passthrough is unconditional here too: we decline to interpret the body,
+    // we do not decline to forward it.
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('"type":"message_stop"');
+  });
+
+  it("does not surface an upstream error for a /v1/messages body it cannot parse", async () => {
+    // Same reasoning as the fork's 400s: a request we never observed must not
+    // render its failures as the user's turn failing.
+    const errorBody = JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "nope" } });
+    upstream = await startFakeErrorUpstream(400, errorBody);
+
+    const errors: Array<{ statusCode: number }> = [];
+    proxy = await startClaudeApiProxy(
+      {
+        onSSEEvent: () => {},
+        onUpstreamError: (info) => errors.push(info),
+        onProxyError: (err) => { throw err; },
+      },
+      { upstreamUrl: upstream.url },
+    );
+
+    const res = await postToProxy(proxy.port, "{not json at all", {});
+
+    expect(errors).toEqual([]);
+    expect(res.status).toBe(400);
+    expect(res.body).toContain("invalid_request_error");
   });
 });

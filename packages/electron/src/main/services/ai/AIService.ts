@@ -11,6 +11,7 @@ import {
   isExtensionAgentProvider,
   resolveExtensionAgentRef,
 } from './providerResolution';
+import { resolveProviderAuthRequirement } from './providerAuthRequirement';
 import { getAgentProviderRegistry } from '../../extensions/AgentProviderRegistry';
 import {
   SessionManager,
@@ -19,17 +20,24 @@ import {
   AIProvider,
   isAskUserQuestionProvider,
   isAgentProvider,
-  isSlashCommandCatalogProvider,
   ClaudeCodeProvider,
   OpenAICodexProvider,
+  OpenCodeProvider,
+  GeminiAntigravityProvider,
 } from '@nimbalyst/runtime/ai/server';
+import { agentCapabilitiesForProviderType } from '@nimbalyst/runtime/ai/server/agentCapabilities';
 import { CLAUDE_CODE_SAFE_FALLBACK_MODEL } from '@nimbalyst/runtime/ai/modelConstants';
 import { reconcileClaudeCodeModels } from './claudeCodeModelReconcile';
-import { isModelEnabled } from './modelEnablementFilter';
+import { isModelEnabled, resolveProviderEnabled } from './modelEnablementFilter';
+import {
+  getCachedHeadlessAgentAvailability,
+  refreshHeadlessAgentAvailability,
+  type HeadlessAgentId,
+} from './headlessAgentAvailability';
 import { getSessionStateManager } from '@nimbalyst/runtime/ai/server/SessionStateManager';
 import { parseContextUsageMessage } from '@nimbalyst/runtime/ai/server/utils/contextUsage';
 import { isBedrockToolSearchError } from '@nimbalyst/runtime/ai/server/utils/errorDetection';
-import { parseThinkingMode, resolveEffortLevel } from '@nimbalyst/runtime/ai/server/effortLevels';
+import { resolveEffortLevel, resolveThinkingMode } from '@nimbalyst/runtime/ai/server/effortLevels';
 import type { SessionStore } from '@nimbalyst/runtime';
 import {
   ModelIdentifier,
@@ -44,6 +52,7 @@ import {
   type AIModel,
   type SessionData,
   type SessionType,
+  AI_PROVIDER_TYPES,
 } from '@nimbalyst/runtime/ai/server/types';
 // MCP imports removed - no longer using MCP HTTP server
 import { ToolExecutor, toolRegistry, BUILT_IN_TOOLS } from './tools';
@@ -57,10 +66,10 @@ import { TrayManager } from '../../tray/TrayManager';
 import { logger } from '../../utils/logger';
 import { getSettingsService } from '../SettingsService';
 import { subscribeProviderSettingsInvalidation } from './providerSettingsCacheInvalidation';
-import { windowStates, findWindowByWorkspace, getWindowId, createWindow } from '../../window/WindowManager';
-import { resolveActiveWorkspacePathForWindowId } from '../../window/windowState';
+import { windowStates, findWindowByWorkspace, getWindowId, createWindow, isAppQuitting } from '../../window/WindowManager';
+import { getWindowIdForWindow, resolveActiveWorkspacePathForWindowId } from '../../window/windowState';
+import { resolveSenderWorkspacePath } from '../../window/captureWindowWorkspace';
 import { sessionFileTracker } from '../SessionFileTracker';
-import { enrichTranscriptMessagesWithToolCallDiffs } from '../TranscriptToolCallEnricher';
 import { extractFilePath } from './tools/extractFilePath';
 import { handleBackendTool } from '../../mcp/tools/backendToolHandler';
 import { findOwnedBackendTool } from '../../mcp/backendToolRegistry';
@@ -68,6 +77,7 @@ import { resolveBackendWorkspacePath } from '../../mcp/mcpWorkspaceResolver';
 import { toolCallMatcher, unwrapShellCommand } from '../ToolCallMatcher';
 import { workspaceFileEditAttributionService } from '../WorkspaceFileEditAttributionService';
 import {AnalyticsService} from "../analytics/AnalyticsService.ts";
+import { trackCreateAiSession } from '../analytics/sessionLaunchAnalytics';
 import { FeatureUsageService, FEATURES } from "../FeatureUsageService.ts";
 import { historyManager } from '../../HistoryManager';
 import { addGitignoreBypass } from '../../file/WorkspaceEventBus';
@@ -82,7 +92,8 @@ import {
   normalizeAIProviderOverrides,
   shouldShowCommunityPopup,
   wasCommunityPopupShownThisLaunch,
-  getDefaultEffortLevel
+  getDefaultEffortLevel,
+  getDefaultThinkingMode
 } from '../../utils/store';
 import { mergeAISettings, getAIProviderOverridesWithWorktreeFallback } from '../../utils/aiSettingsMerge';
 import { DocumentContextService, type RawDocumentContext, type PreparedDocumentContext } from '@nimbalyst/runtime';
@@ -122,14 +133,62 @@ import {
   categorizeAIError,
 } from './aiServiceUtils';
 import { MessageStreamingHandler } from './MessageStreamingHandler';
+import { setSessionPendingPrompt } from './pendingPromptPersistence';
+import { shouldForceIdleOnCancel } from './sessionSettlePolicy';
+import {
+  hasTerminalizedAskUserQuestion,
+  persistAskUserQuestionTerminalResult,
+} from './askUserQuestionFallbackResolution';
 import { HooklessAgentFileWatcher } from './HooklessAgentFileWatcher';
 import { getAgentWorkflowService } from '../AgentWorkflowService';
 import { tryClaimAndDispatchNextQueuedPrompt } from './queuedPromptDispatcher';
+import {
+  QueueDriveService,
+  type DriveOutcome,
+  type DriveReason,
+} from './QueueDriveService';
+import { createWorkspaceWindowResolver } from './resolveWorkspaceWindow';
+import { runQueueDriveAttempt } from './queueDriveAttempt';
+import { clearStuckRunningState } from './clearStuckRunningState';
+import { publishQueuedPromptsToSync } from './queuedPromptSyncPublisher';
+import { ingestMobileQueuedPrompts } from './mobileQueuedPromptIngest';
+import { onWorkspaceWindowAvailable } from '../../window/workspaceWindowAvailability';
 import { dispatchQueuedPromptToClaudeCli } from './claudeCliQueueDispatch';
+import { publishQueuedPromptClaim } from './queuedPromptClaimEvents';
 import { ensureClaudeCliSession, claudeCliSessionSupportsPlugins } from './claudeCliLauncherSingleton';
-import { supportsWorkspaceSlashWorkflowProvider } from '../../../shared/agentWorkflowProviders';
+import {
+  resolveProviderWorkflowCatalog,
+  type ProviderWorkflowCatalog,
+} from './providerWorkflowCatalog';
+import { captureTutorialMilestone } from '../tutorial/tutorialAnalytics';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Catalogs that survive the provider instance that discovered them.
+ *
+ * The `/` typeahead runs before a session has a live provider, and a provider
+ * whose catalog is only learned from a running agent (claude-code from the SDK
+ * init payload, opencode from `command.list` against its server) has nothing to
+ * report at that moment. The static cache each of them keeps lets the commands
+ * a previous session discovered show up immediately.
+ *
+ * Registering here rather than branching per provider name keeps the next one a
+ * single line; providers absent from the map have no pre-instance catalog and
+ * fall through to an empty one.
+ */
+const CROSS_SESSION_WORKFLOW_CATALOGS: Partial<
+  Record<AIProviderType, () => { commands: string[]; skills: string[] }>
+> = {
+  'claude-code': () => ({
+    commands: ClaudeCodeProvider.getCachedSdkSlashCommands(),
+    skills: ClaudeCodeProvider.getCachedSdkSkills(),
+  }),
+  opencode: () => ({
+    commands: OpenCodeProvider.getCachedSdkSlashCommands(),
+    skills: [],
+  }),
+};
 
 // Debounced re-sync of the available-models list to mobile. The renderer can
 // send rapid providerSettings slices when toggling providers, so coalesce them
@@ -148,6 +207,15 @@ function scheduleMobileSettingsSync(): void {
       syncSettingsToMobile(apiKeys['openai']);
     }).catch(() => { /* sync manager may not be available */ });
   }, 500);
+}
+
+export interface InterruptCurrentTurnResult {
+  success: boolean;
+  error?: string;
+  /** How the turn was stopped; absent when `success` is false. */
+  method?: 'interrupt' | 'abort' | 'terminal-ctrl-c';
+  /** True when the session was forced idle because no completion event could arrive. */
+  forcedIdle?: boolean;
 }
 
 export class AIService {
@@ -273,22 +341,264 @@ export class AIService {
     const { getQueuedPromptsStore } = await import('../RepositoryManager');
     const queueStore = getQueuedPromptsStore();
     const promptId = `meta-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const queuedDocumentContext = documentContext?.promptProvenance
+      ? {
+          ...documentContext,
+          promptProvenance: {
+            ...documentContext.promptProvenance,
+            queuedPromptId: promptId,
+          },
+        }
+      : documentContext;
     const created = await queueStore.create({
       id: promptId,
       sessionId,
       prompt,
       attachments,
-      documentContext,
+      documentContext: queuedDocumentContext,
     });
     return { id: created.id, prompt: created.prompt, createdAt: created.createdAt };
   }
 
-  public async triggerQueuedPromptProcessingForSession(sessionId: string, workspacePath: string): Promise<boolean> {
-    const targetWindow = findWindowByWorkspace(workspacePath);
-    if (!targetWindow || targetWindow.isDestroyed()) {
-      return false;
+  /**
+   * Resolves (and, when allowed, opens) the window a queued prompt needs.
+   * Shared by the mobile sync path and the queue driver so a prompt from the
+   * phone behaves the same whichever trigger delivered it (#962).
+   */
+  private readonly queueWindowResolver = createWorkspaceWindowResolver<Electron.BrowserWindow>({
+    findWindow: (workspacePath) => findWindowByWorkspace(workspacePath),
+    isDestroyed: (window) => window.isDestroyed(),
+    workspaceExists: (workspacePath) => fs.existsSync(workspacePath),
+    createWindow: (workspacePath) => createWindow(false, true, workspacePath),
+    waitForLoad: (window) =>
+      new Promise<void>((resolve) => {
+        window.webContents.once('did-finish-load', () => resolve());
+      }),
+    isQuitting: () => isAppQuitting(),
+    now: () => Date.now(),
+    logInfo: (message) => logger.main.info(message),
+    logWarn: (message) => logger.main.warn(message),
+  });
+
+  private queueDriveService: QueueDriveService | null = null;
+
+  /**
+   * The single owner of queued-prompt drainage. Every trigger — renderer,
+   * mobile control message, mobile sync, FIFO continuation, boot recovery,
+   * wakeup — funnels through this so a blocked attempt re-drives itself
+   * instead of evaporating (#962).
+   */
+  /**
+   * Make Cancel authoritative over session state.
+   *
+   * `provider.abort()` only unwinds a turn that is still in flight; once the
+   * per-turn AbortController has been cleared it is a no-op. If the turn died
+   * without a terminal transition (e.g. a Codex app-server RPC error yielded an
+   * in-band error chunk and returned), SessionStateManager still holds
+   * `running`, so the renderer's 15s processing reconcile puts the spinner back
+   * a few seconds after every click. Clearing the state here means one click
+   * always stops the session, whichever way the turn ended.
+   */
+  private async forceSessionIdleOnCancel(sessionId: string): Promise<void> {
+    try {
+      const stateManager = getSessionStateManager();
+      if (!shouldForceIdleOnCancel(stateManager.getSessionState(sessionId))) return;
+      await stateManager.interruptSession(sessionId);
+    } catch (error) {
+      logger.main.error(`[AIService] Failed to clear session state on cancel for ${sessionId}:`, error);
     }
-    return this.processQueuedPrompt(sessionId, workspacePath, targetWindow);
+  }
+
+  private getQueueDrive(): QueueDriveService {
+    if (!this.queueDriveService) {
+      this.queueDriveService = new QueueDriveService({
+        attempt: (input) => this.attemptQueueDrive(input),
+        onWindowAvailable: (workspacePath, listener) =>
+          onWorkspaceWindowAvailable((availablePath) => {
+            if (availablePath === workspacePath) listener();
+          }),
+        onSessionIdle: (sessionId, listener) => {
+          const stateManager = getSessionStateManager();
+          const handler = (event: { sessionId: string }) => {
+            if (event.sessionId === sessionId) listener();
+          };
+          // Only the three terminal transitions; subscribing to all seven
+          // would register more listeners per deferred session for nothing.
+          stateManager.on('session:completed', handler);
+          stateManager.on('session:error', handler);
+          stateManager.on('session:interrupted', handler);
+          return () => {
+            stateManager.removeListener('session:completed', handler);
+            stateManager.removeListener('session:error', handler);
+            stateManager.removeListener('session:interrupted', handler);
+          };
+        },
+        logInfo: (message) => logger.main.info(message),
+        logWarn: (message) => logger.main.warn(message),
+        logError: (message, error) => logger.main.error(message, error),
+      });
+    }
+    return this.queueDriveService;
+  }
+
+  /** Ask the driver to drain a session's queue. Fire-and-forget. */
+  public requestQueueDrive(sessionId: string, workspacePath: string, reason: DriveReason): void {
+    this.getQueueDrive().requestDrive(sessionId, workspacePath, reason);
+  }
+
+  /**
+   * Mirror a session's remaining pending queue into the sync index. Must run
+   * after every queue transition, or mobile keeps re-showing a prompt the
+   * desktop already claimed — see queuedPromptSyncPublisher.ts (NIM-2402).
+   */
+  public async publishQueueStateToSync(sessionId: string): Promise<void> {
+    await publishQueuedPromptsToSync(
+      {
+        listPending: async (id) => {
+          const { getQueuedPromptsStore } = await import('../RepositoryManager');
+          return getQueuedPromptsStore().listPending(id);
+        },
+        getSyncProvider,
+        logWarn: (message) => logger.main.warn(message),
+      },
+      sessionId,
+    );
+  }
+
+  /** Drain a session's queue and report what happened. */
+  public driveQueuedPrompts(
+    sessionId: string,
+    workspacePath: string,
+    reason: DriveReason,
+  ): Promise<DriveOutcome> {
+    return this.getQueueDrive().drive(sessionId, workspacePath, reason);
+  }
+
+  /**
+   * One drive attempt. Returns a deferred outcome (never a discarded `false`)
+   * so the driver can arm the matching wake condition.
+   */
+  private async attemptQueueDrive({
+    sessionId,
+    workspacePath,
+    reason,
+  }: {
+    sessionId: string;
+    workspacePath: string;
+    reason: DriveReason;
+  }): Promise<DriveOutcome> {
+    const { getQueuedPromptsStore } = await import('../RepositoryManager');
+    let queueStore: ReturnType<typeof getQueuedPromptsStore>;
+    try {
+      queueStore = getQueuedPromptsStore();
+    } catch {
+      return { kind: 'deferred', reason: 'db-not-ready' };
+    }
+
+    return runQueueDriveAttempt<Electron.BrowserWindow>(
+      {
+        listPendingIds: async (id) => (await queueStore.listPending(id)).map((row) => row.id),
+        isChainActive: (id) => this.sessionsProcessingQueue.has(id),
+        isSessionBusy: (id) => {
+          const liveState = getSessionStateManager().getSessionState(id);
+          return !!liveState && (liveState.status === 'running' || liveState.isStreaming);
+        },
+        resolveWindow: (path, allowAutoOpen) =>
+          this.queueWindowResolver.resolve(path, { allowAutoOpen }),
+        failAllPending: async (id, errorMessage) => {
+          const failed = await queueStore.failAllPendingForSession(id, errorMessage);
+          await this.publishQueueStateToSync(id);
+          return failed;
+        },
+        dispatch: ({ sessionId: id, workspacePath: path, window, reason: driveReason }) =>
+          this.tryDispatchNextQueuedPrompt(id, path, window, `queue-drive:${driveReason}`),
+        logWarn: (message) => logger.main.warn(message),
+      },
+      { sessionId, workspacePath, reason },
+    );
+  }
+
+  public async triggerQueuedPromptProcessingForSession(
+    sessionId: string,
+    workspacePath: string,
+    reason: DriveReason = 'renderer-trigger',
+  ): Promise<boolean> {
+    const outcome = await this.driveQueuedPrompts(sessionId, workspacePath, reason);
+    return outcome.kind === 'dispatched';
+  }
+
+  /**
+   * Interrupt the current turn (graceful when possible) so queued prompts are
+   * processed sooner. Providers that support a true mid-stream interrupt
+   * (Claude Code) wrap up cleanly; others fall back to abort() via the
+   * BaseAIProvider default. Returns `method` so the caller can distinguish.
+   *
+   * Defensive cleanup runs before the interrupt: clear the in-memory
+   * sessionsProcessingQueue guard and unwedge any rows stuck in 'executing' via
+   * sweepExecutingForSession (delivery-aware -- already delivered prompts are
+   * marked completed, not rolled back, so a follow-up queue drive doesn't
+   * re-send the same input -- NIM-615).
+   */
+  public async interruptCurrentTurn(sessionId: string): Promise<InterruptCurrentTurnResult> {
+    if (!sessionId) {
+      throw new Error('Session ID is required to interrupt');
+    }
+
+    const { AISessionsRepository } = await import('@nimbalyst/runtime/storage/repositories/AISessionsRepository');
+    const session = await AISessionsRepository.get(sessionId);
+    if (!session) {
+      return { success: false, error: 'Session not found' };
+    }
+
+    if (session.provider === 'claude-code-cli') {
+      const terminalManager = getTerminalSessionManager();
+      if (!terminalManager.isTerminalActive(sessionId)) {
+        return { success: false, error: 'No active terminal for session' };
+      }
+
+      terminalManager.writeToTerminal(sessionId, '\x03');
+      logger.main.info(`[AIService] Interrupted claude-code-cli terminal for session ${sessionId}`);
+      return { success: true, method: 'terminal-ctrl-c' };
+    }
+
+    const provider = ProviderFactory.getProvider(session.provider as AIProviderType, sessionId);
+    if (!provider) {
+      return { success: false, error: 'No active provider for session' };
+    }
+
+    this.sessionsProcessingQueue.delete(sessionId);
+    try {
+      const { getQueuedPromptsStore } = await import('../RepositoryManager');
+      const queueStore = getQueuedPromptsStore();
+      const { completed, failed, rolledBack } = await queueStore.sweepExecutingForSession(sessionId);
+      if (completed > 0 || failed > 0 || rolledBack > 0) {
+        logger.main.info(
+          `[AIService] interruptCurrentTurn: swept session ${sessionId} -- ${completed} answered marked completed, ${failed} delivered-but-unanswered marked failed, ${rolledBack} undelivered rolled back`
+        );
+        await this.publishQueueStateToSync(sessionId);
+      }
+    } catch (sweepErr) {
+      logger.main.error('[AIService] interruptCurrentTurn: sweepExecutingForSession failed:', sweepErr);
+    }
+
+    const result = await provider.interruptCurrentTurn();
+    logger.main.info(`[AIService] Interrupted current turn for session ${sessionId} (method=${result.method})`);
+
+    // A session stuck at running/streaming with no turn behind it -- because
+    // there never was one, or because `method: 'abort'` just destroyed it --
+    // would otherwise defer the follow-up queue drive on a `session:completed`
+    // that can never arrive (NIM-2434, NIM-2512).
+    const stateManager = getSessionStateManager();
+    const forcedIdle = await clearStuckRunningState(
+      {
+        getSessionState: (id) => stateManager.getSessionState(id),
+        interruptSession: (id) => stateManager.interruptSession(id),
+        logWarn: (message) => logger.main.warn(message),
+      },
+      { sessionId, hadActiveTurn: result.hadActiveTurn, method: result.method },
+    );
+
+    return { success: true, method: result.method, forcedIdle };
   }
 
   public async respondToInteractivePrompt(params: {
@@ -572,6 +882,11 @@ export class AIService {
         return globalApiKeys['openai-codex'];
       case 'lmstudio':
         return 'not-required';
+      case 'antigravity-gemini-agent':
+        // Rides the user's existing Antigravity / ~/.gemini login. Nimbalyst
+        // holds no key for it, and deliberately reads no env var -- see the
+        // standing rule in CLAUDE.md.
+        return 'not-required';
       default:
         return globalApiKeys[provider];
     }
@@ -594,7 +909,7 @@ export class AIService {
       temperature: (session.providerConfig as any)?.temperature,
       ...(apiKey ? { apiKey } : {}),
       ...(effortLevel && { effortLevel }),
-      thinkingMode: parseThinkingMode((session.metadata as any)?.thinkingMode),
+      thinkingMode: resolveThinkingMode((session.metadata as any)?.thinkingMode, getDefaultThinkingMode()),
     };
 
     const fullModel = session.model || session.providerConfig?.model;
@@ -654,8 +969,15 @@ export class AIService {
     targetWindow: Electron.BrowserWindow | null,
     source: string
   ): Promise<void> {
-    if (!targetWindow || targetWindow.isDestroyed()) {
+    const liveWindow =
+      targetWindow && !targetWindow.isDestroyed()
+        ? targetWindow
+        : findWindowByWorkspace(workspacePath);
+    if (!liveWindow || liveWindow.isDestroyed()) {
       logger.main.info(`[AIService] ${source}: no live window available to continue queued prompts for session ${sessionId}`);
+      // Hand off instead of dropping the chain — the driver opens or waits for
+      // a window and drives the remaining rows (#962).
+      this.requestQueueDrive(sessionId, workspacePath, 'fifo-continuation');
       return;
     }
 
@@ -670,7 +992,10 @@ export class AIService {
     logger.main.info(
       `[AIService] ${source}: ${pendingPrompts.length} pending prompts remain for session ${sessionId}, triggering next`
     );
-    await this.processQueuedPrompt(sessionId, workspacePath, targetWindow);
+    const dispatched = await this.processQueuedPrompt(sessionId, workspacePath, liveWindow);
+    if (!dispatched) {
+      this.requestQueueDrive(sessionId, workspacePath, 'fifo-continuation');
+    }
   }
 
   public async tryDispatchNextQueuedPrompt(
@@ -711,6 +1036,7 @@ export class AIService {
         this.continueQueuedPromptChain(nextSessionId, nextWorkspacePath, nextTargetWindow, nextSource),
       logError: (message, error) => logger.main.error(message, error),
       logInfo: (message) => logger.main.info(message),
+      resolveLiveWindow: findWindowByWorkspace,
       onAfterSettled: async () => {
         try {
           const { AISessionsRepository } = await import('@nimbalyst/runtime/storage/repositories/AISessionsRepository');
@@ -742,9 +1068,7 @@ export class AIService {
           const metaStatus = metaState?.status || 'idle';
           if (metaStatus === 'idle' || metaStatus === 'error') {
             logger.main.info(`[AIService] ${source}: waking meta-agent ${metaSession.id} after child ${sessionId} completed`);
-            this.triggerQueuedPromptProcessingForSession(metaSession.id, metaSession.workspacePath).catch((err) => {
-              logger.main.error('[AIService] Failed to trigger meta-agent queue processing:', err);
-            });
+            this.requestQueueDrive(metaSession.id, metaSession.workspacePath, 'meta-agent');
           }
         } catch (metaErr) {
           logger.main.error(`[AIService] ${source}: error checking meta-agent wakeup:`, metaErr);
@@ -766,10 +1090,13 @@ export class AIService {
         this.hooklessWatcher.scheduleStop(settledSessionId, 500);
       },
       onPromptClaimed: ({ sessionId: claimedSessionId, promptId }) => {
+        publishQueuedPromptClaim({ sessionId: claimedSessionId, promptId });
         targetWindow?.webContents.send('ai:promptClaimed', {
           sessionId: claimedSessionId,
           promptId,
         });
+        // The claimed row leaves the queue mobile sees; the publisher never throws.
+        void this.publishQueueStateToSync(claimedSessionId);
       },
       processingSet: this.sessionsProcessingQueue,
       queueStore,
@@ -934,112 +1261,51 @@ export class AIService {
 
             // Only process if there are queuedPrompts in the broadcast
             if (entry.queuedPrompts && entry.queuedPrompts.length > 0) {
-              logger.main.info('[AIService] Received queuedPrompts from mobile via onIndexChange:', {
+              await ingestMobileQueuedPrompts(
+                {
+                  getExisting: async (promptId) => {
+                    const { getQueuedPromptsStore } = await import('../RepositoryManager');
+                    return getQueuedPromptsStore().get(promptId);
+                  },
+                  createPrompt: async (input) => {
+                    const { getQueuedPromptsStore } = await import('../RepositoryManager');
+                    return getQueuedPromptsStore().create(input);
+                  },
+                  publishQueueState: (id) => this.publishQueueStateToSync(id),
+                  getSession: async (id) => {
+                    // Repository directly: we only need metadata, not a full session load.
+                    const { AISessionsRepository } = await import('@nimbalyst/runtime/storage/repositories/AISessionsRepository');
+                    return AISessionsRepository.get(id);
+                  },
+                  trackQueued: (provider) => {
+                    AnalyticsService.getInstance().sendEvent('ai_message_queued', {
+                      provider,
+                      source: 'mobile',
+                      hasDocumentContext: false,
+                      hasAttachments: false,
+                    });
+                  },
+                  notifyWindow: ({ sessionId: id, promptCount, workspacePath }) => {
+                    // Only the window owning this workspace, or multiple windows
+                    // race to execute the same prompt. workspacePath rides along
+                    // for renderer-side filtering.
+                    const openWindow = findWindowByWorkspace(workspacePath);
+                    if (openWindow && !openWindow.isDestroyed()) {
+                      openWindow.webContents.send('ai:queuedPromptsReceived', {
+                        sessionId: id,
+                        promptCount,
+                        workspacePath,
+                      });
+                    }
+                  },
+                  requestDrive: (id, path) => this.requestQueueDrive(id, path, 'mobile-index'),
+                  logInfo: (message) => logger.main.info(message),
+                  logWarn: (message) => logger.main.warn(message),
+                  logError: (message, error) => logger.main.error(message, error),
+                },
                 sessionId,
-                count: entry.queuedPrompts.length,
-                promptIds: entry.queuedPrompts.map(p => p.id)
-              });
-
-              try {
-                // Insert prompts into the queued_prompts table
-                const { getQueuedPromptsStore } = await import('../RepositoryManager');
-                const queueStore = getQueuedPromptsStore();
-
-                let newPromptsCount = 0;
-                for (const prompt of entry.queuedPrompts) {
-                  // Skip prompts that were created locally (echoed back via Y.js sync)
-                  // Local prompts have IDs starting with 'local-'
-                  if (prompt.id.startsWith('local-')) {
-                    // logger.main.info(`[AIService] Prompt ${prompt.id} is a local prompt echoed via sync, skipping`);
-                    continue;
-                  }
-
-                  // Check if prompt already exists
-                  const existing = await queueStore.get(prompt.id);
-                  if (existing) {
-                    // logger.main.info(`[AIService] Prompt ${prompt.id} already exists, skipping`);
-                    continue;
-                  }
-
-                  // Create the prompt in the queued_prompts table
-                  await queueStore.create({
-                    id: prompt.id,
-                    sessionId,
-                    prompt: prompt.prompt,
-                    attachments: prompt.attachments,
-                  });
-                  newPromptsCount++;
-                }
-
-                if (newPromptsCount === 0) {
-                  // logger.main.info('[AIService] No new prompts to process, all already exist');
-                  return;
-                }
-
-                logger.main.info(`[AIService] Inserted ${newPromptsCount} new prompts into queued_prompts table`);
-
-                // Load session to get its workspacePath for window routing
-                // Use repository directly since we just need metadata, not full session load
-                const { AISessionsRepository } = await import('@nimbalyst/runtime/storage/repositories/AISessionsRepository');
-                const session = await AISessionsRepository.get(sessionId);
-                if (!session) {
-                  logger.main.warn('[AIService] Session not found for queuedPrompts:', sessionId);
-                  return;
-                }
-
-                // Track ai_message_queued analytics event for each prompt from mobile
-                // Note: Mobile doesn't currently support attachments or documentContext
-                for (let i = 0; i < newPromptsCount; i++) {
-                  AnalyticsService.getInstance().sendEvent('ai_message_queued', {
-                    provider: session.provider,
-                    source: 'mobile',
-                    hasDocumentContext: false,
-                    hasAttachments: false,
-                  });
-                }
-
-                // Only notify the window that owns this session's workspace
-                // This prevents duplicate execution when multiple windows are open
-                if (session.workspacePath) {
-                  let targetWindow = findWindowByWorkspace(session.workspacePath);
-
-                  // If no window is open for this workspace, open it automatically
-                  // so mobile prompts don't silently fail
-                  if ((!targetWindow || targetWindow.isDestroyed()) && fs.existsSync(session.workspacePath)) {
-                    logger.main.info('[AIService] Opening workspace for mobile queued prompt:', session.workspacePath);
-                    const newWindow = createWindow(false, true, session.workspacePath);
-
-                    // Wait for the window to finish loading before processing the prompt
-                    await new Promise<void>((resolve) => {
-                      newWindow.webContents.once('did-finish-load', () => resolve());
-                    });
-
-                    targetWindow = newWindow;
-                  }
-
-                  if (targetWindow && !targetWindow.isDestroyed()) {
-                    // logger.main.info('[AIService] Notifying window to process queue for workspace:', session.workspacePath);
-                    targetWindow.webContents.send('ai:queuedPromptsReceived', {
-                      sessionId,
-                      promptCount: newPromptsCount,
-                      workspacePath: session.workspacePath  // Include for renderer-side filtering
-                    });
-
-                    // Directly trigger queue processing from main process
-                    // This ensures mobile messages are processed even when the session isn't open in the UI
-                    // logger.main.info('[AIService] Triggering queue processing for mobile prompt');
-                    this.processQueuedPrompt(sessionId, session.workspacePath, targetWindow);
-                  } else {
-                    logger.main.warn('[AIService] No window found and workspace path does not exist:', session.workspacePath);
-                  }
-                } else {
-                  // Sessions MUST have a workspacePath - this indicates a data integrity issue
-                  logger.main.error('[AIService] Session has no workspacePath - cannot route queued prompts. SessionId:', sessionId);
-                  // Do NOT fall back to windows[0] - that masks the real bug
-                }
-              } catch (err) {
-                logger.main.error('[AIService] Failed to insert queuedPrompts into table:', err);
-              }
+                entry.queuedPrompts,
+              );
             }
           });
 
@@ -1451,7 +1717,7 @@ export class AIService {
       // This is in a separate module to keep AIService focused
       initMobileSessionControlHandler(syncProvider, findWindowByWorkspace, {
         triggerQueuedPromptProcessing: (sessionId, workspacePath) =>
-          this.triggerQueuedPromptProcessingForSession(sessionId, workspacePath),
+          this.triggerQueuedPromptProcessingForSession(sessionId, workspacePath, 'mobile-control'),
         rollbackExecutingPrompts: async (sessionId) => {
           // Use the delivery-aware sweep so that a mobile-initiated cancel
           // doesn't re-deliver a prompt that already landed in the
@@ -1459,6 +1725,7 @@ export class AIService {
           // back to pending (matches the prior contract).
           const { getQueuedPromptsStore } = await import('../RepositoryManager');
           const { rolledBack } = await getQueuedPromptsStore().sweepExecutingForSession(sessionId);
+          await this.publishQueueStateToSync(sessionId);
           return rolledBack;
         },
       });
@@ -1492,55 +1759,31 @@ export class AIService {
   private getProviderWorkflowCatalog(request: {
     sessionId?: string;
     provider?: string | null;
-  }): { commands: string[]; skills: string[] } {
+  }): ProviderWorkflowCatalog {
+    // Absent an explicit provider, probe the agent providers for a live
+    // instance on this session; the first one that exists tells us the type.
     const providerCandidates = request.provider
       ? [request.provider]
-      : ['claude-code', 'openai-codex', 'openai-codex-acp', 'opencode'];
+      : ['claude-code', 'openai-codex', 'openai-codex-acp', 'opencode', 'grok-build', 'cursor-agent'];
 
-    let provider: AIProvider | undefined;
-    for (const providerType of providerCandidates) {
-      if (!request.sessionId) {
-        break;
-      }
-
-      provider = ProviderFactory.getProvider(providerType as AIProviderType, request.sessionId) ?? undefined;
-      if (provider) {
-        break;
-      }
-    }
-
-    if (isSlashCommandCatalogProvider(provider)) {
-      const commands = typeof provider.getSlashCommands === 'function'
-        ? provider.getSlashCommands()
-        : [];
-      const skills = typeof provider.getSkills === 'function'
-        ? provider.getSkills()
-        : [];
-
-      if (commands.length > 0 || skills.length > 0) {
-        return { commands, skills };
+    let instance: AIProvider | undefined;
+    let resolvedType: string | null = request.provider ?? null;
+    if (request.sessionId) {
+      for (const providerType of providerCandidates) {
+        instance = ProviderFactory.getProvider(providerType as AIProviderType, request.sessionId) ?? undefined;
+        if (instance) {
+          resolvedType = providerType;
+          break;
+        }
       }
     }
+    // Callers that name no provider are asking about the default one.
+    const effectiveType = resolvedType ?? 'claude-code';
 
-    if (request.provider === 'claude-code' || !request.provider) {
-      return {
-        commands: ClaudeCodeProvider.getCachedSdkSlashCommands(),
-        skills: ClaudeCodeProvider.getCachedSdkSkills(),
-      };
-    }
-
-    if (request.provider === 'openai-codex' || request.provider === 'openai-codex-acp') {
-      return {
-        commands: OpenAICodexProvider.getKnownSlashCommands(),
-        skills: [],
-      };
-    }
-
-    if (supportsWorkspaceSlashWorkflowProvider(request.provider)) {
-      return { commands: [], skills: [] };
-    }
-
-    return { commands: [], skills: [] };
+    return resolveProviderWorkflowCatalog(effectiveType, {
+      instance,
+      cachedCatalog: CROSS_SESSION_WORKFLOW_CATALOGS[effectiveType as AIProviderType],
+    });
   }
 
   /**
@@ -1597,7 +1840,11 @@ export class AIService {
         if (chunk.type === 'text') {
           contextResponse += chunk.content || '';
         } else if (chunk.type === 'complete') {
-          const parsedUsage = parseContextUsageMessage(contextResponse);
+          // Prefer the SDK's structured twin of the report when the binary
+          // attaches one (agent-SDK 0.3.241+): it carries exact token counts
+          // where the markdown is rendered to three significant figures, and it
+          // does not depend on the CLI's table layout staying byte-stable.
+          const parsedUsage = chunk.contextReport ?? parseContextUsageMessage(contextResponse);
 
           if (parsedUsage) {
             // Get current session to preserve cumulative tokens
@@ -1780,38 +2027,14 @@ export class AIService {
       // Extension-agent providers defer auth to the extension itself, so they
       // skip this switch entirely (no apiKey requirement on the host side).
       if (!isExtensionAgentProvider(provider)) {
-        switch (provider) {
-          case 'claude':
-            if (!apiKey) {
-              throw new Error('Anthropic API key not configured');
-            }
-            break;
-          case 'claude-code':
-            // Claude Code: API key is optional, uses SSO login if not provided
-            // No error if missing - will use SSO login
-            break;
-          case 'claude-code-cli':
-            // Genuine `claude` CLI: uses its own login/subscription, no API key.
-            break;
-          case 'openai':
-            if (!apiKey) {
-              throw new Error('OpenAI API key not configured');
-            }
-            break;
-          case 'openai-codex':
-            // Codex SDK uses its own auth (codex auth login), API key is optional
-            break;
-          case 'opencode':
-            // OpenCode uses its own config, API key is optional
-            break;
-          case 'copilot-cli':
-            // Copilot uses its own CLI auth (copilot auth login), no API key needed
-            break;
-          case 'lmstudio':
-            // LMStudio doesn't need an API key, just the base URL
-            break;
-          default:
-            throw new Error(`Unknown provider: ${provider}`);
+        // Shared with the send path in MessageStreamingHandler — see
+        // providerAuthRequirement.ts for why this is not an inline switch.
+        const authRequirement = resolveProviderAuthRequirement(provider as AIProviderType);
+        if (!authRequirement) {
+          throw new Error(`Unknown provider: ${provider}`);
+        }
+        if (authRequirement.requiresApiKey && !apiKey) {
+          throw new Error(authRequirement.missingKeyMessage);
         }
       }
 
@@ -1973,7 +2196,7 @@ export class AIService {
         if (effortLevel) {
           initConfig.effortLevel = effortLevel;
         }
-        initConfig.thinkingMode = parseThinkingMode((session.metadata as any)?.thinkingMode);
+        initConfig.thinkingMode = resolveThinkingMode((session.metadata as any)?.thinkingMode, getDefaultThinkingMode());
       }
 
       // Pass effort level for OpenAI Codex
@@ -1997,10 +2220,15 @@ export class AIService {
       // the index for pendingExecution flags. We do NOT call watchSession() here because
       // it creates a WebSocket connection per session, causing performance issues.
 
-      this.analytics.sendEvent('create_ai_session', {
+      // Was a second, drifted copy of the SessionHandlers emitter -- it omitted
+      // `is_meta_agent_session`, so meta-agent sessions created through this
+      // path were counted as ordinary ones. Both now go through one function.
+      trackCreateAiSession({
         provider,
-        is_worktree_session: !!session.worktreeId,
-        is_workstream_child: !!session.parentSessionId,
+        worktreeId: session.worktreeId,
+        parentSessionId: session.parentSessionId,
+        agentRole: (session as { agentRole?: string }).agentRole,
+        launchSource: (session as { launchSource?: string }).launchSource,
       });
       return session;
     });
@@ -2041,8 +2269,6 @@ export class AIService {
         return null;
       }
 
-      session.messages = await enrichTranscriptMessagesWithToolCallDiffs(session.id, session.messages);
-
       // Restore document context state from persisted data (if available)
       // This enables transition detection across app restarts
       if (session.lastDocumentState) {
@@ -2060,6 +2286,13 @@ export class AIService {
           messageCount: bucketCount(messageCount),
           ageInDays: bucketAgeInDays(createdAt)
         });
+
+        // Separates "opened the tutorial" from "actually used it". No-ops for
+        // every other workspace.
+        void captureTutorialMilestone(
+          session.workspacePath || workspacePath,
+          'session_opened'
+        );
       }
 
       // NOTE: Mobile message handling is done via startIndexListener() which watches
@@ -2157,6 +2390,9 @@ export class AIService {
 
       if (claimed) {
         logger.main.info(`[AIService] claimQueuedPrompt: claimed ${promptId} for session ${sessionId}`);
+        // The claimed prompt is now in the transcript, so drop it from the
+        // queue mobile sees rather than leaving it double-reported.
+        await this.publishQueueStateToSync(sessionId);
         // Return in the format expected by the renderer
         return {
           id: claimed.id,
@@ -2178,8 +2414,12 @@ export class AIService {
     ) => {
       const { getQueuedPromptsStore } = await import('../RepositoryManager');
       const queueStore = getQueuedPromptsStore();
+      const row = await queueStore.get(promptId);
       await queueStore.complete(promptId);
       logger.main.info(`[AIService] completeQueuedPrompt: ${promptId}`);
+      if (row?.sessionId) {
+        await this.publishQueueStateToSync(row.sessionId);
+      }
     });
 
     // Mark a queued prompt as failed
@@ -2190,8 +2430,12 @@ export class AIService {
     ) => {
       const { getQueuedPromptsStore } = await import('../RepositoryManager');
       const queueStore = getQueuedPromptsStore();
+      const row = await queueStore.get(promptId);
       await queueStore.fail(promptId, errorMessage);
       logger.main.info(`[AIService] failQueuedPrompt: ${promptId} - ${errorMessage}`);
+      if (row?.sessionId) {
+        await this.publishQueueStateToSync(row.sessionId);
+      }
     });
 
     // List pending prompts for a session
@@ -2225,16 +2469,28 @@ export class AIService {
       // Generate a unique ID with 'local-' prefix to identify locally-created prompts
       // This prevents the mobile sync handler from re-broadcasting these prompts
       const promptId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const queuedDocumentContext = {
+        ...(documentContext ?? {}),
+        promptProvenance: {
+          actor: 'human' as const,
+          origin: 'composer' as const,
+          ...documentContext?.promptProvenance,
+          queuedPromptId: promptId,
+        },
+      };
 
       const created = await queueStore.create({
         id: promptId,
         sessionId,
         prompt,
         attachments,
-        documentContext,
+        documentContext: queuedDocumentContext,
       });
 
       logger.main.info(`[AIService] createQueuedPrompt: created ${promptId} for session ${sessionId}`);
+
+      // Mirror the new depth to mobile so a desktop-queued prompt shows there too.
+      await this.publishQueueStateToSync(sessionId);
 
       // Look up the session once (lightweight — no message log) for both the
       // analytics event and the claude-code-cli idle-flush kick below.
@@ -2317,8 +2573,12 @@ export class AIService {
     ) => {
       const { getQueuedPromptsStore } = await import('../RepositoryManager');
       const queueStore = getQueuedPromptsStore();
+      const row = await queueStore.get(promptId);
       await queueStore.delete(promptId);
       logger.main.info(`[AIService] deleteQueuedPrompt: deleted ${promptId}`);
+      if (row?.sessionId) {
+        await this.publishQueueStateToSync(row.sessionId);
+      }
       return { success: true };
     });
 
@@ -2326,16 +2586,14 @@ export class AIService {
     safeHandle('ai:triggerQueueProcessing', async (
       event,
       sessionId: string,
-      workspacePath: string
+      workspacePath: string,
+      reason?: DriveReason
     ) => {
-      const processed = await this.tryDispatchNextQueuedPrompt(
-        sessionId,
-        workspacePath,
-        BrowserWindow.fromWebContents(event.sender),
-        'triggerQueueProcessing',
-      );
+      // Route through the driver so a renderer trigger that can't dispatch
+      // right now (session mid-turn) re-drives itself instead of evaporating.
+      const outcome = await this.driveQueuedPrompts(sessionId, workspacePath, reason ?? 'renderer-trigger');
 
-      return { processed };
+      return { processed: outcome.kind === 'dispatched' };
     });
 
     // Save draft input
@@ -2535,6 +2793,38 @@ export class AIService {
       // a new message that includes the user's answer. The Claude Code SDK will
       // resume using the stored providerSessionId, picking up conversation history.
       if (resolvedSessionId && this.sendMessageHandler && session) {
+        // Issue #773: without a terminal tool_result the widget stayed pending, so
+        // every re-click auto-resumed again. Refuse a repeat answer for a question
+        // this process already terminalized.
+        if (hasTerminalizedAskUserQuestion(resolvedSessionId, questionId)) {
+          logger.main.info(`[AIService] AskUserQuestion already answered without a live handler; ignoring repeat: ${questionId}`);
+          return { success: false, error: 'Question already answered' };
+        }
+
+        // Issue #1116: terminalize the tool call BEFORE resuming. The live paths
+        // (provider resolve / MCP settle / abort) each write this row; the fallback
+        // did not, so the widget never completed and came back on every remount.
+        await persistAskUserQuestionTerminalResult({
+          sessionId: resolvedSessionId,
+          questionId,
+          answers,
+          cancelled: false,
+        });
+
+        // The auto-resume is an in-process recovery: it re-enters the provider
+        // with the answer so the SDK resumes from its stored providerSessionId.
+        // `claude-code-cli` has nothing of the sort to resume -- sendMessageHandler
+        // submits into a live CLI composer, so this would type "[Resuming after
+        // answering a question]" into whatever that terminal is doing now, as if
+        // the user had written it. The answer is already durable: the response row
+        // above settles the waiting MCP handler through its DB poll (see
+        // interactiveToolHandlers), and the tool_result just persisted completes
+        // the widget.
+        if (session.provider === 'claude-code-cli') {
+          logger.main.info(`[AIService] No live handler for AskUserQuestion on ${session.provider}; leaving the answer for the MCP handler rather than auto-resuming: ${resolvedSessionId}`);
+          return { success: true };
+        }
+
         const answerText = Object.entries(answers)
           .map(([question, answer]) => `${question}: ${answer}`)
           .join('\n');
@@ -2645,8 +2935,28 @@ export class AIService {
       }
 
       if (!providerSupportsCancel && !hasMcpWaiter && !hasSessionFallbackWaiter) {
-        logger.main.warn(`[AIService] Question cancel target not found: ${resolvedSessionId}`);
-        return { success: false, error: 'Question not found' };
+        // NIM-2208: no provider, no MCP waiter, no fallback waiter means nothing
+        // is listening -- the process that opened this question is gone (app
+        // restarted, turn died). This used to return an error and leave
+        // `metadata.hasPendingPrompt` set, so the session kept showing "awaiting
+        // input" in AgentSessionsPopover with no way to dismiss it: the ONLY
+        // cancel affordance is this widget, and it was a no-op on exactly the
+        // sessions that needed it. Clearing the bit here makes the widget's
+        // Cancel button the working escape hatch for a dead prompt.
+        logger.main.info(`[AIService] Question cancel target not found; clearing stale pending-prompt bit: ${resolvedSessionId}`);
+        await setSessionPendingPrompt(resolvedSessionId, false).catch((err) => {
+          logger.main.warn(`[AIService] Failed to clear stale pending-prompt bit on cancel: ${err}`);
+        });
+        // Issue #1116: clearing the pending-prompt bit dismissed the session-level
+        // indicator but left the tool call pending, so the cancelled widget came
+        // back on the next session switch. Write the terminal result too.
+        await persistAskUserQuestionTerminalResult({
+          sessionId: resolvedSessionId,
+          questionId,
+          answers: {},
+          cancelled: true,
+        });
+        return { success: true, staleCleared: true };
       }
 
       // For MCP-backed AskUserQuestion (Codex), let the MCP tool call resolve with
@@ -2849,6 +3159,7 @@ export class AIService {
             logger.main.info(
               `[AIService] cancelRequest: swept session ${sessionId} -- ${completed} answered marked completed, ${failed} delivered-but-unanswered marked failed, ${rolledBack} undelivered rolled back`
             );
+            await this.publishQueueStateToSync(sessionId);
           }
         } catch (sweepErr) {
           logger.main.error('[AIService] cancelRequest: sweepExecutingForSession failed:', sweepErr);
@@ -2857,68 +3168,55 @@ export class AIService {
         provider.abort();
         // console.log(`[AIService] Cancelled request for session ${sessionId}`);
         this.analytics.sendEvent('cancel_ai_request', {provider: providerType})
+        await this.forceSessionIdleOnCancel(sessionId);
         return { success: true };
       }
-      console.warn(`[AIService] Cancel failed - no active provider for session: ${sessionId}`);
-      return { success: false, error: 'No active provider for session' };
+      // No live provider: the turn is already gone (e.g. it died on an in-band
+      // error chunk without settling). Cancel must still be authoritative --
+      // otherwise the stale 'running' state in SessionStateManager survives and
+      // the renderer's processing reconcile re-asserts the spinner seconds later.
+      console.warn(`[AIService] Cancel: no active provider for session ${sessionId} - clearing stale running state`);
+      await this.forceSessionIdleOnCancel(sessionId);
+      return { success: true };
     });
 
-    // Interrupt the current turn (graceful when possible) so queued prompts
-    // are processed sooner. Providers that support a true mid-stream interrupt
-    // (Claude Code) wrap up cleanly; others fall back to abort() via the
-    // BaseAIProvider default. Returns { method } so the renderer can
-    // distinguish the two paths.
-    //
-    // Defensive cleanup runs before the interrupt: clear the in-memory
-    // sessionsProcessingQueue guard and unwedge any PGLite rows stuck in
-    // 'executing' via sweepExecutingForSession (delivery-aware -- already
-    // delivered prompts are marked completed, not rolled back, so the
-    // follow-up ai:triggerQueueProcessing doesn't re-send the same input
-    // -- NIM-615).
-    safeHandle('ai:interruptCurrentTurn', async (_event, sessionId: string) => {
-      if (!sessionId) {
-        throw new Error('Session ID is required to interrupt');
+    safeHandle('ai:interruptCurrentTurn', (_event, sessionId: string) =>
+      this.interruptCurrentTurn(sessionId)
+    );
+
+    /**
+     * Effective on/off state for the agents whose default is decided by
+     * detection rather than a constant.
+     *
+     * The renderer needs this at hydration: its own default table cannot tell
+     * "user turned it off" from "never touched", so without this the settings
+     * toggle would render OFF while the model picker showed the provider ON.
+     * Awaits any in-flight probe so the answer is deterministic rather than
+     * whatever the cache happened to hold.
+     */
+    safeHandle('ai:getHeadlessAgentAvailability', async () => {
+      await refreshHeadlessAgentAvailability();
+      const providerSettings = this.getNormalizedProviderSettings() as Record<string, any>;
+      const agents: HeadlessAgentId[] = ['grok-build', 'cursor-agent', 'antigravity-gemini-agent'];
+      const result: Record<string, {
+        installed: boolean;
+        signedIn: boolean;
+        defaultEnabled: boolean;
+        effectiveEnabled: boolean;
+        /** Resolved binary, so a panel can show WHERE it found the tool. */
+        executablePath?: string;
+      }> = {};
+      for (const agent of agents) {
+        const availability = getCachedHeadlessAgentAvailability(agent);
+        result[agent] = {
+          installed: availability.installed,
+          signedIn: availability.signedIn,
+          defaultEnabled: availability.installed && availability.signedIn,
+          effectiveEnabled: resolveProviderEnabled(agent, providerSettings[agent]),
+          executablePath: availability.executablePath,
+        };
       }
-
-      const { AISessionsRepository } = await import('@nimbalyst/runtime/storage/repositories/AISessionsRepository');
-      const session = await AISessionsRepository.get(sessionId);
-      if (!session) {
-        return { success: false, error: 'Session not found' };
-      }
-
-      if (session.provider === 'claude-code-cli') {
-        const terminalManager = getTerminalSessionManager();
-        if (!terminalManager.isTerminalActive(sessionId)) {
-          return { success: false, error: 'No active terminal for session' };
-        }
-
-        terminalManager.writeToTerminal(sessionId, '\x03');
-        logger.main.info(`[AIService] Interrupted claude-code-cli terminal for session ${sessionId}`);
-        return { success: true, method: 'terminal-ctrl-c' };
-      }
-
-      const provider = ProviderFactory.getProvider(session.provider as AIProviderType, sessionId);
-      if (!provider) {
-        return { success: false, error: 'No active provider for session' };
-      }
-
-      this.sessionsProcessingQueue.delete(sessionId);
-      try {
-        const { getQueuedPromptsStore } = await import('../RepositoryManager');
-        const queueStore = getQueuedPromptsStore();
-        const { completed, failed, rolledBack } = await queueStore.sweepExecutingForSession(sessionId);
-        if (completed > 0 || failed > 0 || rolledBack > 0) {
-          logger.main.info(
-            `[AIService] interruptCurrentTurn: swept session ${sessionId} -- ${completed} answered marked completed, ${failed} delivered-but-unanswered marked failed, ${rolledBack} undelivered rolled back`
-          );
-        }
-      } catch (sweepErr) {
-        logger.main.error('[AIService] interruptCurrentTurn: sweepExecutingForSession failed:', sweepErr);
-      }
-
-      const result = await provider.interruptCurrentTurn();
-      logger.main.info(`[AIService] Interrupted current turn for session ${sessionId} (method=${result.method})`);
-      return { success: true, method: result.method };
+      return result;
     });
 
     // Settings handlers
@@ -3128,6 +3426,15 @@ export class AIService {
             // Copilot uses its own CLI auth, no API key needed
             apiKey = 'not-required';
             break;
+          case 'grok-build':
+          case 'cursor-agent':
+            // CLI login only; no API key to test.
+            apiKey = 'not-required';
+            break;
+          case 'antigravity-gemini-agent':
+            // Antigravity app login only; no API key to test.
+            apiKey = 'not-required';
+            break;
           case 'lmstudio':
             // LMStudio doesn't need an API key, just test the connection
             apiKey = 'not-required';
@@ -3135,6 +3442,21 @@ export class AIService {
           default:
             return { success: false, error: `Unknown provider: ${provider}` };
         }
+      }
+
+      // Gemini's connectivity probe is the presence of the Antigravity install.
+      // Deliberately NOT a live turn: the alternative is spawning a ~120MB
+      // language server from a settings button, and a signed-out user would
+      // still pass an install check either way -- sign-in cannot be read
+      // without a keychain prompt (see headlessAgentAvailability.ts). So the
+      // check answers exactly what it can, and says so when it fails.
+      if (provider === 'antigravity-gemini-agent') {
+        return GeminiAntigravityProvider.isInstalled()
+          ? { success: true, provider }
+          : {
+            success: false,
+            error: GeminiAntigravityProvider.NOT_INSTALLED_MESSAGE,
+          };
       }
 
       // Extension-agent providers: skip the per-provider connectivity probes
@@ -3149,7 +3471,8 @@ export class AIService {
       try {
         // For OpenAI, just try to list models as a connection test
         if (provider === 'openai') {
-          const models = await ModelRegistry.getModelsForProvider('openai', apiKey);
+          // OpenAI's model list is account-scoped, not project-scoped.
+          const models = await ModelRegistry.getModelsForProvider('openai', undefined, apiKey);
           return { success: models.length > 0, provider };
         }
 
@@ -3312,10 +3635,15 @@ export class AIService {
     });
 
     // Get ALL available models for configuration UI
-    safeHandle('ai:getAllModels', async () => {
+    safeHandle('ai:getAllModels', async (event) => {
       // Clear cache to get fresh models
       ModelRegistry.clearCache();
 
+      // Settings lists OpenCode's discovered models as checkboxes, so this read
+      // is scoped to the sending window's project too -- see ai:getModels.
+      const workspacePath = resolveActiveWorkspacePathForWindowId(
+        getWindowIdForWindow(BrowserWindow.fromWebContents(event.sender)),
+      ) ?? undefined;
       const providerSettings = this.getNormalizedProviderSettings() as Record<AIProviderType, any>;
       const apiKeys = this.getSettingsStore().get('apiKeys', {}) as Record<string, string>;
 
@@ -3323,19 +3651,28 @@ export class AIService {
       const enabledSet = new Set<AIProviderType>();
       if (providerSettings['claude']?.enabled === true && !!apiKeys['anthropic']) enabledSet.add('claude');
       if (providerSettings['claude-code']?.enabled !== false) enabledSet.add('claude-code');
-      // Include the subscription CLI (on by default) so its variants render as
-      // checkboxes in the settings panel even before the user touches the toggle.
-      if (providerSettings['claude-code-cli']?.enabled !== false) enabledSet.add('claude-code-cli');
+      // The terminal-CLI provider is off until the user opts in, so its variants
+      // only need fetching once the settings toggle is on.
+      if (resolveProviderEnabled('claude-code-cli', providerSettings['claude-code-cli'])) enabledSet.add('claude-code-cli');
       if (providerSettings['openai']?.enabled === true && !!apiKeys['openai']) enabledSet.add('openai');
       if (providerSettings['openai-codex']?.enabled === true) enabledSet.add('openai-codex');
       if (providerSettings['opencode']?.enabled === true) enabledSet.add('opencode');
+      // Without these the model picker stays empty for an enabled provider:
+      // the catalog is only fetched for ids in this set. Both default to
+      // "on if their CLI is installed and signed in", so they must go through
+      // resolveProviderEnabled rather than reading the flag directly.
+      if (resolveProviderEnabled('grok-build', providerSettings['grok-build'])) enabledSet.add('grok-build');
+      if (resolveProviderEnabled('cursor-agent', providerSettings['cursor-agent'])) enabledSet.add('cursor-agent');
+      if (resolveProviderEnabled('antigravity-gemini-agent', providerSettings['antigravity-gemini-agent'])) {
+        enabledSet.add('antigravity-gemini-agent');
+      }
       if (providerSettings['lmstudio']?.enabled === true) enabledSet.add('lmstudio');
 
       const modelsConfig = {
         ...apiKeys,
         lmstudio_url: providerSettings['lmstudio']?.baseUrl || 'http://127.0.0.1:8234'
       };
-      const allModels = await ModelRegistry.getAllModels(modelsConfig, enabledSet);
+      const allModels = await ModelRegistry.getAllModels(modelsConfig, workspacePath, enabledSet);
 
       // Append extension-contributed agent provider models (see ai:getModels).
       for (const agentEntry of getAgentProviderRegistry().list()) {
@@ -3437,9 +3774,98 @@ export class AIService {
       }
     });
 
+    // #1252: compact via the provider's real RPC. The renderer used to send
+    // the literal string "/compact" as a user turn, which only ever worked for
+    // providers whose SDK happens to interpret slash commands -- for Codex it
+    // reached the model as prompt text and silently did nothing.
+    safeHandle('ai:compactSession', async (event, sessionId: string) => {
+      if (!sessionId) {
+        throw new Error('ai:compactSession requires a sessionId');
+      }
+      // Compaction acts on a running agent, so the live instance is the only
+      // thing worth asking -- and it is what knows which transport it is on.
+      // This used to hardcode `getProvider('openai-codex', ...)`, which is the
+      // provider-name check the capability contract exists to replace.
+      let provider: AIProvider | null = null;
+      for (const type of AI_PROVIDER_TYPES) {
+        provider = ProviderFactory.getProvider(type, sessionId);
+        if (provider) break;
+      }
+
+      // The stored session is what a cold compact runs on: the Compact button
+      // is offered for every session of a provider that declares `rpc`,
+      // including one restored after a restart that has not sent a turn in this
+      // app launch and so has no provider instance. The conversation still
+      // exists on the agent's side, so hand the provider what it needs to reach
+      // it instead of refusing (#574).
+      const { AISessionsRepository } = await import('@nimbalyst/runtime/storage/repositories/AISessionsRepository');
+      const storedSession = await AISessionsRepository.get(sessionId);
+      if (!provider && storedSession?.provider) {
+        // Only for a type that declares `rpc`: everything else has nothing to
+        // call here, and the declaration fails closed for ids the factory does
+        // not build (extension-contributed agents).
+        if (agentCapabilitiesForProviderType(storedSession.provider).compaction === 'rpc') {
+          provider = ProviderFactory.createProvider(storedSession.provider as AIProviderType, sessionId);
+        }
+      }
+      if (!provider) {
+        return { success: false, error: 'Cannot compact: this session has no active provider yet.' };
+      }
+      // A provider declaring anything other than 'rpc' has no compaction call
+      // to make here -- 'slash-command' providers compact by sending a
+      // `/compact` turn, which is the renderer's path, not this one.
+      if (provider.getAgentCapabilities().compaction !== 'rpc') {
+        return { success: false, error: 'This provider does not support compaction.' };
+      }
+      const compactable = provider as unknown as {
+        compactSession?: (
+          id: string,
+          options?: { workspacePath?: string; providerSessionId?: string },
+        ) => Promise<void>;
+      };
+      if (typeof compactable?.compactSession !== 'function') {
+        return { success: false, error: 'This provider does not support compaction.' };
+      }
+      try {
+        await compactable.compactSession(sessionId, {
+          workspacePath: storedSession?.worktreePath || storedSession?.workspacePath,
+          providerSessionId: storedSession?.providerSessionId,
+        });
+
+        // The conversation the meter was measuring no longer exists. Nothing
+        // here knows how large the summary is, so drop the reading rather than
+        // leave the pre-compaction one on screen -- the next turn reports a
+        // measured one. Without this, the one action whose whole purpose is
+        // reducing context left the session reading 90% until something else
+        // happened to refresh it. The denominator goes too: the meter falls
+        // back to cumulative spend over the window, which would replace a stale
+        // percentage with a confidently wrong one. Cumulative totals stay --
+        // compaction reset the context, not what the session has spent.
+        const storedUsage = (storedSession?.metadata as Record<string, unknown> | undefined)
+          ?.tokenUsage as SessionData['tokenUsage'] | undefined;
+        if (storedUsage?.currentContext || storedUsage?.contextWindow) {
+          const clearedUsage = { ...storedUsage, currentContext: undefined, contextWindow: undefined };
+          await this.sessionManager.updateSessionTokenUsage(sessionId, clearedUsage);
+          safeSend(event, 'ai:tokenUsageUpdated', { sessionId, tokenUsage: clearedUsage });
+        }
+
+        return { success: true };
+      } catch (error) {
+        console.error('[AIService] compactSession failed:', error);
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+      }
+    });
+
     // Get ENABLED models for actual use
-    safeHandle('ai:getModels', async () => {
+    safeHandle('ai:getModels', async (event) => {
       // console.log('[AIService] ai:getModels called - fetching enabled models');
+      // OpenCode resolves its provider set from project config, so this listing
+      // is workspace-scoped even though every other provider is global. Resolve
+      // the sender's project rather than threading a path through nine renderer
+      // call sites -- same approach TrackerSchemaService takes for #1178.
+      const workspacePath = resolveActiveWorkspacePathForWindowId(
+        getWindowIdForWindow(BrowserWindow.fromWebContents(event.sender)),
+      ) ?? undefined;
       const providerSettings = this.getNormalizedProviderSettings() as Record<AIProviderType, any>;
       const apiKeys = this.getSettingsStore().get('apiKeys', {}) as Record<string, string>;
       const claudeCodeSettings = providerSettings['claude-code'] || {};
@@ -3463,9 +3889,10 @@ export class AIService {
           hiddenModels: claudeCodeSettings.hiddenModels
         },
         'claude-code-cli': {
-          // Genuine `claude` CLI on the user's subscription. On by default (like
-          // `claude-code`); no API key required — the CLI uses its own login.
-          enabled: providerSettings['claude-code-cli']?.enabled !== false,
+          // Genuine `claude` CLI in a terminal. Off by default — it's a workflow
+          // preference, not the way to use a Claude subscription. No API key
+          // required; the CLI uses its own login.
+          enabled: resolveProviderEnabled('claude-code-cli', providerSettings['claude-code-cli']),
           models: providerSettings['claude-code-cli']?.models,
           hiddenModels: providerSettings['claude-code-cli']?.hiddenModels
         },
@@ -3474,21 +3901,47 @@ export class AIService {
           models: providerSettings['openai']?.models,
           hiddenModels: providerSettings['openai']?.hiddenModels
         },
+        // These four each authenticate through their own CLI or config, so no
+        // API key is required -- but they still need models/hiddenModels
+        // forwarded, or hiding a model in Settings does nothing to the session
+        // picker (#1382).
         'openai-codex': {
-          // Codex SDK uses its own auth (codex auth login), API key is optional
           enabled: providerSettings['openai-codex']?.enabled === true,
+          models: providerSettings['openai-codex']?.models,
+          hiddenModels: providerSettings['openai-codex']?.hiddenModels
         },
         'openai-codex-acp': {
-          // Codex ACP uses the codex-acp binary directly; API key is optional
           enabled: providerSettings['openai-codex-acp']?.enabled === true,
+          models: providerSettings['openai-codex-acp']?.models,
+          hiddenModels: providerSettings['openai-codex-acp']?.hiddenModels
         },
         'opencode': {
-          // OpenCode uses its own config, API key is optional
           enabled: providerSettings['opencode']?.enabled === true,
+          models: providerSettings['opencode']?.models,
+          hiddenModels: providerSettings['opencode']?.hiddenModels
         },
         'copilot-cli': {
-          // Copilot uses its own CLI auth (copilot auth login), no API key needed
           enabled: providerSettings['copilot-cli']?.enabled === true,
+          models: providerSettings['copilot-cli']?.models,
+          hiddenModels: providerSettings['copilot-cli']?.hiddenModels
+        },
+        'grok-build': {
+          enabled: resolveProviderEnabled('grok-build', providerSettings['grok-build']),
+          models: providerSettings['grok-build']?.models,
+          hiddenModels: providerSettings['grok-build']?.hiddenModels
+        },
+        'cursor-agent': {
+          enabled: resolveProviderEnabled('cursor-agent', providerSettings['cursor-agent']),
+          models: providerSettings['cursor-agent']?.models,
+          hiddenModels: providerSettings['cursor-agent']?.hiddenModels
+        },
+        'antigravity-gemini-agent': {
+          enabled: resolveProviderEnabled(
+            'antigravity-gemini-agent',
+            providerSettings['antigravity-gemini-agent'],
+          ),
+          models: providerSettings['antigravity-gemini-agent']?.models,
+          hiddenModels: providerSettings['antigravity-gemini-agent']?.hiddenModels
         },
         'lmstudio': {
           enabled: providerSettings['lmstudio']?.enabled === true,
@@ -3507,7 +3960,7 @@ export class AIService {
         ...apiKeys,
         lmstudio_url: providerSettings['lmstudio']?.baseUrl || 'http://127.0.0.1:8234'
       };
-      const allModels = await ModelRegistry.getAllModels(modelsConfig, enabledProviderSet);
+      const allModels = await ModelRegistry.getAllModels(modelsConfig, workspacePath, enabledProviderSet);
 
       // const claudeCodeModels = allModels.filter(m => m.provider === 'claude-code');
       // console.log('[AIService] ai:getModels - claude-code models from registry:',
@@ -3785,12 +4238,17 @@ export class AIService {
       }
 
       // Resolve the workspace: explicit arg wins, else the window's active
-      // project (honors the project rail selection in Multi-Project mode).
+      // project (honors the project rail selection in Multi-Project mode), else
+      // the offscreen mount's workspace when the sender is the hidden screenshot
+      // capture window, which WindowManager never registers.
       let workspacePath = options?.workspacePath;
       if (!workspacePath) {
         const browserWindow = BrowserWindow.fromWebContents(event.sender);
         const windowId = browserWindow ? getWindowId(browserWindow) : null;
-        workspacePath = resolveActiveWorkspacePathForWindowId(windowId) ?? undefined;
+        workspacePath = resolveSenderWorkspacePath({
+          windowId,
+          webContentsId: event.sender?.id,
+        });
       }
       if (!workspacePath) {
         throw new Error('No workspace path available for backend tool call');
@@ -3839,7 +4297,8 @@ export class AIService {
         const baseUrl = provider === 'lmstudio' ? (globalApiKeys['lmstudio_url'] || undefined) : undefined;
 
         try {
-          const models = await ModelRegistry.getModelsForProvider(provider, apiKey, baseUrl);
+          // CHAT_PROVIDERS above is claude/openai/lmstudio -- none project-scoped.
+          const models = await ModelRegistry.getModelsForProvider(provider, undefined, apiKey, baseUrl);
           const enabledModelIds = settings?.models as string[] | undefined;
 
           for (const model of models) {
@@ -4130,7 +4589,7 @@ export class AIService {
       } else {
         // Try to find this model across providers
         for (const p of CHAT_PROVIDERS) {
-          const models = await ModelRegistry.getModelsForProvider(p);
+          const models = await ModelRegistry.getModelsForProvider(p, undefined);
           if (models.some(m => m.id === options.model)) {
             providerType = p;
             modelId = options.model;

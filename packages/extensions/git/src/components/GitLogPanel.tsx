@@ -4,6 +4,10 @@ import {
   useDismiss, useInteractions, autoUpdate,
 } from '@floating-ui/react';
 import type { PanelHostProps } from '@nimbalyst/extension-sdk';
+import {
+  GIT_SHOW_OUTPUT_REQUEST_EVENT,
+  type GitShowOutputRequestDetail,
+} from '@nimbalyst/extension-sdk/git-operation-log';
 import { CommitHoverCard } from './CommitHoverCard';
 import { CommitContextMenu } from './CommitContextMenu';
 import { CommitDetailContent, type CommitDetail } from './CommitDetailContent';
@@ -14,6 +18,7 @@ import { GitStatusBar } from './GitStatusBar';
 import { PanelHideButton } from './PanelHideButton';
 import { useOperationLog, getSuggestionForError } from '../hooks/useOperationLog';
 import { usePanelState, readSelectedHash } from '../hooks/usePanelState';
+import { useSessionsForCommits } from '../hooks/useSessionsForCommits';
 import { filterCommits } from '../commitFilters';
 
 interface GitCommit {
@@ -29,6 +34,17 @@ interface GitStatusResult {
   ahead: number;
   behind: number;
   hasUncommitted: boolean;
+}
+
+/**
+ * `git:status-changed` payload. The index and ref watchers send `workspacePath`
+ * alone; main adds a computed snapshot and a monotonic revision when it
+ * refreshes after a Git operation settles.
+ */
+interface GitStatusChangedPayload {
+  workspacePath: string;
+  revision?: number;
+  status?: GitStatusResult;
 }
 
 interface GitBranchResult {
@@ -57,6 +73,15 @@ const ipc = (window as unknown as {
     invoke: (channel: string, ...args: unknown[]) => Promise<unknown>;
   };
 }).electronAPI;
+
+/** App.tsx listens for this event and routes the session into Agent mode. */
+function openSession(sessionId: string, workspacePath: string): void {
+  window.dispatchEvent(
+    new CustomEvent('open-ai-session', {
+      detail: { sessionId, workspacePath },
+    }),
+  );
+}
 
 function formatRelativeDate(dateStr: string): string {
   const date = new Date(dateStr);
@@ -128,6 +153,10 @@ export function GitLogPanel({ host }: PanelHostProps) {
     () => filterCommits(unfilteredCommits, searchFilter),
     [unfilteredCommits, searchFilter],
   );
+  // Keyed off the fetched page, not the search-filtered view, so typing in the
+  // search box re-filters locally instead of refiring the lookup.
+  const commitShas = useMemo(() => unfilteredCommits.map(c => c.hash), [unfilteredCommits]);
+  const sessionLinks = useSessionsForCommits(commitShas);
   const selectedIndex = useMemo(() => {
     if (!selectedHash) return null;
     const idx = commits.findIndex(c => c.hash === selectedHash);
@@ -154,6 +183,14 @@ export function GitLogPanel({ host }: PanelHostProps) {
     (event: string, callback: (data: unknown) => void) => host.onWorkspaceEvent(event, callback),
     [host],
   );
+  // ChangesTab keys its git:status-changed subscription off this, so it has to be
+  // stable -- an inline lambda re-subscribed on every render of this panel, and
+  // the panel re-renders on a 1s clock while an operation runs. (#1400)
+  const subscribeToWorkspaceEvents = useCallback(
+    (event: string, handler: () => void) => host.onWorkspaceEvent(event, handler),
+    [host],
+  );
+  const [changesRefreshToken, setChangesRefreshToken] = useState(0);
   const { entries: logEntries, clearLog, withLog } = useOperationLog(
     workspacePath,
     subscribeToGitEvents,
@@ -202,17 +239,39 @@ export function GitLogPanel({ host }: PanelHostProps) {
   const [fileMaskHistory, setFileMaskHistory] = useState<string[]>(
     () => host.storage.getGlobal<string[]>('changesFileMaskHistory') ?? []
   );
+  const fileMaskEnabledDirtyRef = useRef(false);
+  const fileMaskInputDirtyRef = useRef(false);
+  const fileMaskHistoryDirtyRef = useRef(false);
+  useEffect(() => {
+    const hydrateFileMaskStorage = () => {
+      if (!fileMaskEnabledDirtyRef.current) {
+        setFileMaskEnabled(host.storage.get<boolean>('changesFileMaskEnabled') ?? false);
+      }
+      if (!fileMaskInputDirtyRef.current) {
+        setFileMaskInput(host.storage.get<string>('changesFileMask') ?? '');
+      }
+      if (!fileMaskHistoryDirtyRef.current) {
+        setFileMaskHistory(host.storage.getGlobal<string[]>('changesFileMaskHistory') ?? []);
+      }
+    };
+    hydrateFileMaskStorage();
+    window.addEventListener('nimbalyst:extension-storage-hydrated', hydrateFileMaskStorage);
+    return () => window.removeEventListener('nimbalyst:extension-storage-hydrated', hydrateFileMaskStorage);
+  }, [host.storage]);
   const updateFileMaskEnabled = useCallback((enabled: boolean) => {
+    fileMaskEnabledDirtyRef.current = true;
     setFileMaskEnabled(enabled);
     void host.storage.set('changesFileMaskEnabled', enabled);
   }, [host.storage]);
   const updateFileMaskInput = useCallback((value: string) => {
+    fileMaskInputDirtyRef.current = true;
     setFileMaskInput(value);
     void host.storage.set('changesFileMask', value);
   }, [host.storage]);
   const commitFileMaskToHistory = useCallback((value: string) => {
     const trimmed = value.trim();
     if (!trimmed) return;
+    fileMaskHistoryDirtyRef.current = true;
     setFileMaskHistory(prev => {
       const next = [trimmed, ...prev.filter(v => v !== trimmed)].slice(0, 10);
       void host.storage.setGlobal('changesFileMaskHistory', next);
@@ -220,6 +279,7 @@ export function GitLogPanel({ host }: PanelHostProps) {
     });
   }, [host.storage]);
   const removeFileMaskHistoryEntry = useCallback((value: string) => {
+    fileMaskHistoryDirtyRef.current = true;
     setFileMaskHistory(prev => {
       const next = prev.filter(v => v !== value);
       void host.storage.setGlobal('changesFileMaskHistory', next);
@@ -282,17 +342,31 @@ export function GitLogPanel({ host }: PanelHostProps) {
     }
   }, [workspacePath]);
 
+  // Ordering guards for the status snapshot. `generation` stops an older
+  // `git:status` response from overwriting a newer one; `appliedRevision` does
+  // the same for revisioned snapshots main pushes after an operation settles.
+  const statusGenerationRef = useRef(0);
+  const appliedStatusGenerationRef = useRef(0);
+  const appliedStatusRevisionRef = useRef(-1);
+
+  const applyStatus = useCallback((result: GitStatusResult) => {
+    setStatus(result);
+    if (result.branch) {
+      setSelectedBranch(current => current || result.branch);
+    }
+  }, []);
+
   const loadStatus = useCallback(async () => {
+    const requested = ++statusGenerationRef.current;
     try {
       const result = await ipc.invoke('git:status', workspacePath) as GitStatusResult;
-      setStatus(result);
-      if (result.branch) {
-        setSelectedBranch(current => current || result.branch);
-      }
+      if (requested < appliedStatusGenerationRef.current) return;
+      appliedStatusGenerationRef.current = requested;
+      applyStatus(result);
     } catch {
       // Non-fatal
     }
-  }, [workspacePath]);
+  }, [applyStatus, workspacePath]);
 
   const loadCommits = useCallback(async () => {
     setLoading(true);
@@ -326,12 +400,41 @@ export function GitLogPanel({ host }: PanelHostProps) {
   // Auto-refresh when git HEAD changes (commits, checkouts, merges, etc.)
   // Uses PanelHost.onWorkspaceEvent which filters to the current workspace centrally.
   useEffect(() => {
-    return host.onWorkspaceEvent('git:status-changed', () => {
-      loadStatus();
+    return host.onWorkspaceEvent('git:status-changed', (data) => {
+      const payload = data as GitStatusChangedPayload | undefined;
+      // Main already computed the snapshot when it stamped a revision; taking it
+      // directly is what keeps this panel and the menu-bar indicator settling on
+      // the same counts instead of racing two independent reads.
+      if (payload?.status) {
+        if (
+          payload.revision === undefined
+          || payload.revision > appliedStatusRevisionRef.current
+        ) {
+          if (payload.revision !== undefined) {
+            appliedStatusRevisionRef.current = payload.revision;
+          }
+          appliedStatusGenerationRef.current = ++statusGenerationRef.current;
+          applyStatus(payload.status);
+        }
+      } else {
+        loadStatus();
+      }
       loadBranches();
       loadCommits();
     });
-  }, [host, loadStatus, loadBranches, loadCommits]);
+  }, [host, applyStatus, loadStatus, loadBranches, loadCommits]);
+
+  // The menu-bar Git indicator can ask to show running-command detail. It has no
+  // handle on this panel's tab state, so it states the intent and we honour it.
+  useEffect(() => {
+    const handleShowOutput = (event: Event) => {
+      const detail = (event as CustomEvent<GitShowOutputRequestDetail>).detail;
+      if (detail?.workspacePath && detail.workspacePath !== workspacePath) return;
+      setActiveTab('output');
+    };
+    window.addEventListener(GIT_SHOW_OUTPUT_REQUEST_EVENT, handleShowOutput);
+    return () => window.removeEventListener(GIT_SHOW_OUTPUT_REQUEST_EVENT, handleShowOutput);
+  }, [setActiveTab, workspacePath]);
 
   // Drag-to-resize handle
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
@@ -452,6 +555,7 @@ export function GitLogPanel({ host }: PanelHostProps) {
     loadStatus();
     loadBranches();
     loadCommits();
+    setChangesRefreshToken(t => t + 1);
   }, [loadStatus, loadBranches, loadCommits]);
 
   const clearHideTimer = useCallback(() => {
@@ -816,6 +920,7 @@ export function GitLogPanel({ host }: PanelHostProps) {
                     <th className="git-log-th git-log-th--hash">Hash</th>
                     <th className="git-log-th git-log-th--message">Message</th>
                     <th className="git-log-th git-log-th--author">Author</th>
+                    <th className="git-log-th git-log-th--session">Session</th>
                     <th className="git-log-th git-log-th--date">Date</th>
                   </tr>
                 </thead>
@@ -857,6 +962,21 @@ export function GitLogPanel({ host }: PanelHostProps) {
                         <td className="git-log-td git-log-td--author">
                           {commit.author}
                         </td>
+                        <td className="git-log-td git-log-td--session">
+                          {sessionLinks[commit.hash] && (
+                            <button
+                              type="button"
+                              className="git-log-session-chip"
+                              title={`Open session: ${sessionLinks[commit.hash].title || 'Untitled session'}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openSession(sessionLinks[commit.hash].sessionId, workspacePath);
+                              }}
+                            >
+                              {sessionLinks[commit.hash].title || 'Untitled session'}
+                            </button>
+                          )}
+                        </td>
                         <td className="git-log-td git-log-td--date">
                           {formatRelativeDate(commit.date)}
                         </td>
@@ -881,6 +1001,8 @@ export function GitLogPanel({ host }: PanelHostProps) {
                 layout="vertical"
                 workspacePath={workspacePath}
                 commitHash={commits[selectedIndex].hash}
+                sessionLink={sessionLinks[commits[selectedIndex].hash] ?? null}
+                onOpenSession={(sessionId) => openSession(sessionId, workspacePath)}
               />
             </div>
           )}
@@ -891,10 +1013,11 @@ export function GitLogPanel({ host }: PanelHostProps) {
         <ChangesTab
           workspacePath={workspacePath}
           withLog={withLog}
-          onWorkspaceEvent={(event, handler) => host.onWorkspaceEvent(event, handler)}
+          onWorkspaceEvent={subscribeToWorkspaceEvents}
           onShowOutput={() => setActiveTab('output')}
           fileMaskEnabled={fileMaskEnabled}
           fileMaskInput={fileMaskInput}
+          refreshToken={changesRefreshToken}
         />
       )}
 

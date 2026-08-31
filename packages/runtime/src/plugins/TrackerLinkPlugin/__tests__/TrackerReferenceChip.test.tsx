@@ -69,6 +69,27 @@ describe('TrackerReferenceChip', () => {
     expect(button.style.color).toBe('var(--nim-text)');
   });
 
+  it('offers host navigation for an unresolved reference', () => {
+    const store = createStore();
+    const onNavigate = vi.fn();
+    const { container } = render(
+      <Provider store={store}>
+        <TrackerReferenceChip
+          referenceKey="plan_42"
+          unresolvedLabel="Plan"
+          onNavigate={onNavigate}
+        />
+      </Provider>,
+    );
+
+    expect(container.querySelector('.tracker-reference-chip')?.textContent)
+      .toBe('Plan');
+    fireEvent.click(container.querySelector<HTMLElement>('.tracker-reference-chip')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Go to item' }));
+
+    expect(onNavigate).toHaveBeenCalledWith(null);
+  });
+
   it('keeps the preview open when the transcript remounts the chip', () => {
     const store = createStore();
     store.set(
@@ -310,10 +331,14 @@ describe('TrackerReferenceChip', () => {
       '.tracker-reference-chip',
     );
     expect(chip?.getAttribute('data-completed')).toBe('false');
+    // Muted, not red. Rejected is `cancelled` -- work nobody is doing, which
+    // asks nothing of the reader. Red is for blocked: something wrong that
+    // wants attention. They were the same colour while the tone table guessed
+    // from status names.
     expect(
       container.querySelector<HTMLElement>('.tracker-reference-chip-status')
         ?.style.color,
-    ).toBe('var(--nim-error)');
+    ).toBe('var(--nim-text-muted)');
     expect(
       container.querySelector<HTMLElement>('.tracker-reference-chip-title')
         ?.style.textDecoration,

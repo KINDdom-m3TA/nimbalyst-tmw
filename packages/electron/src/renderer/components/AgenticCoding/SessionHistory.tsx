@@ -16,7 +16,7 @@ import { useArchiveWorktreeDialog } from '../../hooks/useArchiveWorktreeDialog';
 import { getTimeGroupKey, TimeGroupKey } from '../../utils/dateFormatting';
 import { getFileName } from '../../utils/pathUtils';
 import { KeyboardShortcuts, getShortcutDisplay } from '../../../shared/KeyboardShortcuts';
-import { MaterialSymbol } from '@nimbalyst/runtime';
+import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import {
   sessionListRootAtom,
   sessionListLoadingAtom,
@@ -33,7 +33,7 @@ import {
 } from '../../store';
 import { alphaFeatureEnabledAtom, worktreesFeatureAvailableAtom } from '../../store/atoms/appSettings';
 import { activeWorkspacePathAtom } from '../../store/atoms/openProjects';
-import { activeSessionIdAtom as globalActiveSessionIdAtom } from '../../store/atoms/sessions';
+import { activeSessionIdAtom as globalActiveSessionIdAtom, sessionPinnedUpdateAtom } from '../../store/atoms/sessions';
 import { collapsedGroupsAtom, sortOrderAtom, setCollapsedGroupsAtom, setSortOrderAtom } from '../../store/atoms/agentMode';
 import {
   isGitRepoAtom,
@@ -50,7 +50,7 @@ import {
   openNewBlitzDialogActionAtom,
   requestSessionQuickOpenActionAtom,
 } from '../../store/actions/sessionHistoryActions';
-import { worktreeDisplayNameUpdateAtom } from '../../store/atoms/worktrees';
+import { worktreeDisplayNameUpdateAtom, worktreePinnedUpdateAtom } from '../../store/atoms/worktrees';
 import { blitzCreatedAtom, blitzDisplayNameUpdateAtom } from '../../store/atoms/blitz';
 import { superLoopListAtom, upsertSuperLoopAtom, removeSuperLoopAtom } from '../../store/atoms/superLoop';
 import { useSuperLoopDialog } from '../../hooks/useSuperLoop';
@@ -74,6 +74,11 @@ import { usePostHog } from 'posthog-js/react';
 import { WorkspaceSummaryHeader, generateWorkspaceAccentColor } from '../WorkspaceSummaryHeader';
 import { errorNotificationService } from '../../services/ErrorNotificationService';
 import { FloatingPortal, useFloatingMenu } from '../../hooks/useFloatingMenu';
+import {
+  patchWorkstreamChildPin,
+  reconcileSessionPinToggle,
+  workstreamChildrenNeedRefresh,
+} from './workstreamChildPinReconciliation';
 import './SessionHistory.css';
 
 // SessionItem is the shared SessionMeta type from the store atoms.
@@ -272,7 +277,7 @@ const SessionHistoryComponent: React.FC = () => {
     void dispatchBranchSession(sessionId);
   }, [dispatchBranchSession]);
   const onNewSession: (() => void) | undefined = useCallback(() => {
-    void dispatchCreateNewSession(undefined);
+    void dispatchCreateNewSession({ launchSource: 'session_history' });
   }, [dispatchCreateNewSession]);
   const onNewWorktreeSession: ((options?: { baseBranch?: string; name?: string }) => void | Promise<void>) | undefined = isWorktreesFeatureAvailable
     ? async (options?: { baseBranch?: string; name?: string }) => {
@@ -406,6 +411,10 @@ const SessionHistoryComponent: React.FC = () => {
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set());
   const [selectedGroupIds, setSelectedGroupIds] = useState<Set<string>>(new Set()); // Format: "blitz:id", "worktree:id", "workstream:id", "superloop:id", "meta-agent:id"
   const lastSelectedIdRef = useRef<string | null>(null); // For shift+click range selection
+  // Tracks the last searchQuery|tagFilter|mode combination the title-filter effect ran for, so
+  // it can tell a real user-driven filter change apart from an unrelated `allSessions` reference
+  // change (see the effect below and bug_session_search_contents_reset_to_zero.md).
+  const prevSessionFilterKeyRef = useRef<string>('');
   const [worktreeCache, setWorktreeCache] = useState<Map<string, WorktreeWithStatus>>(new Map()); // Cache worktree data
   const [workstreamChildrenCache, setWorkstreamChildrenCache] = useState<Map<string, SessionItem[]>>(new Map()); // Cache workstream children
   const [blitzCache, setBlitzCache] = useState<Map<string, BlitzData>>(new Map()); // Cache blitz data
@@ -795,8 +804,26 @@ const SessionHistoryComponent: React.FC = () => {
 
   // Client-side title filtering (instant, no database query)
   // Note: Archived session filtering is handled by sessionListRootAtom based on showArchivedSessionsAtom
+  //
+  // Bug fix (Temp/yogi_v0681/bug_session_search_contents_reset_to_zero.md): this effect used to
+  // unconditionally reset `contentSearchTriggered` and overwrite `sessions` with a title-only
+  // re-filter every time `allSessions` changed reference -- which happens on ANY session's
+  // metadata update anywhere in the workspace, not just the one being searched. That silently
+  // cancelled an active content search and reset the visible results to zero within seconds of
+  // unrelated background session activity. `prevSessionFilterKeyRef` tracks only the inputs a
+  // user action can actually change (searchQuery/tagFilter/mode); when none of those changed and
+  // a content search is active, this effect leaves `sessions` (already populated by
+  // executeSearch) alone instead of clobbering it.
   useEffect(() => {
-    // Reset content search trigger when query changes
+    const filterKey = `${searchQuery}|${tagFilter.tags.join(',')}|${mode}`;
+    const userFilterInputsChanged = prevSessionFilterKeyRef.current !== filterKey;
+    prevSessionFilterKeyRef.current = filterKey;
+
+    if (contentSearchTriggered && !userFilterInputsChanged) {
+      return;
+    }
+
+    // Reset content search trigger when the query/tags/mode actually change.
     setContentSearchTriggered(false);
 
     // Filter out sessions that belong to worktrees (they're shown in WorktreeGroup instead)
@@ -826,7 +853,7 @@ const SessionHistoryComponent: React.FC = () => {
       return true;
     });
     setSessions(filtered.sort(compareSessionOrder));
-  }, [searchQuery, tagFilter.tags, allSessions, mode, compareSessionOrder, sessionRegistry]);
+  }, [searchQuery, tagFilter.tags, allSessions, mode, compareSessionOrder, sessionRegistry, contentSearchTriggered]);
 
   useEffect(() => {
     const commitOrderMap = (nextMap: Map<string, number>) => {
@@ -1092,6 +1119,37 @@ const SessionHistoryComponent: React.FC = () => {
       return updated;
     });
   }, [worktreeDisplayNameUpdate, workspacePath]);
+
+  // React to worktree pin updates broadcast by main (same central-listener
+  // route as display names) so pinning from the Agent mode header moves the
+  // group in this list.
+  const worktreePinnedUpdate = useAtomValue(worktreePinnedUpdateAtom);
+  const initialWorktreePinnedUpdateRef = useRef(worktreePinnedUpdate);
+  useEffect(() => {
+    if (!workspacePath) return;
+    if (worktreePinnedUpdate === initialWorktreePinnedUpdateRef.current) return;
+    if (!worktreePinnedUpdate) return;
+    const { worktreeId, isPinned } = worktreePinnedUpdate.payload;
+    setWorktreeCache(prev => {
+      const existing = prev.get(worktreeId);
+      if (!existing || existing.isPinned === isPinned) return prev;
+      const updated = new Map(prev);
+      updated.set(worktreeId, { ...existing, isPinned });
+      return updated;
+    });
+  }, [worktreePinnedUpdate, workspacePath]);
+
+  // React to session pin toggles performed on another surface (the Agent mode
+  // header). Renderer-only: this list is local state, not an atom.
+  const sessionPinnedUpdate = useAtomValue(sessionPinnedUpdateAtom);
+  const initialSessionPinnedUpdateRef = useRef(sessionPinnedUpdate);
+  useEffect(() => {
+    if (sessionPinnedUpdate === initialSessionPinnedUpdateRef.current) return;
+    if (!sessionPinnedUpdate) return;
+    const { sessionId, isPinned } = sessionPinnedUpdate.payload;
+    setSessions(prev => prev.map(session => session.id === sessionId ? { ...session, isPinned } : session));
+    setWorkstreamChildrenCache(prev => patchWorkstreamChildPin(prev, sessionId, isPinned));
+  }, [sessionPinnedUpdate]);
 
   // React to blitz display-name updates broadcast by main. The IPC event is
   // handled centrally in store/listeners/blitzListeners.ts which writes
@@ -1777,11 +1835,14 @@ const SessionHistoryComponent: React.FC = () => {
   // Toggle pin status for a session
   const handleSessionPinToggle = useCallback(async (sessionId: string, isPinned: boolean) => {
     try {
-      await window.electronAPI.invoke('sessions:update-pinned', sessionId, isPinned);
-      // Update atom state (optimistic update)
-      updateSessionStore({ sessionId, updates: { isPinned } });
-      // Also update filtered list for immediate feedback
-      setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, isPinned } : s));
+      await reconcileSessionPinToggle({
+        sessionId,
+        isPinned,
+        invoke: (channel, ...args) => window.electronAPI.invoke(channel, ...args),
+        updateSessionStore,
+        setSessions,
+        setWorkstreamChildrenCache,
+      });
     } catch (error) {
       console.error('[SessionHistory] Failed to toggle session pin:', error);
     }
@@ -2572,40 +2633,17 @@ const SessionHistoryComponent: React.FC = () => {
     const cache = workstreamChildrenCacheRef.current;
     const registrySnapshot = store.get(sessionRegistryAtom);
 
-    const workstreamChildrenNeedRefresh = (session: SessionItem) => {
-      const cachedChildren = cache.get(session.id);
-      if (!cachedChildren) {
-        return true;
-      }
-
-      // Only refetch on STRUCTURAL changes (add/remove child, or a child we
-      // cached is no longer in the registry). updatedAt/title/isArchived/etc
-      // churn on every streamed message via sessions:refresh-list, which used
-      // to make this comparison flap forever during an active session and
-      // burn the renderer at 100% CPU. Field updates for existing children
-      // already propagate via sessions:session-updated -> sessionRegistryAtom
-      // patch -- the UI reads those directly via per-id atoms, it doesn't
-      // need our cached SessionItem copy to also be up to date.
-      if (cachedChildren.length !== (session.childCount ?? 0)) {
-        return true;
-      }
-
-      for (const child of cachedChildren) {
-        if (!registrySnapshot.has(child.id)) {
-          return true;
-        }
-      }
-
-      return false;
-    };
-
     // Find workstream sessions that are expanded
     const workstreamSessionsNeedingFetch = sessions.filter(s =>
       !s.worktreeId &&
       (s.childCount ?? 0) > 0 &&
       !collapsedGroups.includes(`workstream:${s.id}`) &&
       !pendingWorkstreamChildrenFetchesRef.current.has(s.id) &&
-      workstreamChildrenNeedRefresh(s)
+      workstreamChildrenNeedRefresh(
+        cache.get(s.id),
+        s.childCount ?? 0,
+        registrySnapshot,
+      )
     );
 
     if (workstreamSessionsNeedingFetch.length === 0) {

@@ -30,10 +30,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { PGlite } from '@electric-sql/pglite';
 import { SQLiteDatabase } from '../SQLiteDatabase';
 import { SQLiteBackupService } from '../../../services/database/SQLiteBackupService';
+import { verifyBackupOffThread } from '../backupVerification';
 import { MigrationOrchestrator, type LivePgliteReader as OrchestratorLivePgliteReader } from '../MigrationOrchestrator';
 import { MigrationDryRunner } from '../MigrationDryRunner';
 import { MigrationAdopter } from '../MigrationAdopter';
 import { MigrationProgressReporter } from '../MigrationProgressReporter';
+import { countConfiguredProjects } from '../recoveryArtifacts';
 import {
   type RequestEnvelope,
   type ResponseEnvelope,
@@ -54,8 +56,19 @@ import {
   type PgliteReadRequestPayload,
   type PgliteReadResponsePayload,
   type WorkerControlRequestPayload,
+  type ToolRetentionPayload,
 } from './workerProtocol';
 import { assertWithinResponseLimit, ResponseTooLargeError } from './responseSizeGuard';
+import {
+  createToolOutputEstimateWork,
+  createToolOutputRetentionWork,
+  createRawMessagePruneWork,
+  createInitDedupWork,
+  type ReclaimEstimate,
+  type RetentionResult,
+  type PruneResult,
+  type InitDedupResult,
+} from '../../toolOutputRetentionPass';
 import type { PGLiteHandle } from '../PGLiteToSQLiteMigrator';
 
 if (!parentPort) {
@@ -324,6 +337,14 @@ async function handle(req: RequestEnvelope): Promise<unknown> {
         backupDir,
         sqlite,
         log: (level, msg, meta) => log(level, msg, meta),
+        copiesKept: opts.backupCopiesKept,
+        // Verification is a full synchronous scan of a file that can be
+        // several GB. Run on this thread it stops the message loop dead and
+        // every queued `query` times out; hand it to a short-lived worker
+        // instead. `__filename` is this bundle, and the verify bundle ships
+        // beside it (out/ in dev, Resources/ when packaged).
+        verify: (backupPath) =>
+          verifyBackupOffThread(backupPath, path.dirname(__filename), log),
       });
       await backupService.initialize();
       sqlite.setBackupService(backupService);
@@ -388,7 +409,8 @@ async function handle(req: RequestEnvelope): Promise<unknown> {
 
     case 'verifyBackup': {
       const { backupPath } = req.payload as VerifyBackupPayload;
-      return ensureInitialized().verifyBackup(backupPath);
+      // Off-thread for the same reason the backup service verifies off-thread.
+      return verifyBackupOffThread(backupPath, path.dirname(__filename), log);
     }
 
     case 'getBackupStatus':
@@ -416,6 +438,63 @@ async function handle(req: RequestEnvelope): Promise<unknown> {
       return { result: handle.pragma('wal_checkpoint(TRUNCATE)') };
     }
 
+    case 'setBackupCopiesKept': {
+      const { copiesKept } = req.payload as { copiesKept: number };
+      backupService?.setCopiesKept(copiesKept);
+      return { ok: true };
+    }
+
+    case 'toolRetentionEstimate': {
+      // Background lane, not inline: counting all candidates in one statement
+      // took 5.7 s against a real 10 GB store, and better-sqlite3 is
+      // synchronous, so that is 5.7 s of blocked worker behind one click.
+      const { retentionDays } = req.payload as ToolRetentionPayload;
+      const inst = ensureInitialized();
+      let estimate: ReclaimEstimate | null = null;
+      await inst.runBackground(
+        createToolOutputEstimateWork(retentionDays, (e) => {
+          estimate = e;
+        }),
+      );
+      return estimate;
+    }
+
+    case 'toolRetentionRun': {
+      // Runs on the coordinator's BACKGROUND lane, never inline: an unbounded
+      // rewrite of ai_agent_messages on the hot lane hangs the whole app.
+      const { retentionDays, maxRows } = req.payload as ToolRetentionPayload;
+      const inst = ensureInitialized();
+      let result: RetentionResult | null = null;
+      await inst.runBackground(
+        createToolOutputRetentionWork({ retentionDays, maxRows }, (r) => {
+          result = r;
+        }),
+      );
+      return result;
+    }
+
+    case 'rawMessagePruneRun': {
+      // Same background-lane discipline as toolRetentionRun, and for the same
+      // reason: this walks ai_agent_messages and writes to it. Runs the prune
+      // first and the init dedup second -- prune shrinks the row set the dedup
+      // then has to group over.
+      const { retentionDays, maxRows, ignoreAge } = req.payload as ToolRetentionPayload;
+      const inst = ensureInitialized();
+      let prune: PruneResult | null = null;
+      let initDedup: InitDedupResult | null = null;
+      await inst.runBackground(
+        createRawMessagePruneWork({ retentionDays, maxRows, ignoreAge, log: workerLogger }, (r) => {
+          prune = r;
+        }),
+      );
+      await inst.runBackground(
+        createInitDedupWork({ log: workerLogger }, (r) => {
+          initDedup = r;
+        }),
+      );
+      return { prune, initDedup };
+    }
+
     // ----- Migration --------------------------------------------------------
 
     case 'migrationPreflight': {
@@ -425,6 +504,7 @@ async function handle(req: RequestEnvelope): Promise<unknown> {
         schemaDir,
         pglite: buildPgliteReader(),
         closeRunningPglite: async () => undefined,
+        configuredProjectCount: countConfiguredProjects(userDataPath),
         log: workerLogger,
       });
       return orch.preflight();
@@ -443,6 +523,7 @@ async function handle(req: RequestEnvelope): Promise<unknown> {
           pglite: buildPgliteReader(),
           closeRunningPglite: bridgeClosePglite,
           reopenPgliteAfterClose: reopenClosedPglite,
+          configuredProjectCount: countConfiguredProjects(userDataPath),
           onCutoverSuccess: async (info) => {
             emit('db:migration:cutoverSuccess', {
               sqliteDir: info.sqliteDir,
@@ -491,6 +572,7 @@ async function handle(req: RequestEnvelope): Promise<unknown> {
         schemaDir,
         pglite: buildPgliteReader(),
         closeRunningPglite: async () => undefined,
+        configuredProjectCount: countConfiguredProjects(userDataPath),
         log: workerLogger,
       });
       const found = adopter.findDryRunDir();

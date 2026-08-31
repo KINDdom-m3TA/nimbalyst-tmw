@@ -79,6 +79,23 @@ export function windowReferencesWorkspace(state: WindowState | undefined, path: 
 }
 
 /**
+ * Every workspace path an open window references, primary and rail alike.
+ *
+ * Used by the post-sign-in project walk to ask "is the user already working in
+ * one of their organization's projects?" before interrupting them.
+ */
+export function listOpenWorkspacePaths(): string[] {
+    const paths = new Set<string>();
+    for (const state of windowStates.values()) {
+        if (state.workspacePath) paths.add(state.workspacePath);
+        for (const extra of state.additionalWorkspacePaths ?? []) {
+            if (extra) paths.add(extra);
+        }
+    }
+    return [...paths];
+}
+
+/**
  * Whether any window in the current process references a workspace path.
  */
 export function anyWindowReferencesWorkspace(path: string, excludeWindowId?: number): boolean {
@@ -87,4 +104,32 @@ export function anyWindowReferencesWorkspace(path: string, excludeWindowId?: num
         if (windowReferencesWorkspace(state, path)) return true;
     }
     return false;
+}
+
+/**
+ * #1375: Keep the window's represented file in lockstep with the document on
+ * screen.
+ *
+ * Our windows use `titleBarStyle: 'hiddenInset'`, so the proxy icon this
+ * normally draws is never rendered. What it still feeds is AXDocument, which
+ * macOS hands to every accessibility client -- screen readers, automation,
+ * time trackers -- as "the document this window is showing". That is the whole
+ * payload here; there is nothing visual to check.
+ *
+ * Pass null when no document is visible. `setRepresentedFilename` has no
+ * implicit clear, so without this the window keeps advertising the last file it
+ * ever represented -- possibly one the user has since deleted, since clearing
+ * window state on delete does not touch the OS-level value.
+ *
+ * No-ops off darwin, where represented filenames do not exist.
+ */
+export function syncRepresentedFilename(
+    window: BrowserWindow | null | undefined,
+    filePath: string | null,
+): void {
+    if (process.platform !== 'darwin') return;
+    if (!window || window.isDestroyed()) return;
+
+    window.setRepresentedFilename(filePath ?? '');
+    if (!filePath) window.setDocumentEdited(false);
 }

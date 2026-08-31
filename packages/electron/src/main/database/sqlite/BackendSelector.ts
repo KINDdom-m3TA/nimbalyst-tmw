@@ -3,17 +3,25 @@
  *
  * Single source of truth for whether the local store runs on PGLite or SQLite.
  *
- * Decision rules (from the plan):
- *   - Existing installs (have `pglite-db/`): stay on PGLite until the user
- *     opts in from Settings → Database → Migrate to SQLite.
+ * Decision rules:
+ *   - Existing installs (have `pglite-db/`): migration is *due*. The boot path
+ *     migrates them automatically (see `autoMigrate.ts`); they no longer wait
+ *     for the user to opt in from Settings.
+ *   - Except installs that explicitly rolled back (`setBy: 'rollback'`). Those
+ *     stay on PGLite forever — the user already told us SQLite went badly for
+ *     them, and silently dragging them back would be the worst possible bug.
  *   - Fresh installs (no `pglite-db/`): default to SQLite immediately.
  *   - The setting is persisted in a small JSON file at
  *     `<userData>/database-backend.json` rather than the main electron-store
  *     schema so we don't have to migrate the AppStoreSchema for a flag that
  *     turns over once per install.
  *
- * The flag is *only* flipped by the migration flow after verification passes.
- * Nothing else writes it.
+ * Writers: the migration flow (manual and automatic) flips `backend`, and the
+ * auto-migration path additionally records attempt bookkeeping and the cached
+ * kill-switch value. All writes go through `writeBackendState`, which is
+ * atomic — a torn file here reads back as `null` and silently degrades to disk
+ * inference, which during an auto-migration would mean re-migrating an install
+ * that had already cut over.
  */
 
 import * as fs from 'fs';
@@ -21,14 +29,42 @@ import * as path from 'path';
 
 export type DatabaseBackend = 'pglite' | 'sqlite';
 
+/**
+ * Consecutive auto-migration failures. Reset on success; once `count` reaches
+ * MAX_AUTO_MIGRATION_ATTEMPTS the boot path stops trying and leaves the user
+ * on PGLite with the manual Settings flow.
+ */
+export interface MigrationAttempts {
+  count: number;
+  lastAttemptAt: string;
+  lastErrorCode?: string;
+}
+
+export const MAX_AUTO_MIGRATION_ATTEMPTS = 3;
+
 export interface BackendState {
   backend: DatabaseBackend;
   /** ISO timestamp the flag was last written. */
   setAt: string;
   /** Was this set automatically (fresh install) or by an explicit migration? */
-  setBy: 'auto-fresh-install' | 'user-migration' | 'rollback';
+  setBy:
+    | 'auto-fresh-install'
+    | 'user-migration'
+    | 'auto-migration'
+    | 'auto-migration-deferred'
+    | 'rollback'
+    /** Written by `resolveBackend` when the flag contradicted the disk (#1347). */
+    | 'contradiction-heal';
   /** Optional pointer to the preserved pre-migration PGLite directory. */
   pgliteMigratedDir?: string;
+  /** Auto-migration back-off bookkeeping. Absent until the first failure. */
+  migrationAttempts?: MigrationAttempts;
+  /**
+   * Last known value of the `force-sqlite-migration` kill switch. Cached here
+   * because the boot path cannot wait on the network to ask PostHog; see
+   * `migrationFlag.ts`.
+   */
+  forceMigrationFlag?: boolean;
 }
 
 const FLAG_FILE_NAME = 'database-backend.json';
@@ -50,57 +86,255 @@ export function readBackendState(userDataPath: string): BackendState | null {
   }
 }
 
+/**
+ * Write the flag atomically. A partially-written file parses as `null`, which
+ * `resolveBackend` treats as "no flag" and falls back to disk inference — for
+ * an install that has already cut over, that would look like a fresh PGLite
+ * migration candidate. Write to a sibling temp file and rename, which is
+ * atomic within a directory on every platform we ship.
+ */
 export function writeBackendState(userDataPath: string, state: BackendState): void {
   fs.mkdirSync(userDataPath, { recursive: true });
   const flagPath = getFlagPath(userDataPath);
-  fs.writeFileSync(flagPath, JSON.stringify(state, null, 2), 'utf-8');
+  const tmpPath = `${flagPath}.tmp-${process.pid}`;
+  fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), 'utf-8');
+  fs.renameSync(tmpPath, flagPath);
+}
+
+/**
+ * Merge a partial update into the existing state without losing sibling fields.
+ *
+ * Returns `null` without writing when there is no state yet and the patch does
+ * not name a backend. Choosing a backend is `resolveBackend`'s job; a caller
+ * updating a sibling field must never decide it as a side effect. This used to
+ * default to `pglite`, which meant the kill-switch cache refresh — it runs on
+ * every launch, including a fresh install's first — wrote "pglite" into the
+ * flag file of an install that had just resolved to SQLite, pinning it to a
+ * PGLite database it should never have had (#1347).
+ */
+export function updateBackendState(
+  userDataPath: string,
+  patch: Partial<BackendState>,
+): BackendState | null {
+  const current = readBackendState(userDataPath);
+  if (!current) {
+    if (!patch.backend || !patch.setBy) return null;
+    const created: BackendState = {
+      ...patch,
+      backend: patch.backend,
+      setBy: patch.setBy,
+      setAt: new Date().toISOString(),
+    };
+    writeBackendState(userDataPath, created);
+    return created;
+  }
+  const next: BackendState = { ...current, ...patch };
+  writeBackendState(userDataPath, next);
+  return next;
 }
 
 export interface ResolveBackendInput {
   userDataPath: string;
 }
 
+export type BackendReason =
+  | 'flag-file-pglite-rollback'
+  | 'flag-file-sqlite'
+  | 'fresh-install-defaults-sqlite'
+  | 'existing-pglite-migration-due'
+  | 'flag-contradiction-healed-sqlite'
+  | 'flag-contradiction-healed-pglite';
+
+/** Live SQLite store, relative to userData. */
+const SQLITE_DB_RELPATH = path.join('sqlite-db', 'nimbalyst.sqlite');
+
+/**
+ * Below this a `nimbalyst.sqlite` is a stub, not a store. The floor exists only
+ * to reject a zero-byte or half-created file -- the contradiction itself is
+ * what carries the decision.
+ *
+ * Keep it far below a real database. A schema-only store at migration v34
+ * measures ~836 KB before a single message is written, so a floor anywhere near
+ * a megabyte silently excludes light-but-genuine installs: the first draft of
+ * this guard used 1 MB and failed to heal a 7-session fixture.
+ *
+ * Erring low is the safe direction. When the flag's own backend has no store on
+ * disk, booting it creates an empty database, so there is no case where
+ * honouring the flag beats switching to the store that does exist -- even a
+ * near-empty one. The floor is a sanity check, not a judgement about value.
+ */
+const SQLITE_PLAUSIBLE_MIN_BYTES = 64 * 1024;
+
+export interface BackendContradictionFacts {
+  /** What the flag file claims. */
+  flagBackend: DatabaseBackend;
+  flagSetBy: BackendState['setBy'];
+  pgliteDirExists: boolean;
+  /** Size of `sqlite-db/nimbalyst.sqlite`; 0 when absent. */
+  sqliteDbBytes: number;
+}
+
+export type BackendContradictionVerdict =
+  | { action: 'honor' }
+  | { action: 'override'; backend: DatabaseBackend; reason: string };
+
+/**
+ * Does the flag file name a backend whose store is not on disk, while the other
+ * backend's store is?
+ *
+ * Pure, and every input is a fact from OUTSIDE the flag file, because a flag
+ * file cannot vouch for itself -- the same reasoning as `assessMigrationSource`
+ * (NIM-3632) and required by `.claude/rules/destructive-data-paths.md`.
+ *
+ * This exists because pre-0.74.2 builds wrote `{backend: 'pglite', setBy:
+ * 'auto-migration-deferred'}` over installs that were running on SQLite, and
+ * `b8f33e474` only stopped new writes. An install poisoned before it upgraded
+ * still resolves to PGLite, and because PGLite *creates* `pglite-db/` when it
+ * is missing, it boots an empty database and orphans the real one (#1347).
+ */
+export function assessBackendContradiction(
+  facts: BackendContradictionFacts,
+): BackendContradictionVerdict {
+  // A rollback is the user telling us SQLite went badly for them. Their PGLite
+  // store may legitimately be missing (restored by hand, moved, not yet copied
+  // back); overriding it would be exactly the surprise they opted out of.
+  if (facts.flagSetBy === 'rollback') return { action: 'honor' };
+
+  const sqliteIsPlausible = facts.sqliteDbBytes >= SQLITE_PLAUSIBLE_MIN_BYTES;
+
+  if (facts.flagBackend === 'pglite' && !facts.pgliteDirExists && sqliteIsPlausible) {
+    return {
+      action: 'override',
+      backend: 'sqlite',
+      reason:
+        'flag file says pglite but there is no pglite-db/ on disk, while ' +
+        'sqlite-db/nimbalyst.sqlite holds data',
+    };
+  }
+
+  if (facts.flagBackend === 'sqlite' && !sqliteIsPlausible && facts.pgliteDirExists) {
+    return {
+      action: 'override',
+      backend: 'pglite',
+      reason:
+        'flag file says sqlite but there is no usable sqlite-db/nimbalyst.sqlite, ' +
+        'while pglite-db/ exists',
+    };
+  }
+
+  return { action: 'honor' };
+}
+
+/** Size of a file, or 0 when it is missing or unreadable. */
+function fileBytes(filePath: string): number {
+  try {
+    return fs.statSync(filePath).size;
+  } catch {
+    return 0;
+  }
+}
+
 export interface ResolvedBackend {
   backend: DatabaseBackend;
-  reason:
-    | 'flag-file-pglite'
-    | 'flag-file-sqlite'
-    | 'fresh-install-defaults-sqlite'
-    | 'existing-pglite-no-flag';
+  reason: BackendReason;
   state: BackendState | null;
+  /**
+   * True when this install should be auto-migrated on this launch, subject to
+   * the kill switch and back-off that `maybeAutoMigrate` applies. Rollback
+   * installs are never due.
+   */
+  migrationDue: boolean;
 }
 
 /**
- * Resolve which backend should be active on launch. Pure function aside from
- * filesystem reads; never writes the flag file (the migration flow does that).
+ * Resolve which backend should be active on launch.
  *
  * Decision tree:
- *   1. If `database-backend.json` exists -> obey it.
- *   2. If `pglite-db/` exists -> stay on PGLite, no migration triggered.
- *      (No flag file is written; the user explicitly chooses to migrate.)
- *   3. Otherwise -> fresh install, default SQLite.
+ *   0. Flag file contradicted by the disk -> heal it, and persist the
+ *      correction so this is a one-time event (see
+ *      `assessBackendContradiction`). Checked first: every branch below trusts
+ *      the flag, and a flag that names a store which is not there cannot be
+ *      trusted by any of them.
+ *   1. Flag file says sqlite -> SQLite. Done, nothing due.
+ *   2. Flag file says pglite via `rollback` -> PGLite, permanently. The user
+ *      migrated, hit a problem, and chose to go back. Never auto-migrate them.
+ *   3. Flag file says pglite any other way (a deferred/backed-off auto
+ *      migration) -> PGLite, migration due.
+ *   4. No flag file but `pglite-db/` exists -> PGLite, migration due.
+ *   5. Otherwise -> fresh install, SQLite.
+ *
+ * Writes only in case 0, and only to correct itself. The write is wrapped
+ * because a read-only userData must not turn a recoverable boot into a failed
+ * one -- an un-persisted heal still resolves correctly, it just re-runs next
+ * launch.
  */
 export function resolveBackend(input: ResolveBackendInput): ResolvedBackend {
   const state = readBackendState(input.userDataPath);
   if (state) {
+    const verdict = assessBackendContradiction({
+      flagBackend: state.backend,
+      flagSetBy: state.setBy,
+      pgliteDirExists: fs.existsSync(path.join(input.userDataPath, 'pglite-db')),
+      sqliteDbBytes: fileBytes(path.join(input.userDataPath, SQLITE_DB_RELPATH)),
+    });
+    if (verdict.action === 'override') {
+      const healed: BackendState = {
+        ...state,
+        backend: verdict.backend,
+        setAt: new Date().toISOString(),
+        setBy: 'contradiction-heal',
+      };
+      try {
+        writeBackendState(input.userDataPath, healed);
+      } catch {
+        // Resolution below still uses `healed`; the correction just is not
+        // durable, so the next launch heals again. Never fail the boot here.
+      }
+      return {
+        backend: verdict.backend,
+        reason:
+          verdict.backend === 'sqlite'
+            ? 'flag-contradiction-healed-sqlite'
+            : 'flag-contradiction-healed-pglite',
+        state: healed,
+        // A healed install is on the store that actually holds its data. It may
+        // still be a migration candidate later, but not on the launch where we
+        // just discovered the flag was lying.
+        migrationDue: false,
+      };
+    }
+    if (state.backend === 'sqlite') {
+      return { backend: 'sqlite', reason: 'flag-file-sqlite', state, migrationDue: false };
+    }
+    if (state.setBy === 'rollback') {
+      return {
+        backend: 'pglite',
+        reason: 'flag-file-pglite-rollback',
+        state,
+        migrationDue: false,
+      };
+    }
     return {
-      backend: state.backend,
-      reason: state.backend === 'pglite' ? 'flag-file-pglite' : 'flag-file-sqlite',
+      backend: 'pglite',
+      reason: 'existing-pglite-migration-due',
       state,
+      migrationDue: true,
     };
   }
   const pgliteDir = path.join(input.userDataPath, 'pglite-db');
   if (fs.existsSync(pgliteDir)) {
     return {
       backend: 'pglite',
-      reason: 'existing-pglite-no-flag',
+      reason: 'existing-pglite-migration-due',
       state: null,
+      migrationDue: true,
     };
   }
   return {
     backend: 'sqlite',
     reason: 'fresh-install-defaults-sqlite',
     state: null,
+    migrationDue: false,
   };
 }
 
@@ -108,13 +342,31 @@ export function resolveBackend(input: ResolveBackendInput): ResolvedBackend {
 export function commitMigrationToSqlite(
   userDataPath: string,
   pgliteMigratedDir: string,
+  setBy: 'user-migration' | 'auto-migration' = 'user-migration',
 ): void {
   writeBackendState(userDataPath, {
     backend: 'sqlite',
     setAt: new Date().toISOString(),
-    setBy: 'user-migration',
+    setBy,
     pgliteMigratedDir,
   });
+}
+
+/** Record a failed auto-migration attempt so the back-off can count it. */
+export function recordAutoMigrationFailure(userDataPath: string, errorCode: string): number {
+  const previous = readBackendState(userDataPath)?.migrationAttempts?.count ?? 0;
+  const count = previous + 1;
+  updateBackendState(userDataPath, {
+    backend: 'pglite',
+    setBy: 'auto-migration-deferred',
+    migrationAttempts: { count, lastAttemptAt: new Date().toISOString(), lastErrorCode: errorCode },
+  });
+  return count;
+}
+
+/** Has this install exhausted its automatic attempts? */
+export function hasExhaustedAutoMigration(state: BackendState | null): boolean {
+  return (state?.migrationAttempts?.count ?? 0) >= MAX_AUTO_MIGRATION_ATTEMPTS;
 }
 
 /** Called by the rollback flow from Settings → Database → Restore PGLite. */

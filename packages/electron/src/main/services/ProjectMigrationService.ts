@@ -22,8 +22,10 @@ import { encodeWorkspaceDir } from './ClaudeCodeSessionScanner';
 // Import store utilities - we'll need to access the underlying stores directly
 import {
   getRecentItems,
+  invalidateWorkspaceStoreCache,
   store as appStore,
 } from '../utils/store';
+import { resolveClaudeConfigDir } from '@nimbalyst/runtime/ai/server/providers/claudeCode/claudeConfigDir';
 
 // Re-export the workspace key generation logic
 function workspaceKey(workspacePath: string): string {
@@ -164,7 +166,7 @@ export class ProjectMigrationService {
       logger.main.info('[ProjectMigration] Project directory copied');
 
       // Step 3: Rename Claude Code session directory
-      const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects');
+      const claudeProjectsDir = path.join(resolveClaudeConfigDir(), 'projects');
       oldClaudePath = path.join(claudeProjectsDir, encodeWorkspaceDir(oldPath));
       newClaudePath = path.join(claudeProjectsDir, encodeWorkspaceDir(newPath));
 
@@ -280,7 +282,7 @@ export class ProjectMigrationService {
       logger.main.info('[ProjectMigration] Project directory renamed');
 
       // Step 3: Rename Claude Code session directory
-      const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects');
+      const claudeProjectsDir = path.join(resolveClaudeConfigDir(), 'projects');
       oldClaudePath = path.join(claudeProjectsDir, encodeWorkspaceDir(oldPath));
       newClaudePath = path.join(claudeProjectsDir, encodeWorkspaceDir(newPath));
 
@@ -473,6 +475,9 @@ export class ProjectMigrationService {
       // Write to new key and delete old key
       workspaceStore.set(newKey, oldState);
       workspaceStore.delete(oldKey);
+      // This writes the workspace-settings file through its own store instance,
+      // so store.ts's read-through cache is now stale for both keys.
+      invalidateWorkspaceStoreCache();
       logger.main.info('[ProjectMigration] Workspace settings migrated from', oldKey, 'to', newKey);
     }
   }

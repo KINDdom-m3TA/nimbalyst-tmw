@@ -38,7 +38,17 @@ import {
   setViewModeAtom,
   registerWorkstreamSelectedHook,
 } from '../../store';
-import { initWorkstreamState, loadWorkstreamStates, workstreamStateAtom, workstreamActiveChildAtom } from '../../store/atoms/workstreamState';
+import {
+  initWorkstreamState,
+  loadWorkstreamStates,
+  workstreamStateAtom,
+  workstreamActiveChildAtom,
+  workstreamFilesSidebarVisibleAtom,
+  workstreamRightPanelModeAtom,
+  toggleWorkstreamFilesSidebarAtom,
+  setWorkstreamRightPanelModeAtom,
+  type AgentRightPanelMode,
+} from '../../store/atoms/workstreamState';
 import { blitzAnalysisCreatedAtom } from '../../store/atoms/blitz';
 import { initSessionStateListeners, updateSessionStateListenerWorkspace } from '../../store/sessionStateListeners';
 import { initFileStateListeners } from '../../store/listeners/fileStateListeners';
@@ -47,7 +57,10 @@ import { initSessionListListeners } from '../../store/listeners/sessionListListe
 import { initSessionTranscriptListeners } from '../../store/listeners/sessionTranscriptListeners';
 import { initTrayListeners, trayNewSessionRequestAtom } from '../../store/listeners/trayListeners';
 import { initDeepLinkListeners } from '../../store/listeners/deepLinkListeners';
-import { requestOpenSessionAtom } from '../../store/atoms/agentMode';
+import {
+  requestOpenSessionAtom,
+  toggleSessionHistoryCollapsedAtom,
+} from '../../store/atoms/agentMode';
 import { fetchSessionSharesAtom } from '../../store';
 import { BlitzDialog } from '../BlitzDialog/BlitzDialog';
 import { MetaAgentMode } from '../MetaAgentMode/MetaAgentMode';
@@ -64,7 +77,6 @@ import {
   addSessionToWorktreeActionAtom,
 } from '../../store/actions/sessionHistoryActions';
 import { defaultAgentModelAtom } from '../../store/atoms/appSettings';
-
 export interface AgentModeRef {
   createNewSession: (initialDraft?: string) => Promise<string | undefined>;
   createNewWorktreeSession: (options?: { baseBranch?: string; name?: string }) => Promise<void>;
@@ -73,6 +85,15 @@ export interface AgentModeRef {
   reopenLastClosedSession: () => void;
   nextTab: () => void;
   previousTab: () => void;
+  toggleRightPanel: () => void;
+  showRightPanel: (mode: AgentRightPanelMode) => void;
+  toggleEditorMaximized: () => void;
+}
+
+export interface AgentModePanelState {
+  available: boolean;
+  visible: boolean;
+  mode: AgentRightPanelMode;
 }
 
 export interface AgentModeProps {
@@ -84,6 +105,7 @@ export interface AgentModeProps {
   onReady?: () => void;
   onSwitchToAgentMode?: (planDocumentPath?: string, sessionId?: string) => void;
   onOpenSessionInChat?: (sessionId: string) => void;
+  onPanelStateChange?: (state: AgentModePanelState) => void;
 }
 
 /**
@@ -105,6 +127,7 @@ export const AgentMode = forwardRef<AgentModeRef, AgentModeProps>(function Agent
   onReady,
   onSwitchToAgentMode,
   onOpenSessionInChat,
+  onPanelStateChange,
 }, ref) {
   // Ref to the workstream panel for closing tabs
   const workstreamPanelRef = useRef<AgentWorkstreamPanelRef>(null);
@@ -126,10 +149,40 @@ export const AgentMode = forwardRef<AgentModeRef, AgentModeProps>(function Agent
   // Layout state from atoms
   const historyWidth = useAtomValue(sessionHistoryWidthAtom);
   const historyCollapsed = useAtomValue(sessionHistoryCollapsedAtom);
+  const toggleHistoryCollapsed = useSetAtom(toggleSessionHistoryCollapsedAtom);
 
   // Selection state
   const selectedWorkstream = useAtomValue(selectedWorkstreamAtom(workspacePath));
+  const selectedWorkstreamId = selectedWorkstream?.id ?? null;
   const setSelectedWorkstream = useSetAtom(setSelectedWorkstreamAtom);
+  const toggleFilesSidebar = useSetAtom(toggleWorkstreamFilesSidebarAtom);
+  const setRightPanelMode = useSetAtom(setWorkstreamRightPanelModeAtom);
+  const rightPanelVisible = useAtomValue(
+    workstreamFilesSidebarVisibleAtom(selectedWorkstreamId ?? '__no_workstream__'),
+  );
+  const rightPanelMode = useAtomValue(
+    workstreamRightPanelModeAtom(selectedWorkstreamId ?? '__no_workstream__'),
+  );
+  const selectedAgentRoleAtom = useMemo(
+    () => (selectedWorkstreamId ? sessionAgentRoleAtom(selectedWorkstreamId) : atom<'standard'>('standard')),
+    [selectedWorkstreamId]
+  );
+  const selectedAgentRole = useAtomValue(selectedAgentRoleAtom);
+  const isSelectedMetaAgent = selectedWorkstreamId !== null && selectedAgentRole === 'meta-agent';
+
+  useEffect(() => {
+    onPanelStateChange?.({
+      available: selectedWorkstreamId !== null && !isSelectedMetaAgent,
+      visible: selectedWorkstreamId !== null && !isSelectedMetaAgent && rightPanelVisible,
+      mode: rightPanelMode,
+    });
+  }, [
+    isSelectedMetaAgent,
+    onPanelStateChange,
+    rightPanelVisible,
+    rightPanelMode,
+    selectedWorkstreamId,
+  ]);
 
   // Layout setters
   const setHistoryWidth = useSetAtom(setSessionHistoryWidthAtom);
@@ -328,7 +381,7 @@ export const AgentMode = forwardRef<AgentModeRef, AgentModeProps>(function Agent
   useEffect(() => {
     if (trayNewSessionRequest) {
       setTrayNewSessionRequest(false);
-      void dispatchCreateNewSession(undefined);
+      void dispatchCreateNewSession({ launchSource: 'tray' });
     }
   }, [trayNewSessionRequest, setTrayNewSessionRequest, dispatchCreateNewSession]);
 
@@ -495,7 +548,8 @@ export const AgentMode = forwardRef<AgentModeRef, AgentModeProps>(function Agent
   // setter identities returned by useSetAtom are stable, so the deps array
   // does not churn.
   useImperativeHandle(ref, () => ({
-    createNewSession: (initialDraft?: string) => dispatchCreateNewSession(initialDraft),
+    createNewSession: (initialDraft?: string) =>
+      dispatchCreateNewSession({ initialDraft, launchSource: 'new_session_button' }),
     createNewWorktreeSession: async (options?: { baseBranch?: string; name?: string }) => {
       await dispatchCreateNewWorktreeSession(options);
     },
@@ -513,10 +567,32 @@ export const AgentMode = forwardRef<AgentModeRef, AgentModeProps>(function Agent
     previousTab: () => {
       // TODO: Implement tab navigation
     },
+    toggleRightPanel: () => {
+      if (selectedWorkstreamId && !isSelectedMetaAgent) {
+        toggleFilesSidebar(selectedWorkstreamId);
+      }
+    },
+    showRightPanel: (mode: AgentRightPanelMode) => {
+      if (selectedWorkstreamId && !isSelectedMetaAgent) {
+        setRightPanelMode({ workstreamId: selectedWorkstreamId, mode });
+        if (!rightPanelVisible) {
+          toggleFilesSidebar(selectedWorkstreamId);
+        }
+      }
+    },
+    toggleEditorMaximized: () => {
+      // The maximize state lives with the workstream panel that owns the tabs.
+      workstreamPanelRef.current?.toggleEditorMaximized();
+    },
   }), [
     dispatchCreateNewSession,
     dispatchCreateNewWorktreeSession,
     dispatchOpenSessionInTab,
+    isSelectedMetaAgent,
+    rightPanelVisible,
+    selectedWorkstreamId,
+    setRightPanelMode,
+    toggleFilesSidebar,
   ]);
 
   // Handle worktree archived - refresh the session list to show updated state
@@ -524,15 +600,6 @@ export const AgentMode = forwardRef<AgentModeRef, AgentModeProps>(function Agent
     // console.log('[AgentMode] Worktree archived, refreshing sessions');
     refreshSessions();
   }, [refreshSessions]);
-
-  // Check if the selected session is a meta-agent
-  const selectedWorkstreamId = selectedWorkstream?.id ?? null;
-  const selectedAgentRoleAtom = useMemo(
-    () => (selectedWorkstreamId ? sessionAgentRoleAtom(selectedWorkstreamId) : atom<'standard'>('standard')),
-    [selectedWorkstreamId]
-  );
-  const selectedAgentRole = useAtomValue(selectedAgentRoleAtom);
-  const isSelectedMetaAgent = selectedWorkstreamId !== null && selectedAgentRole === 'meta-agent';
 
   // Subscribe to the session quick-open request signal. SessionHistory bumps
   // `sessionQuickOpenRequestedAtom` when the user clicks the quick-search
@@ -576,7 +643,7 @@ export const AgentMode = forwardRef<AgentModeRef, AgentModeProps>(function Agent
     <div className="agent-mode-empty flex flex-col items-center justify-center h-full gap-4 text-nim-muted">
       <p className="m-0 text-sm">Select a session or create a new one to get started</p>
       <button
-        onClick={() => dispatchCreateNewSession(undefined)}
+        onClick={() => dispatchCreateNewSession({ launchSource: 'new_session_button' })}
         className="agent-mode-new-button py-2 px-4 rounded-md border border-nim-border bg-nim-bg-secondary text-nim cursor-pointer text-sm transition-colors hover:bg-nim-bg-active"
       >
         New Session

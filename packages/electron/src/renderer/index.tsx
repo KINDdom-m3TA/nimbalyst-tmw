@@ -6,6 +6,12 @@
 // system for mounting editors and capturing screenshots via native capturePage().
 const isCaptureMode = new URLSearchParams(window.location.search).get('mode') === 'capture';
 
+// Must precede `react-dom`: this installs the DevTools hook shim the render
+// profiler reads, and react-dom captures that hook once at module init.
+// Records nothing until `window.__renderProfiler.start()`.
+// See docs/RENDER_PERFORMANCE.md.
+import './devtools/installRenderProfiler';
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Provider as JotaiProvider } from 'jotai';
@@ -19,6 +25,12 @@ import { initMonacoEditor } from './utils/monacoConfig';
 import { store } from '@nimbalyst/runtime/store';
 import { registerLocalAssetUrlConverter } from '@nimbalyst/runtime';
 import { nimAssetUrl } from './utils/assetUrl';
+import {
+  isAnalyticsConsentGranted,
+  onAnalyticsConsentChange,
+  setAnalyticsConsent,
+} from './utils/analyticsConsent';
+import { initAnalyticsListeners } from './store/listeners/analyticsListeners';
 import { initializeTheme } from './hooks/useTheme';
 import { offscreenEditorRenderer } from './services/OffscreenEditorRenderer';
 import {
@@ -61,6 +73,7 @@ import {
   registerSettingsChangeListener,
 } from './store/atoms/settingAtomFamily';
 import { registerGutterCustomizationListener } from './store/listeners/gutterCustomizationListeners';
+import { waitForMaterialSymbols } from './utils/materialSymbolsReady';
 
 // console.log('[RENDERER] Imports complete at', new Date().toISOString());
 
@@ -106,12 +119,29 @@ if (isCaptureMode) {
   console.log('[CaptureWindow] Ready - extensions and offscreen editor renderer initialized');
 } else {
 
+// Material Symbols uses text ligatures. Wait for the bundled font before any
+// React chrome can paint, otherwise Chromium exposes names such as
+// `progress_activity` through its fallback text font during startup.
+await waitForMaterialSymbols();
+
 // Initialize Monaco Editor before rendering any components
 initMonacoEditor();
 
 // Initialize theme from main process and set up IPC listener
 // This must happen before React renders to avoid flash
 initializeTheme();
+
+// The tray panel window is transparent so macOS vibrancy shows through. Mark it
+// before the first paint, otherwise the opaque root flashes over the material.
+if (new URLSearchParams(window.location.search).get('mode') === 'tray-panel') {
+  document.documentElement.classList.add('tray-panel-window');
+}
+
+// The island window is transparent so the menu bar shows through everywhere the
+// island itself is not. Same reason as above: mark it before the first paint.
+if (new URLSearchParams(window.location.search).get('mode') === 'menu-bar-island') {
+  document.documentElement.classList.add('menu-bar-island-window');
+}
 
 // Expose offscreen renderer on window for main process access
 (window as any).offscreenEditorRenderer = offscreenEditorRenderer;
@@ -197,6 +227,7 @@ const root = ReactDOM.createRoot(rootElement);
 const analyticsId = await window.electronAPI.analytics?.getDistinctId() ?? '';
 const analyticsAllowed = await window.electronAPI.analytics?.allowedToSendAnalytics() ?? false;
 const nimbalystVersion = await window.electronAPI.getAppVersion?.() ?? '';
+const releaseAttribution = await window.electronAPI.analytics?.getReleaseAttribution?.().catch(() => null) ?? null;
 const isDevInstallation = process.env.NODE_ENV?.toLowerCase() === 'development';
 const isDevMode = process.env.IS_DEV_MODE === 'true';
 const isOfficialBuild = process.env.OFFICIAL_BUILD === 'true';
@@ -222,7 +253,11 @@ const posthogClient = posthog.init(
     loaded: (posthog) => {
       console.log(`[RENDERER] PostHog loaded (analytics ID: ${posthog.get_distinct_id()}, session: ${posthog.get_session_id()}, official build: ${isOfficialBuild})`);
 
-      posthog.register({ nimbalyst_version: nimbalystVersion });
+      // Release attribution as super-properties, so every renderer capture
+      // carries it without touching call sites. Resolved from the main service
+      // rather than re-derived from env vars here, so both processes report the
+      // same values.
+      posthog.register({ nimbalyst_version: nimbalystVersion, ...(releaseAttribution ?? {}) });
 
       // Mark users as dev users if they've ever used a non-official build
       // This property persists across all future events for this user
@@ -230,10 +265,42 @@ const posthogClient = posthog.init(
         posthog.people.set_once({ is_dev_user: true });
       }
     },
-    before_send: (event) => process.env.PLAYWRIGHT_TEST ? null : event,
+    // Single choke point for every renderer capture. Consulting the consent
+    // gate here (rather than relying only on opt_out_capturing) means no
+    // existing or future `posthog.capture(...)` call site can leak an event
+    // while the user has analytics turned off.
+    before_send: (event) => {
+      if (process.env.PLAYWRIGHT_TEST) return null;
+      if (!isAnalyticsConsentGranted()) return null;
+      return event;
+    },
     debug: isDevInstallation
   }
 )
+
+// Resolve the user's setting before anything can capture, then keep posthog-js
+// itself in sync so it also stops its own background requests -- not just the
+// events we hand it.
+setAnalyticsConsent(analyticsAllowed);
+if (analyticsAllowed) {
+  // `captureEventName: false` matters: opt_in_capturing() captures an `$opt_in`
+  // event by default, and this runs on every launch in every window. Applying
+  // an already-granted setting is not a user action and must not emit.
+  posthog.opt_in_capturing({ captureEventName: false });
+} else {
+  posthog.opt_out_capturing();
+}
+
+onAnalyticsConsentChange((enabled) => {
+  // This path is an explicit toggle, so the default `$opt_in` event is wanted
+  // here -- it mirrors the `analytics_opt_out` the main service records, and
+  // fires once per user action rather than once per launch.
+  if (enabled) posthog.opt_in_capturing(); else posthog.opt_out_capturing();
+});
+
+// Settings live in one window but the renderer client is per-window, so main
+// broadcasts the change to every window rather than only the one that toggled.
+initAnalyticsListeners();
 
 // syncs the session ID from posthog-js to the electron-side analytics service
 posthog.onSessionId(async (sessionId: string, windowId, changeReason) => {

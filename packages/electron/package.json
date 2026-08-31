@@ -1,6 +1,6 @@
 {
   "name": "@nimbalyst/electron",
-  "version": "0.70.3",
+  "version": "0.76.0",
   "private": true,
   "license": "MIT",
   "author": "Nimbalyst Team",
@@ -12,8 +12,8 @@
   "scripts": {
     "start": "electron-vite preview",
     "dev": "./scripts/dev.sh",
-    "dev:user2": "NIMBALYST_USER_DATA_DIR=\"$HOME/Library/Application Support/@nimbalyst/electron-user2\" VITE_PORT=5274 ./scripts/dev.sh",
-    "dev:user2:loop": "NIMBALYST_USER_DATA_DIR=\"$HOME/Library/Application Support/@nimbalyst/electron-user2\" VITE_PORT=5274 ./scripts/dev-loop.sh",
+    "dev:user2": "node ./scripts/dev-user2.mjs",
+    "dev:user2:loop": "node ./scripts/dev-user2.mjs --loop",
     "dev:loop": "./scripts/dev-loop.sh",
     "licenses:generate": "node build/generate-third-party-licenses.js",
     "licenses:check": "node build/generate-third-party-licenses.js --check",
@@ -51,8 +51,8 @@
     "marketing:screenshots:grep": "playwright test --config=marketing/playwright.marketing.config.ts --grep"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.217",
-    "@anthropic-ai/sdk": "^0.109.0",
+    "@anthropic-ai/claude-agent-sdk": "0.3.241",
+    "@anthropic-ai/sdk": "^0.115.0",
     "@electric-sql/pglite": "0.3.14",
     "@electron-toolkit/utils": "^4.0.0",
     "@excalidraw/excalidraw": "0.18.1",
@@ -60,13 +60,16 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@monaco-editor/react": "^4.7.0",
     "@nimbalyst/collab-adapters": "*",
+    "@nimbalyst/collab-protocol": "*",
     "@nimbalyst/excalidraw-extension": "*",
     "@nimbalyst/extension-calc-sheets": "*",
     "@nimbalyst/extension-csv-spreadsheet": "*",
     "@nimbalyst/extension-datamodellm": "*",
     "@nimbalyst/mockuplm": "*",
     "@nimbalyst/runtime": "*",
-    "@openai/codex-sdk": "^0.144.1",
+    "@openai/codex-sdk": "^0.149.1",
+    "@revolist/react-datagrid": "4.21.4",
+    "@revolist/revogrid": "4.21.4",
     "@types/glob": "^8.1.0",
     "@types/js-yaml": "^4.0.9",
     "@types/marked": "^5.0.2",
@@ -75,7 +78,7 @@
     "@types/ws": "^8.18.1",
     "@vscode/ripgrep": "^1.17.1",
     "abort-controller": "^3.0.0",
-    "adm-zip": "^0.5.18",
+    "adm-zip": "^0.6.0",
     "agentkeepalive": "^4.6.0",
     "better-sqlite3": "13.0.1",
     "chardet": "^2.1.1",
@@ -88,6 +91,7 @@
     "form-data-encoder": "^4.1.0",
     "formdata-node": "^6.0.3",
     "ghostty-web": "^0.4.0",
+    "gifwrap": "^0.10.1",
     "glob": "^11.0.3",
     "heic-decode": "^2.1.0",
     "highlight.js": "11.11.1",
@@ -95,6 +99,7 @@
     "ignore": "^7.0.5",
     "jimp": "^1.6.0",
     "jotai": "^2.16.1",
+    "jotai-family": "^1.1.0",
     "js-yaml": "^4.1.0",
     "json-schema-to-ts": "^3.1.1",
     "marked": "^16.4.0",
@@ -102,6 +107,7 @@
     "mermaid": "^11.12.0",
     "minimatch": "^10.2.5",
     "monaco-editor": "^0.55.1",
+    "mp4-muxer": "^5.2.2",
     "node-fetch": "^3.3.2",
     "node-pty": "^1.1.0",
     "openai": "^6.9.1",
@@ -149,7 +155,6 @@
     "esbuild": "^0.25.12",
     "eslint": "^9.37.0",
     "playwright": "^1.55.1",
-    "playwright-electron": "^0.5.0",
     "postcss": "^8.4.0",
     "postcss-import": "^16.1.1",
     "tailwindcss": "^3.4.0",
@@ -271,6 +276,22 @@
         "to": "sqlite-worker.bundle.js"
       },
       {
+        "from": "out/sqlite-verify-worker.bundle.js",
+        "to": "sqlite-verify-worker.bundle.js"
+      },
+      {
+        "from": "out/history-diff-worker.bundle.js",
+        "to": "history-diff-worker.bundle.js"
+      },
+      {
+        "from": "out/project-manifest-worker.bundle.js",
+        "to": "project-manifest-worker.bundle.js"
+      },
+      {
+        "from": "out/gif-encode-worker.bundle.js",
+        "to": "gif-encode-worker.bundle.js"
+      },
+      {
         "from": "node_modules/better-sqlite3",
         "to": "node_modules/better-sqlite3",
         "filter": [
@@ -317,12 +338,20 @@
         "to": "trayTemplate@2x.png"
       },
       {
+        "from": "resources/notifications",
+        "to": "notifications"
+      },
+      {
         "from": "resources/codex-pre-edit-hook.mjs",
         "to": "codex-pre-edit-hook.mjs"
       },
       {
         "from": "resources/claudeCliPermissionHook.cjs",
         "to": "claudeCliPermissionHook.cjs"
+      },
+      {
+        "from": "resources/tutorial-project",
+        "to": "tutorial-project"
       },
       {
         "from": "../extensions",
@@ -444,7 +473,11 @@
       ],
       "artifactName": "${productName}-Windows-${arch}.${ext}",
       "signtoolOptions": {
-        "publisherName": "NIMBALYST, INC."
+        "publisherName": "NIMBALYST, INC.",
+        "signingHashAlgorithms": [
+          "sha256"
+        ],
+        "sign": "build/sign-windows.js"
       }
     },
     "nsis": {
@@ -454,7 +487,8 @@
     },
     "linux": {
       "target": "AppImage",
-      "artifactName": "${productName}-Linux.${ext}"
+      "artifactName": "${productName}-Linux.${ext}",
+      "executableName": "nimbalyst"
     },
     "buildVersion": "0.36.5"
   }

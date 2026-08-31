@@ -10,7 +10,7 @@
  * `design/Collaboration/tracker-sync-redesign.md`. The wire protocol lives
  * in `./trackerProtocol.ts`; the storage seam lives in
  * `./trackerPersistence.ts`; the AES-256-GCM helpers live in
- * `./TrackerEnvelopeCrypto.ts`.
+ * `./trackerEnvelopeCodec.ts`.
  *
  * Platform notes
  * --------------
@@ -35,42 +35,54 @@
  */
 
 import type {
-  EncryptedTrackerItemEnvelope,
+  TrackerItemEnvelope,
   SyncId,
   TrackerClientMessage,
   TrackerServerMessage,
   TrackerMutationAckMessage,
+  TrackerMutationBatchAckMessage,
   TrackerItemPayload,
   TrackerRoomConfig,
   TrackerSyncResponseMessage,
   TrackerDeltaMessage,
   TrackerConfigBroadcastMessage,
   TrackerTransactionRow,
-  EncryptedTrackerSchemaEnvelope,
+  TrackerSchemaEnvelope,
   TrackerSchemaSyncResponseMessage,
   TrackerSchemaDeltaMessage,
   TrackerSchemaMutationAckMessage,
-  EncryptedTrackerNavigationEnvelope,
+  TrackerNavigationEnvelope,
   TrackerNavigationSyncResponseMessage,
   TrackerNavigationDeltaMessage,
   TrackerNavigationMutationAckMessage,
+  TrackerSavedViewEnvelope,
+  TrackerSavedViewSyncResponseMessage,
+  TrackerSavedViewDeltaMessage,
+  TrackerSavedViewMutationAckMessage,
+  TrackerPresenceRosterMessage,
+  TrackerPresenceDeltaMessage,
   TrackerRoomMovedMessage,
+  TrackerErrorMessage,
+  TrackerMutationRejectCode,
 } from './trackerProtocol';
 import { SYNC_ID_INITIAL, buildTrackerRoomId } from './trackerProtocol';
 import { appendSyncClientParams } from './syncClientInfo';
 import {
-  encryptTrackerPayload,
-  decryptTrackerEnvelope,
-  encryptTrackerSchemaPayload,
-  decryptTrackerSchemaEnvelope,
   encodeTrackerPayloadPlaintext,
   decodeTrackerEnvelopePlaintext,
   decodeTrackerSchemaEnvelopePlaintext,
-  encryptTrackerNavigationPayload,
-  decryptTrackerNavigationEnvelope,
   decodeTrackerNavigationEnvelopePlaintext,
-} from './TrackerEnvelopeCrypto';
-import type { TrackerPersistence, TrackerRowSnapshot } from './trackerPersistence';
+  decodeTrackerSavedViewEnvelopePlaintext,
+} from './trackerEnvelopeCodec';
+import { classifyTrackerClose, type TrackerAccessTermination } from './trackerAccessTermination';
+import {
+  isPermanentTrackerRejection,
+  type PersistedTrackerTransactionRow,
+  type TrackerPersistence,
+  type TrackerRowSnapshot,
+  type TrackerTransactionOwner,
+} from './trackerPersistence';
+import { asTeamMemberId, type TeamJwt, type TeamMemberId } from '../auth/jwtScopes';
 
 // ============================================================================
 // Public types
@@ -104,8 +116,36 @@ export interface AppliedTrackerItem {
  */
 export interface RejectedTrackerMutation {
   clientMutationId: string;
+  /** The item, view, entry or schema type the refusal is about. */
   itemId: string;
+  /**
+   * Which lane refused. Absent means the item lane, so existing consumers that
+   * predate the other three keep reading the same shape.
+   */
+  lane?: 'item' | 'savedView' | 'navigation' | 'schema';
   rejection: NonNullable<TrackerTransactionRow['lastRejection']>;
+}
+
+export interface TrackerConfigSetResult {
+  success: boolean;
+  config?: TrackerRoomConfig;
+  code?: string;
+  message?: string;
+  conflictingProjectName?: string;
+  suggestedPrefix?: string;
+}
+
+/** Public, branded projection of one remote member viewing this tracker room. */
+export interface TrackerPresenceParticipant {
+  teamMemberId: TeamMemberId;
+  displayName: string;
+  avatarUrl: string | null;
+}
+
+/** The only identity fields a tracker connection publishes for presence. */
+export interface TrackerPresenceIdentity {
+  displayName: string;
+  avatarUrl?: string | null;
 }
 
 export interface TrackerSchemaLocalChange {
@@ -123,9 +163,20 @@ export interface AppliedTrackerSchema {
 }
 
 export interface TrackerSchemaSyncHooks {
-  getMaxSyncId: () => Promise<SyncId>;
+  // No `getMaxSyncId`: schemas bootstrap from zero every connect so the server's
+  // definition can repair a diverged row. See runSchemaBootstrap (#1178).
   listUnsynced: () => Promise<TrackerSchemaLocalChange[]>;
   applyRemote: (def: { type: string; model: string | null; syncId: SyncId }) => Promise<unknown>;
+  /**
+   * Retire a local change the server refused for good.
+   *
+   * This lane pushes whatever `listUnsynced` returns at the end of every
+   * bootstrap, and a row leaves that queue only when `applyRemote` overwrites
+   * it. Without this seam a settled refusal -- a read-only role, most often --
+   * is re-sent on every single reconnect, forever. Optional so a host that has
+   * no notion of a retired row simply keeps the old behaviour.
+   */
+  markRejected?: (type: string, code: string) => Promise<unknown>;
 }
 
 export interface TrackerNavigationLocalChange {
@@ -138,26 +189,28 @@ export interface TrackerNavigationSyncHooks {
   getMaxSyncId: () => Promise<SyncId>;
   listUnsynced: () => Promise<TrackerNavigationLocalChange[]>;
   applyRemote: (def: { entryId: string; payload: string | null; syncId: SyncId }) => Promise<unknown>;
+  /** Retire a refused change; see the note on `TrackerSchemaSyncHooks`. */
+  markRejected?: (entryId: string, code: string) => Promise<unknown>;
+}
+
+export interface TrackerSavedViewLocalChange {
+  viewId: string;
+  payload: string | null;
+  deleted: boolean;
 }
 
 /**
- * Outcome of a key-refresh callback. Returning `null` indicates the host
- * could not produce a fresh key (e.g. admin hasn't re-shared yet); the
- * engine surfaces the rejection back to the UI.
+ * Team-shared saved views. Its own lane (and its own syncId cursor) rather
+ * than riding the navigation channel, so "a shared view" stays a first-class
+ * concept on the wire instead of an overloaded navigation entry.
  */
-export interface TrackerKeyMaterial {
-  encryptionKey: CryptoKey;
-  orgKeyFingerprint: string;
+export interface TrackerSavedViewSyncHooks {
+  getMaxSyncId: () => Promise<SyncId>;
+  listUnsynced: () => Promise<TrackerSavedViewLocalChange[]>;
+  applyRemote: (def: { viewId: string; payload: string | null; syncId: SyncId }) => Promise<unknown>;
+  /** Retire a refused change; see the note on `TrackerSchemaSyncHooks`. */
+  markRejected?: (viewId: string, code: string) => Promise<unknown>;
 }
-
-/**
- * Epic H2 key custody. `legacy-e2e` (default): the client encrypts/decrypts
- * team data with the org key (zero-knowledge; the server is a dumb relay).
- * `server-managed`: the server holds the per-team DEK and encrypts at rest, so
- * the client sends/receives PLAINTEXT (no iv, `orgKeyFingerprint` null) and the
- * `encryptionKey` is unused.
- */
-export type TrackerKeyCustodyMode = 'legacy-e2e' | 'server-managed';
 
 export interface TrackerSyncEngineConfig {
   /** WebSocket server URL, e.g. `wss://sync.nimbalyst.com`. */
@@ -174,30 +227,8 @@ export interface TrackerSyncEngineConfig {
    */
   teamProjectId: string;
 
-  /** The current user's ID (informational; not used in auth). */
-  userId: string;
-
-  /**
-   * Epic H2 key custody mode. Defaults to `legacy-e2e` when omitted (the
-   * historical zero-knowledge path). In `server-managed` the engine runs the
-   * encrypt/decrypt hooks as identity pass-throughs and `encryptionKey` /
-   * `orgKeyFingerprint` are ignored.
-   */
-  keyCustody?: TrackerKeyCustodyMode;
-
-  /**
-   * Current org AES-256-GCM encryption key. Required in `legacy-e2e` mode;
-   * unused (and optional) in `server-managed` mode.
-   */
-  encryptionKey?: CryptoKey;
-
-  /**
-   * Fingerprint of the encryption key, carried as `orgKeyFingerprint` on
-   * every outgoing mutation so the server can enforce epoch alignment.
-   * May be `null` while the host adapter is bootstrapping; the engine
-   * declines to upload until a non-null value is set via `setKey()`.
-   */
-  orgKeyFingerprint: string | null;
+  /** The current user's member id in this team organization. */
+  teamMemberId: TeamMemberId;
 
   /** PGLite (or in-memory test) storage seam. */
   persistence: TrackerPersistence;
@@ -207,6 +238,8 @@ export interface TrackerSyncEngineConfig {
 
   /** Optional shared tracker-sidebar navigation sync seam. */
   navigationSync?: TrackerNavigationSyncHooks;
+  /** Optional team-shared saved-view sync seam. */
+  savedViewSync?: TrackerSavedViewSyncHooks;
 
   /**
    * Prefix to install when the first bootstrap proves the tracker room is
@@ -220,24 +253,28 @@ export interface TrackerSyncEngineConfig {
    * during reconnect retries -- the JWT can expire during long
    * disconnections.
    */
-  getJwt: () => Promise<string>;
+  getJwt: () => Promise<TeamJwt>;
 
   /**
-   * Called when the server rejects a mutation with `staleKeyEpoch`. If the
-   * host can fetch the fresh key envelope (typical: trigger
-   * `OrgKeyService.fetchAndUnwrapOrgKey` then return its result), the
-   * engine swaps the key in and re-sends the same `clientMutationId`.
-   *
-   * If the host returns `null`, the rejection surfaces to the UI via
-   * `onRejection` and the row stays in the queue with `lastRejection`
-   * populated.
+   * Authoritative browser preflight against the same room gate as the upgrade.
+   * A terminal result stops before a socket or cached projection is exposed;
+   * thrown failures remain retryable.
    */
-  refreshKey?: () => Promise<TrackerKeyMaterial | null>;
+  authorizeConnection?: (jwt: TeamJwt) => Promise<TrackerAccessTermination | null>;
+
+  /** Fires only after the authorized WebSocket has opened. */
+  onAuthorized?: () => void;
+
+  /** Ephemeral viewer identity. Member id always comes from the team JWT. */
+  presenceIdentity?: TrackerPresenceIdentity;
 
   // --- Observers (all optional) -------------------------------------------
 
   /** Connection-state transitions. */
   onStatusChange?: (status: TrackerSyncStatus) => void;
+
+  /** Full remote-viewer roster after every join, update, leave, or disconnect. */
+  onPresenceChange?: (members: readonly TrackerPresenceParticipant[]) => void;
 
   /** Fires for every applied projection row (remote OR self-originated). */
   onItemApplied?: (item: AppliedTrackerItem) => void;
@@ -247,6 +284,16 @@ export interface TrackerSyncEngineConfig {
 
   /** Fires when a mutation was rejected and rolled back. */
   onRejection?: (rejection: RejectedTrackerMutation) => void;
+
+  /** Fires for server diagnostics that are not item-mutation acknowledgements. */
+  onServerError?: (error: TrackerErrorMessage) => void;
+
+  /**
+   * Fires once when the room refuses this client for good. Status is `error`
+   * at this point and no reconnect is scheduled; the engine will not reconnect
+   * again, so the host must state the reason rather than show a retry.
+   */
+  onAccessTerminated?: (termination: TrackerAccessTermination) => void;
 
   /** Fires for every applied schema definition (remote OR self-originated ack). */
   onSchemaApplied?: (schema: AppliedTrackerSchema) => void;
@@ -280,6 +327,13 @@ export interface TrackerSyncEngineConfig {
    * or the `partysocket` reconnecting client used elsewhere.
    */
   createWebSocket?: (url: string) => WebSocket;
+
+  /**
+   * How long the schema bootstrap waits for one `trackerSchemaSyncResponse`
+   * before giving up on the schema lane. Defaults to
+   * {@link SCHEMA_BOOTSTRAP_TIMEOUT_MS}; tests shorten it.
+   */
+  schemaBootstrapTimeoutMs?: number;
 }
 
 // ============================================================================
@@ -293,6 +347,20 @@ const RECONNECT_MAX_MS = 30_000;
 /** Keep-alive cadence. */
 const PING_INTERVAL_MS = 30_000;
 
+/**
+ * How long the schema bootstrap waits for a `trackerSchemaSyncResponse`.
+ *
+ * The schema lane runs BEFORE items so the team's definitions are in place when
+ * rows land -- which also means an unanswered `trackerSchemaSync` (a server too
+ * old to implement it, say) would hang the whole bootstrap and leave a fresh
+ * client with an empty tracker. Bounded, the same failure degrades to "items
+ * load, schemas are whatever this machine already knows".
+ */
+const SCHEMA_BOOTSTRAP_TIMEOUT_MS = 15_000;
+
+/** Thrown by a bootstrap request whose response never arrived. */
+class SyncRequestTimeoutError extends Error {}
+
 // ============================================================================
 // TrackerSyncEngine
 // ============================================================================
@@ -303,18 +371,12 @@ export class TrackerSyncEngine {
 
   private ws: WebSocket | null = null;
   private status: TrackerSyncStatus = 'disconnected';
+  /** Set once and never cleared: a refused client stays refused for this engine. */
+  private accessTermination: TrackerAccessTermination | null = null;
   private destroyed = false;
   private synced = false;
   private connecting = false;
   private suppressReconnect = false;
-
-  /** Current encryption material; mutated on key rotation. Null in
-   * server-managed mode (the server holds the DEK). */
-  private encryptionKey: CryptoKey | null;
-  private orgKeyFingerprint: string | null;
-
-  /** Epic H2 key custody mode (default legacy-e2e). */
-  private readonly keyCustody: TrackerKeyCustodyMode;
 
   /** Reconnect bookkeeping. */
   private reconnectAttempt = 0;
@@ -323,6 +385,9 @@ export class TrackerSyncEngine {
   /** Keep-alive ping. */
   private pingTimer: ReturnType<typeof setInterval> | null = null;
 
+  /** Remote viewers only; the local authenticated member is excluded. */
+  private readonly presence = new Map<TeamMemberId, TrackerPresenceParticipant>();
+
   /**
    * Rollback snapshots keyed by `clientMutationId`. Held in-memory only;
    * persisted state is captured in `tracker_transactions.payload` so we
@@ -330,24 +395,28 @@ export class TrackerSyncEngine {
    * lives for the duration of any given mutation's lifecycle so this
    * map is sufficient.
    */
+  /**
+   * clientMutationId -> the saved view / navigation entry / schema type it is
+   * about. Rejection acks on those lanes carry only the mutation id, so this is
+   * the only way to know what the server refused. Entries are removed on the
+   * matching ack, so it holds at most the in-flight pushes.
+   */
+  private readonly pendingLaneIds = new Map<string, string>();
+
   private readonly rollbackSnapshots = new Map<string, {
     itemId: string;
     snapshot: TrackerRowSnapshot;
   }>();
 
+  private readonly pendingConfigChanges = new Map<string, {
+    requestedPrefix: string;
+    resolve: (result: TrackerConfigSetResult) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+
   constructor(config: TrackerSyncEngineConfig) {
     this.config = config;
     this.persistence = config.persistence;
-    this.keyCustody = config.keyCustody ?? 'legacy-e2e';
-    this.encryptionKey = config.encryptionKey ?? null;
-    // In server-managed mode the server owns the key epoch; force the
-    // fingerprint null so the engine never asserts a client epoch on the wire.
-    this.orgKeyFingerprint = this.keyCustody === 'server-managed' ? null : config.orgKeyFingerprint;
-  }
-
-  /** Epic H2: true when the server holds the team DEK (no client crypto). */
-  private get serverManaged(): boolean {
-    return this.keyCustody === 'server-managed';
   }
 
   // --------------------------------------------------------------------------
@@ -360,6 +429,11 @@ export class TrackerSyncEngine {
    */
   async connect(): Promise<void> {
     if (this.destroyed) return;
+    // Do not fake recovery. The room has already refused this client with a
+    // terminal code; dialling it again can only be refused the same way, and a
+    // surface watching `status` would flicker back to `connecting` and imply
+    // that waiting might help.
+    if (this.accessTermination) return;
     if (this.ws || this.connecting) return;
 
     this.suppressReconnect = false;
@@ -374,12 +448,18 @@ export class TrackerSyncEngine {
         url = this.config.buildUrl(roomId);
       } else {
         const jwt = await this.config.getJwt();
+        const termination = await this.config.authorizeConnection?.(jwt) ?? null;
+        if (termination) {
+          this.connecting = false;
+          this.recordAccessTermination(termination);
+          return;
+        }
         url = appendSyncClientParams(`${this.config.serverUrl}/sync/${roomId}?token=${encodeURIComponent(jwt)}`);
       }
     } catch (err) {
       this.connecting = false;
       this.setStatus('error');
-      this.scheduleReconnect();
+      if (!this.accessTermination) this.scheduleReconnect();
       throw err;
     }
 
@@ -393,9 +473,13 @@ export class TrackerSyncEngine {
       : new WebSocket(url);
     this.ws = ws;
     this.connecting = false;
+    let opened = false;
+    let upgradeCheckStarted = false;
 
     ws.addEventListener('open', () => {
       if (this.ws !== ws) return;
+      opened = true;
+      this.config.onAuthorized?.();
       this.suppressReconnect = false;
       this.reconnectAttempt = 0;
       this.setStatus('syncing');
@@ -408,19 +492,77 @@ export class TrackerSyncEngine {
       void this.handleMessage(event);
     });
 
-    ws.addEventListener('close', () => {
+    ws.addEventListener('close', (event) => {
       if (this.ws !== ws) return;
+      const closeEvent = event as CloseEvent;
+      const termination = classifyTrackerClose(closeEvent?.code ?? 0, closeEvent?.reason ?? '');
+      if (termination) {
+        this.handleDisconnect(termination);
+        return;
+      }
+      if (!opened && this.config.authorizeConnection) {
+        if (upgradeCheckStarted) return;
+        upgradeCheckStarted = true;
+        void this.revalidateFailedUpgrade(ws);
+        return;
+      }
       this.handleDisconnect();
     });
 
     ws.addEventListener('error', () => {
       if (this.ws !== ws) return;
+      if (!opened && this.config.authorizeConnection) {
+        if (upgradeCheckStarted) return;
+        upgradeCheckStarted = true;
+        void this.revalidateFailedUpgrade(ws);
+        return;
+      }
       this.handleDisconnect();
     });
   }
 
+  /** Re-run the room gate when the browser hides a failed upgrade's HTTP status. */
+  private async revalidateFailedUpgrade(ws: WebSocket): Promise<void> {
+    try {
+      const jwt = await this.config.getJwt();
+      const termination = await this.config.authorizeConnection?.(jwt) ?? null;
+      if (this.ws !== ws) return;
+      this.handleDisconnect(termination);
+    } catch {
+      if (this.ws === ws && !this.accessTermination) this.handleDisconnect();
+    }
+  }
+
   /** Disconnect without scheduling a reconnect. */
   disconnect(): void {
+    this.closeSocket();
+    // A refused engine stays at `error`. Reporting `disconnected` afterwards
+    // would read as "offline, retrying" for a connection that will not retry.
+    if (!this.accessTermination) this.setStatus('disconnected');
+  }
+
+  /**
+   * Stop for good, because this client may not be in this room.
+   *
+   * Called by the engine itself for a terminal close code, and by a host that
+   * learned the same thing before a socket existed -- notably a team JWT that
+   * cannot be minted because the browser session expired, which otherwise
+   * retries silently forever and presents as an empty tracker rather than as
+   * being signed out.
+   */
+  terminateAccess(termination: TrackerAccessTermination): void {
+    if (this.accessTermination) return;
+    this.closeSocket();
+    this.recordAccessTermination(termination);
+  }
+
+  /** The refusal that stopped this engine, or null while it is still trying. */
+  getAccessTermination(): TrackerAccessTermination | null {
+    return this.accessTermination;
+  }
+
+  /** Teardown shared by an ordinary disconnect and a terminal refusal. */
+  private closeSocket(): void {
     this.suppressReconnect = true;
     this.cancelReconnect();
     this.stopPing();
@@ -430,7 +572,15 @@ export class TrackerSyncEngine {
     }
     this.connecting = false;
     this.synced = false;
-    this.setStatus('disconnected');
+    if (this.presence.size > 0) {
+      this.presence.clear();
+      this.notifyPresenceChange();
+    }
+    this.resolvePendingConfigChanges({
+      success: false,
+      code: 'disconnected',
+      message: 'Tracker sync disconnected before the prefix change was confirmed.',
+    });
   }
 
   /** Destroy the engine. Cannot be reused after this. */
@@ -438,6 +588,7 @@ export class TrackerSyncEngine {
     this.destroyed = true;
     this.disconnect();
     this.rollbackSnapshots.clear();
+    this.pendingLaneIds.clear();
   }
 
   /** Current connection status. */
@@ -445,20 +596,19 @@ export class TrackerSyncEngine {
     return this.status;
   }
 
+  /** Current remote-viewer roster. Returns a defensive snapshot. */
+  getPresence(): TrackerPresenceParticipant[] {
+    return [...this.presence.values()];
+  }
+
+  /** Flush locally-pending shared saved views while connected. */
+  async flushSavedViews(): Promise<void> {
+    await this.pushPendingSavedViews();
+  }
+
   /** Flush locally-pending tracker navigation entries while connected. */
   async flushNavigation(): Promise<void> {
     await this.pushPendingNavigation();
-  }
-
-  /**
-   * Swap in a new encryption key + fingerprint. The host adapter calls
-   * this after handling an `orgKeyRotated` event. In-flight mutations
-   * (already sent, awaiting ack) will be re-encrypted under the new key
-   * if the server rejects them with `staleKeyEpoch`.
-   */
-  setKey(material: TrackerKeyMaterial): void {
-    this.encryptionKey = material.encryptionKey;
-    this.orgKeyFingerprint = material.orgKeyFingerprint;
   }
 
   // --------------------------------------------------------------------------
@@ -480,6 +630,48 @@ export class TrackerSyncEngine {
     return this.enqueueMutation(payload.itemId, payload, 'update', options);
   }
 
+  /** Optimistically apply and send an update-many command as one coherent batch. */
+  async upsertItems(
+    payloads: readonly TrackerItemPayload[],
+  ): Promise<{ clientMutationIds: string[] }> {
+    if (payloads.length === 0) return { clientMutationIds: [] };
+    if (payloads.length > 100) throw new Error('Tracker mutation batches are limited to 100 items');
+    const itemIds = new Set(payloads.map(payload => payload.itemId));
+    if (itemIds.size !== payloads.length) throw new Error('Tracker mutation batches require unique item ids');
+    const applyBatch = this.persistence.applyAndEnqueueBatchAtomically;
+    if (!applyBatch) throw new Error('Tracker persistence does not support atomic mutation batches');
+
+    const now = Date.now();
+    const batchId = generateClientMutationId();
+    const rows: PersistedTrackerTransactionRow[] = payloads.map((payload, index) => ({
+      clientMutationId: generateClientMutationId(),
+      itemId: payload.itemId,
+      workspacePath: '',
+      state: 'persistedEnqueue',
+      kind: 'update',
+      payload,
+      enqueuedAt: now + index,
+      batchId,
+      owner: {
+        orgId: this.config.orgId,
+        teamProjectId: this.config.teamProjectId,
+        teamMemberId: this.config.teamMemberId,
+      },
+    }));
+    const snapshots = await applyBatch.call(
+      this.persistence,
+      rows.map((row, index) => ({ itemId: row.itemId, payload: payloads[index], row })),
+    );
+    rows.forEach((row, index) => {
+      this.rollbackSnapshots.set(row.clientMutationId, {
+        itemId: row.itemId,
+        snapshot: snapshots[index],
+      });
+    });
+    await this.driveTransactionBatch(rows);
+    return { clientMutationIds: rows.map(row => row.clientMutationId) };
+  }
+
   /**
    * Optimistically apply a delete (tombstone) and enqueue it for upload.
    */
@@ -496,11 +688,42 @@ export class TrackerSyncEngine {
    * via `trackerConfigBroadcast` -- the engine surfaces it through
    * `onConfigChange`.
    */
-  setIssueKeyPrefix(prefix: string): void {
-    this.send({
-      type: 'trackerSetConfig',
-      key: 'issueKeyPrefix',
-      value: prefix,
+  setIssueKeyPrefix(
+    prefix: string,
+    assignmentMode: 'auto' | 'explicit' = 'explicit',
+  ): Promise<TrackerConfigSetResult> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return Promise.resolve({
+        success: false,
+        code: 'disconnected',
+        message: 'Tracker sync must be connected before changing the issue-key prefix.',
+      });
+    }
+    const clientMutationId = generateClientMutationId();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingConfigChanges.delete(clientMutationId);
+        resolve({
+          success: false,
+          code: 'timeout',
+          message: 'Timed out waiting for the server to confirm the issue-key prefix.',
+        });
+      }, 5_000);
+      (timer as { unref?: () => void }).unref?.();
+      this.pendingConfigChanges.set(clientMutationId, { requestedPrefix: prefix, resolve, timer });
+      try {
+        this.send({
+          type: 'trackerSetConfig',
+          key: 'issueKeyPrefix',
+          value: prefix,
+          clientMutationId,
+          assignmentMode,
+        });
+      } catch (error) {
+        clearTimeout(timer);
+        this.pendingConfigChanges.delete(clientMutationId);
+        resolve({ success: false, code: 'sendFailed', message: error instanceof Error ? error.message : String(error) });
+      }
     });
   }
 
@@ -510,6 +733,8 @@ export class TrackerSyncEngine {
 
   private async runBootstrap(): Promise<void> {
     try {
+      await this.runSchemaBootstrap();
+
       let cursor: SyncId = await this.persistence.getMaxSyncId();
       // Loop while the server says it has more rows. SYNC_ID_INITIAL (0)
       // is the "send me everything" sentinel.
@@ -517,27 +742,10 @@ export class TrackerSyncEngine {
       const isInitialBootstrap = isFirstBatch;
       let receivedItems = false;
       let initialConfig: TrackerRoomConfig | undefined;
-      let staleKeyRefreshTried = false;
       // eslint-disable-next-line no-constant-condition
       while (true) {
         const response = await this.requestSync(cursor);
         receivedItems ||= response.items.length > 0;
-
-        // Stale-key-on-connect detection: if the server is shipping us
-        // envelopes encrypted under a key whose fingerprint differs from
-        // ours, our cached key is stale (the org rotated while we were
-        // offline). Trigger a refresh ONCE per bootstrap and re-apply.
-        // Without this hook the bootstrap silently skips every envelope
-        // and the user sees an empty board until the next reconnect.
-        if (!staleKeyRefreshTried && this.shouldRefreshForStaleKey(response.items)) {
-          staleKeyRefreshTried = true;
-          if (this.config.refreshKey) {
-            const fresh = await this.config.refreshKey();
-            if (fresh) {
-              this.setKey(fresh);
-            }
-          }
-        }
 
         await this.applyBootstrapBatch(response);
         if (isFirstBatch && response.config) {
@@ -559,19 +767,24 @@ export class TrackerSyncEngine {
       ) {
         // WebSocket messages are ordered, so the config reaches the room
         // before replayPending can ask it to allocate the first issue key.
-        this.setIssueKeyPrefix(desiredPrefix);
+        const result = await this.setIssueKeyPrefix(desiredPrefix, 'auto');
+        if (!result.success) {
+          console.warn(`[TrackerSync] automatic issue-key prefix assignment failed: ${result.message ?? result.code}`);
+        }
       }
 
-      await this.runSchemaBootstrap();
       await this.runNavigationBootstrap();
+      await this.runSavedViewBootstrap();
 
       this.synced = true;
       this.setStatus('connected');
+      this.announcePresence();
 
       // After bootstrap, replay any persisted-but-unconfirmed mutations.
       await this.replayPending();
       await this.pushPendingSchemas();
       await this.pushPendingNavigation();
+      await this.pushPendingSavedViews();
     } catch (err) {
       // Bootstrap failures (e.g. socket drop mid-loop) fall through to the
       // disconnect path, which triggers a reconnect. Don't tear down here.
@@ -580,23 +793,6 @@ export class TrackerSyncEngine {
       // symptom an operator can see.
       this.config.onBootstrapError?.(err);
     }
-  }
-
-  /**
-   * True when the batch contains at least one non-tombstone envelope whose
-   * `orgKeyFingerprint` does not match our cached one. We compare against
-   * a known-non-null fingerprint -- if the server omits the fingerprint we
-   * cannot tell (older server) and fall back to per-envelope decrypt
-   * tolerance.
-   */
-  private shouldRefreshForStaleKey(items: EncryptedTrackerItemEnvelope[]): boolean {
-    if (!this.orgKeyFingerprint) return false;
-    for (const env of items) {
-      if (env.encryptedPayload === null) continue;
-      if (env.orgKeyFingerprint === null) continue;
-      if (env.orgKeyFingerprint !== this.orgKeyFingerprint) return true;
-    }
-    return false;
   }
 
   private requestSync(sinceSyncId: SyncId): Promise<TrackerSyncResponseMessage> {
@@ -612,53 +808,62 @@ export class TrackerSyncEngine {
         resolve(msg);
       };
       this.ws.addEventListener('message', handler);
-      this.send({ type: 'trackerSync', sinceSyncId });
+      this.send({
+        type: 'trackerSync',
+        sinceSyncId,
+        ...(sinceSyncId === SYNC_ID_INITIAL && this.config.initializeIssueKeyPrefix
+          ? { initializeIssueKeyPrefix: this.config.initializeIssueKeyPrefix }
+          : {}),
+      });
     });
   }
 
+  /**
+   * Bootstrap schemas from ZERO, not from the local cursor.
+   *
+   * Items page from `MAX(sync_id)` because there can be tens of thousands of
+   * them. Schemas are a handful of rows, and an incremental cursor makes the
+   * client unrepairable: one workspace-wide MAX means any type whose version
+   * sits BELOW the cursor is never re-sent, so a row that was clobbered or
+   * never applied stays stale forever with no way back (#1178). A full snapshot
+   * every connect is cheap and makes the server's definition self-healing --
+   * `applyRemote` is version-gated and content-gated, so re-delivering what we
+   * already have is a no-op.
+   */
   private async runSchemaBootstrap(): Promise<void> {
     const hooks = this.config.schemaSync;
     if (!hooks) return;
 
-    let cursor: SyncId = await hooks.getMaxSyncId();
-    let staleKeyRefreshTried = false;
-    console.info(`[TrackerSchemaSync] bootstrap start since sync_id=${cursor}`);
+    let cursor: SyncId = 0 as SyncId;
+    console.info('[TrackerSchemaSync] bootstrap start (full snapshot since sync_id=0)');
 
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const response = await this.requestSchemaSync(cursor);
-      console.info(
-        `[TrackerSchemaSync] bootstrap batch: ${response.schemas.length} schema(s), cursor=${response.cursorSyncId}, hasMore=${response.hasMore}`,
-      );
+    try {
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const response = await this.requestSchemaSync(cursor);
+        console.info(
+          `[TrackerSchemaSync] bootstrap batch: ${response.schemas.length} schema(s), cursor=${response.cursorSyncId}, hasMore=${response.hasMore}`,
+        );
 
-      if (!staleKeyRefreshTried && this.shouldRefreshForStaleSchemaKey(response.schemas)) {
-        staleKeyRefreshTried = true;
-        if (this.config.refreshKey) {
-          const fresh = await this.config.refreshKey();
-          if (fresh) {
-            this.setKey(fresh);
-          }
-        }
+        await this.applySchemaBootstrapBatch(response);
+        cursor = response.cursorSyncId;
+        if (!response.hasMore) break;
       }
-
-      await this.applySchemaBootstrapBatch(response);
-      cursor = response.cursorSyncId;
-      if (!response.hasMore) break;
+    } catch (err) {
+      if (!(err instanceof SyncRequestTimeoutError)) throw err;
+      // Degrade, don't abort: this lane runs ahead of the item bootstrap, and
+      // aborting here would trade "schemas are stale" for "the tracker is
+      // empty". The next connect re-requests the full snapshot anyway.
+      console.warn(
+        `[TrackerSchemaSync] ${err.message}; continuing with locally-known schemas`,
+      );
+      return;
     }
     console.info(`[TrackerSchemaSync] bootstrap complete at sync_id=${cursor}`);
   }
 
-  private shouldRefreshForStaleSchemaKey(schemas: EncryptedTrackerSchemaEnvelope[]): boolean {
-    if (!this.orgKeyFingerprint) return false;
-    for (const env of schemas) {
-      if (env.encryptedPayload === null) continue;
-      if (env.orgKeyFingerprint === null) continue;
-      if (env.orgKeyFingerprint !== this.orgKeyFingerprint) return true;
-    }
-    return false;
-  }
-
   private requestSchemaSync(sinceSyncId: SyncId): Promise<TrackerSchemaSyncResponseMessage> {
+    const timeoutMs = this.config.schemaBootstrapTimeoutMs ?? SCHEMA_BOOTSTRAP_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         reject(new Error('WebSocket not open'));
@@ -667,9 +872,17 @@ export class TrackerSyncEngine {
       const handler = (event: MessageEvent) => {
         const msg = parseServerMessage(event.data);
         if (!msg || msg.type !== 'trackerSchemaSyncResponse') return;
+        clearTimeout(timer);
         this.ws?.removeEventListener('message', handler);
         resolve(msg);
       };
+      const timer = setTimeout(() => {
+        this.ws?.removeEventListener('message', handler);
+        reject(new SyncRequestTimeoutError(
+          `schema bootstrap timed out after ${timeoutMs}ms waiting for trackerSchemaSyncResponse`,
+        ));
+      }, timeoutMs);
+      (timer as { unref?: () => void }).unref?.();
       this.ws.addEventListener('message', handler);
       this.send({ type: 'trackerSchemaSync', sinceSyncId });
     });
@@ -689,14 +902,8 @@ export class TrackerSyncEngine {
     const hooks = this.config.navigationSync;
     if (!hooks) return;
     let cursor = await hooks.getMaxSyncId();
-    let staleKeyRefreshTried = false;
     while (true) {
       const response = await this.requestNavigationSync(cursor);
-      if (!staleKeyRefreshTried && this.shouldRefreshForStaleNavigationKey(response.entries)) {
-        staleKeyRefreshTried = true;
-        const fresh = await this.config.refreshKey?.();
-        if (fresh) this.setKey(fresh);
-      }
       for (const envelope of response.entries) {
         try {
           await this.applyNavigationEnvelope(envelope);
@@ -709,13 +916,40 @@ export class TrackerSyncEngine {
     }
   }
 
-  private shouldRefreshForStaleNavigationKey(entries: EncryptedTrackerNavigationEnvelope[]): boolean {
-    if (!this.orgKeyFingerprint) return false;
-    return entries.some((entry) =>
-      entry.encryptedPayload !== null &&
-      entry.orgKeyFingerprint !== null &&
-      entry.orgKeyFingerprint !== this.orgKeyFingerprint,
-    );
+  private async runSavedViewBootstrap(): Promise<void> {
+    const hooks = this.config.savedViewSync;
+    if (!hooks) return;
+    let cursor = await hooks.getMaxSyncId();
+    while (true) {
+      const response = await this.requestSavedViewSync(cursor);
+      for (const envelope of response.views) {
+        try {
+          await this.applySavedViewEnvelope(envelope);
+        } catch (err) {
+          // One undecryptable view must not abort the whole bootstrap.
+          this.config.onBootstrapError?.(err);
+        }
+      }
+      cursor = response.cursorSyncId;
+      if (!response.hasMore) break;
+    }
+  }
+
+  private requestSavedViewSync(sinceSyncId: SyncId): Promise<TrackerSavedViewSyncResponseMessage> {
+    return new Promise((resolve, reject) => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        reject(new Error('WebSocket not open'));
+        return;
+      }
+      const handler = (event: MessageEvent) => {
+        const msg = parseServerMessage(event.data);
+        if (!msg || msg.type !== 'trackerSavedViewSyncResponse') return;
+        this.ws?.removeEventListener('message', handler);
+        resolve(msg);
+      };
+      this.ws.addEventListener('message', handler);
+      this.send({ type: 'trackerSavedViewSync', sinceSyncId });
+    });
   }
 
   private requestNavigationSync(sinceSyncId: SyncId): Promise<TrackerNavigationSyncResponseMessage> {
@@ -737,10 +971,9 @@ export class TrackerSyncEngine {
 
   private async applyBootstrapBatch(batch: TrackerSyncResponseMessage): Promise<void> {
     for (const envelope of batch.items) {
-      // Return value (applied true/false) is informational only here; the
-      // bootstrap loop has already done a proactive `refreshKey` pass if a
-      // staleness mismatch was detected. A still-undecryptable envelope is
-      // left out of the projection and will be re-tried on the next bootstrap.
+      // Return value (applied true/false) is informational only here: a
+      // still-unreadable envelope is left out of the projection and will be
+      // re-tried on the next bootstrap.
       //
       // Defense in depth: one bad envelope must not kill the whole batch.
       // A unique-constraint violation on `issue_number` collisions, a
@@ -757,9 +990,40 @@ export class TrackerSyncEngine {
   }
 
   private async replayPending(): Promise<void> {
-    const pending = await this.persistence.loadPendingTransactions();
+    const owner: TrackerTransactionOwner = {
+      orgId: this.config.orgId,
+      teamProjectId: this.config.teamProjectId,
+      teamMemberId: this.config.teamMemberId,
+    };
+    // Persistence implementations may retain rejected rows for diagnostics.
+    // Enforce the terminal policy again at the driver boundary so a host store
+    // that predates the browser tombstone cannot re-offer the mutation.
+    const pending = (await this.persistence.loadPendingTransactions(owner))
+      .filter(row => !(row.lastRejection && isPermanentTrackerRejection(row.lastRejection.code)));
+    const replayedBatchIds = new Set<string>();
     for (const row of pending) {
       try {
+        if (row.batchId && !replayedBatchIds.has(row.batchId)) {
+          replayedBatchIds.add(row.batchId);
+          const batch = pending.filter(candidate => candidate.batchId === row.batchId);
+          for (const batchRow of batch) {
+            if (batchRow.rollbackSnapshot) {
+              this.rollbackSnapshots.set(batchRow.clientMutationId, {
+                itemId: batchRow.itemId,
+                snapshot: batchRow.rollbackSnapshot,
+              });
+            }
+          }
+          await this.driveTransactionBatch(batch);
+          continue;
+        }
+        if (row.batchId) continue;
+        if (row.rollbackSnapshot) {
+          this.rollbackSnapshots.set(row.clientMutationId, {
+            itemId: row.itemId,
+            snapshot: row.rollbackSnapshot,
+          });
+        }
         // NIM-602: a `pendingApply` row signals a crash between the queue
         // write and the projection write in `applyAndEnqueueAtomically`.
         // The queue row carries the payload we never finished applying.
@@ -769,7 +1033,10 @@ export class TrackerSyncEngine {
         // if the crash happened after the projection write but before
         // the promotion.
         if (row.state === 'pendingApply') {
-          await this.persistence.applyOptimistic(row.itemId, row.payload ?? null);
+          const snapshot = await this.persistence.applyOptimistic(row.itemId, row.payload ?? null);
+          if (!row.rollbackSnapshot) {
+            this.rollbackSnapshots.set(row.clientMutationId, { itemId: row.itemId, snapshot });
+          }
           await this.persistence.markTransactionState(row.clientMutationId, 'persistedEnqueue');
           row.state = 'persistedEnqueue';
         }
@@ -787,6 +1054,7 @@ export class TrackerSyncEngine {
   // --------------------------------------------------------------------------
 
   private async handleMessage(event: MessageEvent): Promise<void> {
+    if (this.destroyed) return;
     const msg = parseServerMessage(event.data);
     if (!msg) return;
 
@@ -797,11 +1065,20 @@ export class TrackerSyncEngine {
       case 'trackerMutationAck':
         await this.handleAck(msg);
         break;
+      case 'trackerMutationBatchAck':
+        await this.handleBatchAck(msg);
+        break;
       case 'trackerSchemaDelta':
         await this.handleSchemaDelta(msg);
         break;
       case 'trackerSchemaMutationAck':
         await this.handleSchemaAck(msg);
+        break;
+      case 'trackerSavedViewDelta':
+        await this.handleSavedViewDelta(msg);
+        break;
+      case 'trackerSavedViewMutationAck':
+        await this.handleSavedViewAck(msg);
         break;
       case 'trackerNavigationDelta':
         await this.handleNavigationDelta(msg);
@@ -812,6 +1089,12 @@ export class TrackerSyncEngine {
       case 'trackerConfigBroadcast':
         this.handleConfigBroadcast(msg);
         break;
+      case 'trackerPresenceRoster':
+        this.handlePresenceRoster(msg);
+        break;
+      case 'trackerPresenceDelta':
+        this.handlePresenceDelta(msg);
+        break;
       case 'trackerPong':
         // Keep-alive response; nothing to do.
         break;
@@ -819,9 +1102,7 @@ export class TrackerSyncEngine {
         this.handleRoomMoved(msg);
         break;
       case 'trackerError':
-        // Server-level error (not tied to a specific mutation). Surface as
-        // a status transition; the connection stays open.
-        this.setStatus('error');
+        this.handleServerError(msg);
         break;
       case 'trackerSyncResponse':
         // The bootstrap loop owns these via its inline `requestSync`
@@ -829,6 +1110,9 @@ export class TrackerSyncEngine {
         break;
       case 'trackerSchemaSyncResponse':
         // The schema bootstrap loop owns these via `requestSchemaSync`.
+        break;
+      case 'trackerSavedViewSyncResponse':
+        // The saved-view bootstrap loop owns these via `requestSavedViewSync`.
         break;
       case 'trackerNavigationSyncResponse':
         // The navigation bootstrap loop owns these via `requestNavigationSync`.
@@ -848,24 +1132,11 @@ export class TrackerSyncEngine {
   }
 
   private async handleDelta(msg: TrackerDeltaMessage): Promise<void> {
-    const applied = await this.applyEnvelope(msg.item);
-    // Live delta tagged with a fingerprint we don't have: opportunistically
-    // refresh and re-apply. Bootstrap-loop staleness has its own check, but
-    // a delta that arrives AFTER bootstrap completes still needs this
-    // signal so a rotation that lands while we're idle doesn't silently
-    // drop deltas until the user issues a mutation.
-    if (!applied && msg.item.orgKeyFingerprint && this.orgKeyFingerprint &&
-        msg.item.orgKeyFingerprint !== this.orgKeyFingerprint &&
-        this.config.refreshKey) {
-      const fresh = await this.config.refreshKey();
-      if (fresh) {
-        this.setKey(fresh);
-        await this.applyEnvelope(msg.item);
-      }
-    }
+    await this.applyEnvelope(msg.item);
   }
 
   private async handleAck(msg: TrackerMutationAckMessage): Promise<void> {
+    if (this.destroyed) return;
     const { clientMutationId, accepted } = msg;
 
     if (accepted && msg.syncId !== undefined && msg.item) {
@@ -877,7 +1148,9 @@ export class TrackerSyncEngine {
       // ack to advance, but in practice the server only acks when the key
       // fingerprint matched on the mutation.
       await this.applyEnvelope(msg.item);
+      if (this.destroyed) return;
       await this.persistence.ackTransaction(clientMutationId, msg.syncId);
+      if (this.destroyed) return;
       this.rollbackSnapshots.delete(clientMutationId);
       return;
     }
@@ -885,34 +1158,20 @@ export class TrackerSyncEngine {
     if (!accepted && msg.error) {
       const snapshot = this.rollbackSnapshots.get(clientMutationId);
 
-      // `staleKeyEpoch` triggers a refresh + re-send under the new key.
-      if (msg.error.code === 'staleKeyEpoch' && this.config.refreshKey) {
-        const fresh = await this.config.refreshKey();
-        if (fresh) {
-          this.setKey(fresh);
-          if (snapshot) {
-            // Reload the transaction row from persistence to find its
-            // payload + kind, then re-send.
-            const pending = await this.persistence.loadPendingTransactions();
-            const row = pending.find(r => r.clientMutationId === clientMutationId);
-            if (row) {
-              await this.persistence.markTransactionState(clientMutationId, 'queued');
-              await this.driveTransaction(row);
-              return;
-            }
-          }
-        }
-        // Fall through to a normal rejection if we can't refresh.
-      }
-
       const rejection = {
         code: msg.error.code,
         message: msg.error.message,
         occurredAt: Date.now(),
       };
-      await this.persistence.rejectTransaction(clientMutationId, rejection);
+      await this.persistence.rejectTransaction(
+        clientMutationId,
+        rejection,
+        isPermanentTrackerRejection(rejection.code),
+      );
+      if (this.destroyed) return;
       if (snapshot) {
         await this.persistence.rollbackOptimistic(snapshot.itemId, snapshot.snapshot);
+        if (this.destroyed) return;
         this.rollbackSnapshots.delete(clientMutationId);
         this.config.onRejection?.({
           clientMutationId,
@@ -923,20 +1182,52 @@ export class TrackerSyncEngine {
     }
   }
 
+  private async handleBatchAck(msg: TrackerMutationBatchAckMessage): Promise<void> {
+    if (this.destroyed) return;
+    if (msg.accepted) {
+      for (const entry of msg.entries) {
+        if (entry.syncId !== undefined && entry.item) {
+          await this.applyEnvelope(entry.item);
+          if (this.destroyed) return;
+          await this.persistence.ackTransaction(entry.clientMutationId, entry.syncId);
+          if (this.destroyed) return;
+          this.rollbackSnapshots.delete(entry.clientMutationId);
+        }
+      }
+      return;
+    }
+
+    if (!msg.error) return;
+    for (const entry of msg.entries) {
+      const snapshot = this.rollbackSnapshots.get(entry.clientMutationId);
+      const rejection = {
+        code: msg.error.code,
+        message: msg.error.message,
+        occurredAt: Date.now(),
+      };
+      await this.persistence.rejectTransaction(
+        entry.clientMutationId,
+        rejection,
+        isPermanentTrackerRejection(rejection.code),
+      );
+      if (this.destroyed) return;
+      if (!snapshot) continue;
+      await this.persistence.rollbackOptimistic(snapshot.itemId, snapshot.snapshot);
+      if (this.destroyed) return;
+      this.rollbackSnapshots.delete(entry.clientMutationId);
+      this.config.onRejection?.({
+        clientMutationId: entry.clientMutationId,
+        itemId: snapshot.itemId,
+        rejection,
+      });
+    }
+  }
+
   private async handleSchemaDelta(msg: TrackerSchemaDeltaMessage): Promise<void> {
     console.info(
       `[TrackerSchemaSync] delta type=${msg.schema.schemaType} sync_id=${msg.schema.syncId} tombstone=${msg.schema.encryptedPayload === null}`,
     );
-    const applied = await this.applySchemaEnvelope(msg.schema);
-    if (!applied && msg.schema.orgKeyFingerprint && this.orgKeyFingerprint &&
-        msg.schema.orgKeyFingerprint !== this.orgKeyFingerprint &&
-        this.config.refreshKey) {
-      const fresh = await this.config.refreshKey();
-      if (fresh) {
-        this.setKey(fresh);
-        await this.applySchemaEnvelope(msg.schema);
-      }
-    }
+    await this.applySchemaEnvelope(msg.schema);
   }
 
   private async handleSchemaAck(msg: TrackerSchemaMutationAckMessage): Promise<void> {
@@ -949,26 +1240,77 @@ export class TrackerSyncEngine {
       await this.applySchemaEnvelope(msg.schema);
       return;
     }
+    await this.retireRefusedLaneChange(
+      'schema',
+      msg.clientMutationId,
+      msg.error,
+      this.config.schemaSync?.markRejected,
+    );
+  }
 
-    if (!msg.accepted && msg.error?.code === 'staleKeyEpoch' && this.config.refreshKey) {
-      const fresh = await this.config.refreshKey();
-      if (fresh) {
-        this.setKey(fresh);
-        await this.pushPendingSchemas();
+  private async handleSavedViewDelta(msg: TrackerSavedViewDeltaMessage): Promise<void> {
+    await this.applySavedViewEnvelope(msg.view);
+  }
+
+  private async handleSavedViewAck(msg: TrackerSavedViewMutationAckMessage): Promise<void> {
+    if (msg.accepted && msg.view) {
+      await this.applySavedViewEnvelope(msg.view);
+      return;
+    }
+    await this.retireRefusedLaneChange(
+      'savedView',
+      msg.clientMutationId,
+      msg.error,
+      this.config.savedViewSync?.markRejected,
+    );
+  }
+
+  /**
+   * Retire a saved-view / navigation / schema change the server has settled on,
+   * and tell the host.
+   *
+   * Only *terminal* codes retire the row. A write barrier like `rotationLocked`
+   * or a missing key is temporary, and dropping the user's change on one would
+   * turn a momentary refusal into silent data loss -- so anything not in the
+   * tracker-specific permanent vocabulary stays queued and is retried, exactly
+   * as before. Tracker codes deliberately do not inherit the document outbox
+   * policy: `adminRequired`, `malformed`, and `legacy_encryption_retired` exist
+   * only here and replaying them cannot make the payload valid.
+   */
+  private async retireRefusedLaneChange(
+    lane: 'savedView' | 'navigation' | 'schema',
+    clientMutationId: string,
+    error: { code: TrackerMutationRejectCode; message: string } | undefined,
+    markRejected: ((id: string, code: string) => Promise<unknown>) | undefined,
+  ): Promise<void> {
+    // A rejection ack carries only the mutation id -- the server builds it
+    // without the view/entry/schema it refused -- so the subject comes from
+    // what we recorded when the mutation went out.
+    const id = this.pendingLaneIds.get(clientMutationId);
+    this.pendingLaneIds.delete(clientMutationId);
+    if (!error || id === undefined) return;
+    if (!isPermanentTrackerRejection(error.code)) return;
+
+    if (markRejected) {
+      try {
+        await markRejected(id, error.code);
+      } catch (err) {
+        // Retiring is best-effort: if the store write fails the row stays
+        // queued and we retry next connect, which is the old behaviour rather
+        // than a new failure mode. The host still hears about the refusal.
+        this.config.onBootstrapError?.(err);
       }
     }
+    this.config.onRejection?.({
+      clientMutationId,
+      itemId: id,
+      lane,
+      rejection: { code: error.code, message: error.message, occurredAt: Date.now() },
+    });
   }
 
   private async handleNavigationDelta(msg: TrackerNavigationDeltaMessage): Promise<void> {
-    const applied = await this.applyNavigationEnvelope(msg.entry);
-    if (!applied && msg.entry.orgKeyFingerprint && this.orgKeyFingerprint &&
-        msg.entry.orgKeyFingerprint !== this.orgKeyFingerprint && this.config.refreshKey) {
-      const fresh = await this.config.refreshKey();
-      if (fresh) {
-        this.setKey(fresh);
-        await this.applyNavigationEnvelope(msg.entry);
-      }
-    }
+    await this.applyNavigationEnvelope(msg.entry);
   }
 
   private async handleNavigationAck(msg: TrackerNavigationMutationAckMessage): Promise<void> {
@@ -976,17 +1318,98 @@ export class TrackerSyncEngine {
       await this.applyNavigationEnvelope(msg.entry);
       return;
     }
-    if (!msg.accepted && msg.error?.code === 'staleKeyEpoch' && this.config.refreshKey) {
-      const fresh = await this.config.refreshKey();
-      if (fresh) {
-        this.setKey(fresh);
-        await this.pushPendingNavigation();
-      }
-    }
+    await this.retireRefusedLaneChange(
+      'navigation',
+      msg.clientMutationId,
+      msg.error,
+      this.config.navigationSync?.markRejected,
+    );
   }
 
   private handleConfigBroadcast(msg: TrackerConfigBroadcastMessage): void {
     this.config.onConfigChange?.(msg.config);
+    for (const [id, pending] of this.pendingConfigChanges) {
+      if (
+        pending.requestedPrefix === msg.config.issueKeyPrefix ||
+        pending.requestedPrefix === msg.config.issueKeyPrefixAssignment?.requestedPrefix
+      ) {
+        clearTimeout(pending.timer);
+        this.pendingConfigChanges.delete(id);
+        pending.resolve({ success: true, config: msg.config });
+      }
+    }
+  }
+
+  private handlePresenceRoster(msg: TrackerPresenceRosterMessage): void {
+    this.presence.clear();
+    for (const member of msg.members) {
+      const teamMemberId = asTeamMemberId(member.teamMemberId);
+      if (teamMemberId === this.config.teamMemberId) continue;
+      this.presence.set(teamMemberId, { ...member, teamMemberId });
+    }
+    this.notifyPresenceChange();
+  }
+
+  private handlePresenceDelta(msg: TrackerPresenceDeltaMessage): void {
+    const teamMemberId = asTeamMemberId(msg.member.teamMemberId);
+    if (teamMemberId === this.config.teamMemberId) return;
+    if (msg.connected) {
+      this.presence.set(teamMemberId, { ...msg.member, teamMemberId });
+    } else {
+      this.presence.delete(teamMemberId);
+    }
+    this.notifyPresenceChange();
+  }
+
+  private notifyPresenceChange(): void {
+    this.config.onPresenceChange?.(this.getPresence());
+  }
+
+  private handleServerError(msg: TrackerErrorMessage): void {
+    this.config.onServerError?.(msg);
+    // `guardConnection` says this in words before it closes the socket with
+    // 4003. The close code is the primary signal, but a client that only saw
+    // the words must not go back to retrying either.
+    if (msg.code === 'access_revoked') {
+      this.terminateAccess({
+        reason: 'tracker-access-revoked',
+        closeCode: 4003,
+        message: msg.message || 'Your access to this tracker was revoked.',
+      });
+      return;
+    }
+    const pending = msg.clientMutationId
+      ? this.pendingConfigChanges.get(msg.clientMutationId)
+      : this.pendingConfigChanges.size === 1
+        ? this.pendingConfigChanges.values().next().value
+        : undefined;
+    if (pending) {
+      clearTimeout(pending.timer);
+      if (msg.clientMutationId) this.pendingConfigChanges.delete(msg.clientMutationId);
+      else {
+        for (const [id, candidate] of this.pendingConfigChanges) {
+          if (candidate === pending) this.pendingConfigChanges.delete(id);
+        }
+      }
+      pending.resolve({
+        success: false,
+        code: msg.code,
+        message: msg.message,
+        conflictingProjectName: msg.conflictingProjectName,
+        suggestedPrefix: msg.suggestedPrefix,
+      });
+    }
+    if (!msg.code.startsWith('issueKeyPrefix') && msg.code !== 'invalid_config') {
+      this.setStatus('error');
+    }
+  }
+
+  private resolvePendingConfigChanges(result: TrackerConfigSetResult): void {
+    for (const pending of this.pendingConfigChanges.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve(result);
+    }
+    this.pendingConfigChanges.clear();
   }
 
   // --------------------------------------------------------------------------
@@ -1003,53 +1426,15 @@ export class TrackerSyncEngine {
    * `false` when decryption failed and the row was skipped. Callers use
    * this signal to detect a stale-key bootstrap and trigger `refreshKey()`.
    */
-  private async applyEnvelope(envelope: EncryptedTrackerItemEnvelope): Promise<boolean> {
+  private async applyEnvelope(envelope: TrackerItemEnvelope): Promise<boolean> {
     const isTombstone = envelope.encryptedPayload === null;
     let payload: TrackerItemPayload | null = null;
     if (!isTombstone) {
-      // Server-managed: the payload is plaintext JSON (the server decrypted it).
-      if (this.serverManaged) {
-        try {
-          payload = decodeTrackerEnvelopePlaintext(envelope);
-        } catch (err) {
-          console.warn('[TrackerSync] failed to parse server-managed item payload; skipping', err);
-          return false;
-        }
-        await this.persistence.applyRemoteItem(envelope, payload);
-        this.config.onItemApplied?.({
-          itemId: envelope.itemId,
-          syncId: envelope.syncId,
-          payload,
-          isTombstone,
-          issueNumber: envelope.issueNumber,
-          issueKey: envelope.issueKey,
-        });
-        return true;
-      }
       try {
-        payload = await decryptTrackerEnvelope(envelope, this.encryptionKey!);
+        payload = decodeTrackerEnvelopePlaintext(envelope);
       } catch (err) {
-        // OperationError = AES-GCM auth failure. Two causes look the same
-        // at this layer:
-        //   1. Wrong key (rotation: client holds stale key vs. envelope
-        //      written by another client with the new key).
-        //   2. Identifier splice -- server rewrote `itemId` /
-        //      `issueNumber` / `issueKey` on the envelope without holding
-        //      the key, so the AAD bound at encrypt time no longer matches.
-        // Per DocumentSync precedent, skip the row and move on -- the
-        // bootstrap loop / delta stream keeps progressing. The caller
-        // uses the `false` return to trigger a key refresh.
-        //
-        // We check `err.name === 'OperationError'` instead of `err
-        // instanceof DOMException`. Runtime environments expose
-        // DOMException from different realms (vitest workers, Cloudflare
-        // Workers, V8 isolates), and instanceof can return false even when
-        // the constructor name matches. Name-based identification matches
-        // the WebCrypto spec contract and is realm-safe.
-        if (err !== null && typeof err === 'object' && (err as { name?: string }).name === 'OperationError') {
-          return false;
-        }
-        throw err;
+        console.warn('[TrackerSync] failed to parse item payload; skipping', err);
+        return false;
       }
     }
 
@@ -1065,29 +1450,18 @@ export class TrackerSyncEngine {
     return true;
   }
 
-  private async applySchemaEnvelope(envelope: EncryptedTrackerSchemaEnvelope): Promise<boolean> {
+  private async applySchemaEnvelope(envelope: TrackerSchemaEnvelope): Promise<boolean> {
     const hooks = this.config.schemaSync;
     if (!hooks) return true;
 
     const isTombstone = envelope.encryptedPayload === null;
     let model: string | null = null;
     if (!isTombstone) {
-      if (this.serverManaged) {
-        try {
-          model = decodeTrackerSchemaEnvelopePlaintext(envelope);
-        } catch (err) {
-          console.warn('[TrackerSchemaSync] failed to parse server-managed schema payload; skipping', err);
-          return false;
-        }
-      } else {
-        try {
-          model = await decryptTrackerSchemaEnvelope(envelope, this.encryptionKey!);
-        } catch (err) {
-          if (err !== null && typeof err === 'object' && (err as { name?: string }).name === 'OperationError') {
-            return false;
-          }
-          throw err;
-        }
+      try {
+        model = decodeTrackerSchemaEnvelopePlaintext(envelope);
+      } catch (err) {
+        console.warn('[TrackerSchemaSync] failed to parse schema payload; skipping', err);
+        return false;
       }
     }
 
@@ -1105,29 +1479,36 @@ export class TrackerSyncEngine {
     return true;
   }
 
-  private async applyNavigationEnvelope(envelope: EncryptedTrackerNavigationEnvelope): Promise<boolean> {
+  private async applySavedViewEnvelope(envelope: TrackerSavedViewEnvelope): Promise<boolean> {
+    const hooks = this.config.savedViewSync;
+    if (!hooks) return true;
+    const isTombstone = envelope.encryptedPayload === null;
+    let payload: string | null = null;
+    if (!isTombstone) {
+      try {
+        payload = decodeTrackerSavedViewEnvelopePlaintext(envelope);
+      } catch {
+        return false;
+      }
+    }
+
+    await hooks.applyRemote({ viewId: envelope.viewId, payload, syncId: envelope.syncId });
+    return true;
+  }
+
+  private async applyNavigationEnvelope(envelope: TrackerNavigationEnvelope): Promise<boolean> {
     const hooks = this.config.navigationSync;
     if (!hooks) return true;
     const isTombstone = envelope.encryptedPayload === null;
     let payload: string | null = null;
     if (!isTombstone) {
-      if (this.serverManaged) {
-        try {
-          payload = decodeTrackerNavigationEnvelopePlaintext(envelope);
-        } catch {
-          return false;
-        }
-      } else {
-        try {
-          payload = await decryptTrackerNavigationEnvelope(envelope, this.encryptionKey!);
-        } catch (err) {
-          if (err !== null && typeof err === 'object' && (err as { name?: string }).name === 'OperationError') {
-            return false;
-          }
-          throw err;
-        }
+      try {
+        payload = decodeTrackerNavigationEnvelopePlaintext(envelope);
+      } catch {
+        return false;
       }
     }
+
     await hooks.applyRemote({ entryId: envelope.entryId, payload, syncId: envelope.syncId });
     return true;
   }
@@ -1145,7 +1526,7 @@ export class TrackerSyncEngine {
     const clientMutationId = generateClientMutationId();
     const now = Date.now();
 
-    const row: TrackerTransactionRow = {
+    const row: PersistedTrackerTransactionRow = {
       clientMutationId,
       itemId,
       workspacePath: '',  // host adapter fills this in; engine doesn't care
@@ -1153,6 +1534,11 @@ export class TrackerSyncEngine {
       kind,
       payload: payload ?? undefined,
       enqueuedAt: now,
+      owner: {
+        orgId: this.config.orgId,
+        teamProjectId: this.config.teamProjectId,
+        teamMemberId: this.config.teamMemberId,
+      },
     };
 
     let snapshot: TrackerRowSnapshot;
@@ -1160,6 +1546,7 @@ export class TrackerSyncEngine {
       snapshot = await this.persistence.applyAndEnqueueAtomically(itemId, payload, row);
     } else {
       snapshot = await this.persistence.applyOptimistic(itemId, payload);
+      row.rollbackSnapshot = snapshot;
       await this.persistence.enqueueTransaction(row);
     }
     this.rollbackSnapshots.set(clientMutationId, { itemId, snapshot });
@@ -1184,9 +1571,6 @@ export class TrackerSyncEngine {
    */
   private async driveTransaction(row: TrackerTransactionRow): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    // Legacy mode declines to upload until a key epoch is known. Server-managed
-    // mode has no client epoch, so it is always ready to send.
-    if (!this.serverManaged && !this.orgKeyFingerprint) return;
 
     const startedAt = Date.now();
     await this.persistence.markTransactionState(row.clientMutationId, 'executing', startedAt);
@@ -1199,36 +1583,45 @@ export class TrackerSyncEngine {
         clientMutationId: row.clientMutationId,
         itemId: row.itemId,
         encryptedPayload: null,
-        orgKeyFingerprint: this.orgKeyFingerprint,
       });
       return;
     }
 
-    // Server-managed: send PLAINTEXT (no iv, null fingerprint); the server
-    // encrypts at rest with the team DEK.
-    if (this.serverManaged) {
-      this.send({
-        type: 'trackerMutation',
-        clientMutationId: row.clientMutationId,
-        itemId: row.itemId,
-        encryptedPayload: encodeTrackerPayloadPlaintext(row.payload!),
-        orgKeyFingerprint: null,
-        ...(row.payload?.issueNumber !== undefined ? { issueNumber: row.payload.issueNumber } : {}),
-        ...(row.payload?.issueKey !== undefined ? { issueKey: row.payload.issueKey } : {}),
-      });
-      return;
-    }
-
-    const enc = await encryptTrackerPayload(row.payload!, this.encryptionKey!, row.itemId);
+    // The payload travels as PLAINTEXT; the server encrypts it at rest with
+    // the team DEK.
     this.send({
       type: 'trackerMutation',
       clientMutationId: row.clientMutationId,
       itemId: row.itemId,
-      encryptedPayload: enc.encryptedPayload,
-      iv: enc.iv,
-      orgKeyFingerprint: this.orgKeyFingerprint,
+      encryptedPayload: encodeTrackerPayloadPlaintext(row.payload!),
       ...(row.payload?.issueNumber !== undefined ? { issueNumber: row.payload.issueNumber } : {}),
       ...(row.payload?.issueKey !== undefined ? { issueKey: row.payload.issueKey } : {}),
+    });
+  }
+
+  private async driveTransactionBatch(rows: readonly TrackerTransactionRow[]): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const startedAt = Date.now();
+    if (this.persistence.markTransactionStates) {
+      await this.persistence.markTransactionStates(
+        rows.map(row => row.clientMutationId),
+        'executing',
+        startedAt,
+      );
+    } else {
+      for (const row of rows) {
+        await this.persistence.markTransactionState(row.clientMutationId, 'executing', startedAt);
+      }
+    }
+    this.send({
+      type: 'trackerMutationBatch',
+      mutations: rows.map(row => ({
+        clientMutationId: row.clientMutationId,
+        itemId: row.itemId,
+        encryptedPayload: encodeTrackerPayloadPlaintext(row.payload!),
+        ...(row.payload?.issueNumber !== undefined ? { issueNumber: row.payload.issueNumber } : {}),
+        ...(row.payload?.issueKey !== undefined ? { issueKey: row.payload.issueKey } : {}),
+      })),
     });
   }
 
@@ -1236,7 +1629,6 @@ export class TrackerSyncEngine {
     const hooks = this.config.schemaSync;
     if (!hooks) return;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    if (!this.serverManaged && !this.orgKeyFingerprint) return;
 
     const pending = await hooks.listUnsynced();
     if (pending.length > 0) {
@@ -1244,6 +1636,7 @@ export class TrackerSyncEngine {
     }
     for (const def of pending) {
       const clientMutationId = generateClientMutationId();
+      this.pendingLaneIds.set(clientMutationId, def.type);
       if (def.deleted || def.model === null) {
         console.info(`[TrackerSchemaSync] -> mutation (delete) type=${def.type} cmid=${clientMutationId}`);
         this.send({
@@ -1251,34 +1644,43 @@ export class TrackerSyncEngine {
           clientMutationId,
           schemaType: def.type,
           encryptedPayload: null,
-          orgKeyFingerprint: this.orgKeyFingerprint,
         });
         continue;
       }
 
-      // Server-managed: the model JSON travels as plaintext; the server
-      // encrypts it at rest with the team DEK.
-      if (this.serverManaged) {
-        console.info(`[TrackerSchemaSync] -> mutation (upsert, plaintext) type=${def.type} cmid=${clientMutationId}`);
-        this.send({
-          type: 'trackerSchemaMutation',
-          clientMutationId,
-          schemaType: def.type,
-          encryptedPayload: def.model,
-          orgKeyFingerprint: null,
-        });
-        continue;
-      }
-
-      const enc = await encryptTrackerSchemaPayload(def.model, this.encryptionKey!, def.type);
+      // The model JSON travels as plaintext; the server encrypts it at rest
+      // with the team DEK.
       console.info(`[TrackerSchemaSync] -> mutation (upsert) type=${def.type} cmid=${clientMutationId}`);
       this.send({
         type: 'trackerSchemaMutation',
         clientMutationId,
         schemaType: def.type,
-        encryptedPayload: enc.encryptedPayload,
-        iv: enc.iv,
-        orgKeyFingerprint: this.orgKeyFingerprint,
+        encryptedPayload: def.model,
+      });
+    }
+  }
+
+  private async pushPendingSavedViews(): Promise<void> {
+    const hooks = this.config.savedViewSync;
+    if (!hooks || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const pending = await hooks.listUnsynced();
+    for (const view of pending) {
+      const clientMutationId = generateClientMutationId();
+      this.pendingLaneIds.set(clientMutationId, view.viewId);
+      if (view.deleted || view.payload === null) {
+        this.send({
+          type: 'trackerSavedViewMutation',
+          clientMutationId,
+          viewId: view.viewId,
+          encryptedPayload: null,
+        });
+        continue;
+      }
+      this.send({
+        type: 'trackerSavedViewMutation',
+        clientMutationId,
+        viewId: view.viewId,
+        encryptedPayload: view.payload,
       });
     }
   }
@@ -1286,42 +1688,24 @@ export class TrackerSyncEngine {
   private async pushPendingNavigation(): Promise<void> {
     const hooks = this.config.navigationSync;
     if (!hooks || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    if (!this.serverManaged && !this.orgKeyFingerprint) return;
     const pending = await hooks.listUnsynced();
     for (const entry of pending) {
       const clientMutationId = generateClientMutationId();
+      this.pendingLaneIds.set(clientMutationId, entry.entryId);
       if (entry.deleted || entry.payload === null) {
         this.send({
           type: 'trackerNavigationMutation',
           clientMutationId,
           entryId: entry.entryId,
           encryptedPayload: null,
-          orgKeyFingerprint: this.orgKeyFingerprint,
         });
         continue;
       }
-      if (this.serverManaged) {
-        this.send({
-          type: 'trackerNavigationMutation',
-          clientMutationId,
-          entryId: entry.entryId,
-          encryptedPayload: entry.payload,
-          orgKeyFingerprint: null,
-        });
-        continue;
-      }
-      const encrypted = await encryptTrackerNavigationPayload(
-        entry.payload,
-        this.encryptionKey!,
-        entry.entryId,
-      );
       this.send({
         type: 'trackerNavigationMutation',
         clientMutationId,
         entryId: entry.entryId,
-        encryptedPayload: encrypted.encryptedPayload,
-        iv: encrypted.iv,
-        orgKeyFingerprint: this.orgKeyFingerprint,
+        encryptedPayload: entry.payload,
       });
     }
   }
@@ -1341,16 +1725,41 @@ export class TrackerSyncEngine {
     this.config.onStatusChange?.(status);
   }
 
-  private handleDisconnect(): void {
-    const shouldReconnect = !this.suppressReconnect;
+  private handleDisconnect(termination: TrackerAccessTermination | null = null): void {
+    const shouldReconnect = !this.suppressReconnect && !termination;
     this.stopPing();
     this.ws = null;
     this.synced = false;
     this.connecting = false;
+    if (this.presence.size > 0) {
+      this.presence.clear();
+      this.notifyPresenceChange();
+    }
+    this.resolvePendingConfigChanges({
+      success: false,
+      code: 'disconnected',
+      message: 'Tracker sync disconnected before the prefix change was confirmed.',
+    });
+    if (termination) {
+      // Deliberately never `disconnected`: that status is the one the host
+      // renders as "offline, reconnecting", and this connection is not coming
+      // back.
+      this.recordAccessTermination(termination);
+      return;
+    }
     this.setStatus('disconnected');
     if (shouldReconnect && !this.destroyed) {
       this.scheduleReconnect();
     }
+  }
+
+  private recordAccessTermination(termination: TrackerAccessTermination): void {
+    if (this.accessTermination) return;
+    this.accessTermination = termination;
+    this.suppressReconnect = true;
+    this.cancelReconnect();
+    this.setStatus('error');
+    this.config.onAccessTerminated?.(termination);
   }
 
   private scheduleReconnect(): void {
@@ -1378,8 +1787,21 @@ export class TrackerSyncEngine {
   private startPing(): void {
     this.stopPing();
     this.pingTimer = setInterval(() => {
+      // Presence doubles as an authorization heartbeat. A member whose room
+      // access was revoked is closed and removed by the server on this frame.
+      this.announcePresence();
       this.send({ type: 'trackerPing' });
     }, PING_INTERVAL_MS);
+  }
+
+  private announcePresence(): void {
+    const configured = this.config.presenceIdentity;
+    const displayName = configured?.displayName.trim() || this.config.teamMemberId;
+    this.send({
+      type: 'trackerPresence',
+      displayName,
+      avatarUrl: configured?.avatarUrl ?? null,
+    });
   }
 
   private stopPing(): void {

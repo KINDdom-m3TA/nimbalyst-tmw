@@ -39,8 +39,9 @@ import {
 import { voiceModeSettingsAtom, type VoiceModeSettings } from '../atoms/appSettings';
 import { VoiceListenWindowController } from './voiceListenWindow';
 import { formatGitCommitProposalForVoice } from './voiceInteractivePrompt';
-import { activeSessionIdAtom, sessionRegistryAtom, sessionHasPendingInteractivePromptAtom, sessionPendingPromptsAtom, respondToPromptAtom, refreshSessionListAtom, reloadSessionDataAtom } from '../atoms/sessions';
+import { activeSessionIdAtom, sessionRegistryAtom, sessionHasPendingInteractivePromptAtom, sessionPendingPromptsAtom, sessionProcessingAtom, respondToPromptAtom, refreshSessionListAtom, reloadSessionDataAtom } from '../atoms/sessions';
 import { windowModeAtom } from '../atoms/windowMode';
+import { buildCommitPrompt } from '@nimbalyst/runtime/ui/AgentTranscript/utils/commitPromptBuilder';
 
 /**
  * Callback for notifying VoiceModeButton when the linked session changes.
@@ -54,6 +55,25 @@ let _onLinkedSessionChanged: ((newSessionId: string) => void) | null = null;
  */
 export function onLinkedSessionChanged(callback: ((newSessionId: string) => void) | null): void {
   _onLinkedSessionChanged = callback;
+}
+
+export function getCurrentVoiceFilePath(): string | null {
+  const mode = store.get(windowModeAtom);
+
+  if (mode === 'files') {
+    const activeTabKey = store.get(activeTabIdAtom('main'));
+    return activeTabKey ? getFilePathFromKey(activeTabKey) : null;
+  }
+
+  if (mode === 'agent') {
+    const sessionId = store.get(activeSessionIdAtom);
+    if (!sessionId) return null;
+    const context = makeEditorContext(sessionId);
+    const activeTabKey = store.get(activeTabIdAtom(context));
+    return activeTabKey ? getFilePathFromKey(activeTabKey) : null;
+  }
+
+  return null;
 }
 
 // =========================================================================
@@ -435,6 +455,57 @@ export function initVoiceModeListeners(): () => void {
   );
 
   // =========================================================================
+  // Current UI Context (voice tool request/response)
+  // =========================================================================
+  cleanups.push(
+    window.electronAPI.on('voice-mode:request-ui-context', (payload: {
+      workspacePath: string;
+      resultChannel: string;
+    }) => {
+      const activeWorkspacePath = store.get(voiceWorkspacePathAtom);
+      if (!isVoiceActive()) {
+        window.electronAPI.send(payload.resultChannel, {
+          workspacePath: payload.workspacePath,
+          error: 'Voice mode is not active.',
+        });
+        return;
+      }
+      if (!payload.workspacePath || payload.workspacePath !== activeWorkspacePath) {
+        window.electronAPI.send(payload.resultChannel, {
+          workspacePath: payload.workspacePath,
+          error: 'The UI context request does not match the active voice workspace.',
+        });
+        return;
+      }
+
+      const activeSessionId = store.get(activeSessionIdAtom);
+      const sessionMeta = activeSessionId
+        ? store.get(sessionRegistryAtom).get(activeSessionId)
+        : undefined;
+      const sessionStatus = activeSessionId && store.get(sessionHasPendingInteractivePromptAtom(activeSessionId))
+        ? 'waiting_for_input'
+        : activeSessionId && store.get(sessionProcessingAtom(activeSessionId))
+          ? 'running'
+          : 'idle';
+
+      window.electronAPI.send(payload.resultChannel, {
+        workspacePath: payload.workspacePath,
+        context: {
+          activeView: store.get(windowModeAtom),
+          selectedFilePath: getCurrentVoiceFilePath(),
+          activeSession: activeSessionId
+            ? {
+                id: activeSessionId,
+                title: sessionMeta?.title || 'Untitled',
+                status: sessionStatus,
+              }
+            : null,
+        },
+      });
+    })
+  );
+
+  // =========================================================================
   // Preview Audio (response to voice-mode:preview-voice invoke)
   // =========================================================================
   // The Settings > Voice Mode panel triggers a preview via invoke; main
@@ -598,25 +669,10 @@ export function initVoiceModeListeners(): () => void {
           error?: string;
         };
 
-        let message = 'Use the developer_git_commit_proposal tool to create a commit. If its schema is not loaded, use ToolSearch to load it first.';
-
-        if (commitContext.success && commitContext.files.length > 0) {
-          const fileList = commitContext.files
-            .map(f => `- ${f.path} (${f.status})`)
-            .join('\n');
-          message += `\n\nHere are the files edited in this session that have uncommitted changes:\n${fileList}`;
-          message += '\n\nThis list covers files edited directly. If you ALSO ran commands this session that change files as a side effect ' +
-            '(e.g. npm install rewriting package-lock.json, a build/codegen step, license regeneration), include those changed files too -- ' +
-            'check git status for them. If you ran no such commands, the list above is complete; do not go looking. ' +
-            'Either way, do NOT add unrelated uncommitted changes -- other concurrent sessions may have their own work in this repo.';
-          message += '\n\nThen call developer_git_commit_proposal with the file list.';
-          message += '\nDo NOT call get_session_edited_files or get_workstream_edited_files -- the edited-file data is already provided above.';
-        } else if (commitContext.success && commitContext.files.length === 0) {
-          message += '\n\nNo session-edited files have uncommitted changes. Check git status to see if there are any other uncommitted changes to commit.';
-        } else {
-          message += '\n\nFirst call get_session_edited_files to find all files edited, ' +
-            'then cross-reference with git status to include all session-edited files that have uncommitted changes.';
-        }
+        const message = buildCommitPrompt({
+          commitContext,
+          isInWorktree: false,
+        });
 
         const docContext = {
           filePath: undefined,
@@ -965,7 +1021,7 @@ export function initVoiceModeListeners(): () => void {
           // Run the actual commit, then forward the result so the durable
           // prompt is resolved with the same shape the widget produces.
           window.electronAPI
-            .invoke('git:commit', commitWorkspacePath, commitMessage, filePaths)
+            .invoke('git:commit', commitWorkspacePath, commitMessage, filePaths, payload.sessionId)
             .then((result: any) => {
               window.electronAPI.invoke('messages:respond-to-prompt', {
                 sessionId: payload.sessionId,
@@ -1042,25 +1098,6 @@ export function initVoiceModeListeners(): () => void {
   // the main process so the voice agent knows what document is open.
   // This is pure Jotai -- no React state involved.
 
-  function getCurrentFilePath(): string | null {
-    const mode = store.get(windowModeAtom);
-
-    if (mode === 'files') {
-      const activeTabKey = store.get(activeTabIdAtom('main'));
-      return activeTabKey ? getFilePathFromKey(activeTabKey) : null;
-    }
-
-    if (mode === 'agent') {
-      const sessionId = store.get(activeSessionIdAtom);
-      if (!sessionId) return null;
-      const context = makeEditorContext(sessionId);
-      const activeTabKey = store.get(activeTabIdAtom(context));
-      return activeTabKey ? getFilePathFromKey(activeTabKey) : null;
-    }
-
-    return null;
-  }
-
   let editorContextDebounce: ReturnType<typeof setTimeout> | null = null;
   function checkAndReportFileChange(): void {
     const voiceSessionId = store.get(voiceActiveSessionIdAtom);
@@ -1068,7 +1105,7 @@ export function initVoiceModeListeners(): () => void {
 
     if (editorContextDebounce) clearTimeout(editorContextDebounce);
     editorContextDebounce = setTimeout(() => {
-      const currentFile = getCurrentFilePath();
+      const currentFile = getCurrentVoiceFilePath();
       const lastReported = store.get(voiceLastReportedFileAtom);
 
       if (currentFile !== lastReported) {

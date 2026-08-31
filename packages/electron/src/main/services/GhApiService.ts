@@ -13,6 +13,7 @@
 import { spawn } from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
+import { StringDecoder } from 'string_decoder';
 import log from 'electron-log/main';
 import type {
   PullRequestRow,
@@ -22,6 +23,33 @@ import type {
   PullRequestsStore,
   Reviewer,
 } from './PullRequestsStore';
+import type {
+  GithubIssueCommentRow,
+  GithubIssueEventRow,
+  GithubIssueRow,
+  GithubIssuesStore,
+} from './GithubIssuesStore';
+import {
+  createGhIssueApi,
+  type GhIssueApi,
+  type GithubIssueListOptions,
+} from './GhApiService.issues';
+import {
+  GhApiError,
+  buildApiArgs,
+  getGhApiEndpoint,
+  getGhApiMethod,
+  parsePagedJson,
+} from './ghApiHelpers';
+
+export {
+  GH_WORKFLOW_SCOPE_REFRESH_COMMAND,
+  GhApiError,
+  buildApiArgs,
+  getGhApiEndpoint,
+  getWorkflowScopeRecoveryMessage,
+  parsePagedJson,
+} from './ghApiHelpers';
 
 const logger = log.scope('GhApiService');
 
@@ -30,6 +58,7 @@ const DEFAULT_CACHE_LIST_SECONDS = 60;
 const DEFAULT_CACHE_DETAIL_SECONDS = 30;
 /** Page size for paginated REST fetches (`per_page=N`) and GraphQL `first:N`. */
 const API_PAGE_SIZE = 100;
+const PULL_REQUEST_ACTIVITY_BATCH_SIZE = 50;
 
 /**
  * GraphQL query for a PR's inline review threads. Extracted and exported so the
@@ -44,6 +73,69 @@ export function buildReviewThreadsQuery(pageSize: number = API_PAGE_SIZE): strin
     `comments(first:${pageSize}){nodes{id author{login} body createdAt url}}} ` +
     `pageInfo{hasNextPage}}}}}`
   );
+}
+
+interface PullRequestActivityNode {
+  __typename: 'PullRequestCommit' | 'IssueComment' | 'PullRequestReview';
+  commit?: {
+    committedDate?: string | null;
+    pushedDate?: string | null;
+  };
+  createdAt?: string | null;
+  submittedAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface PullRequestActivityPayload {
+  number: number;
+  createdAt: string;
+  /** GitHub's aggregate timestamp; intentionally not used as meaningful activity. */
+  updatedAt?: string;
+  timelineItems?: {
+    nodes?: PullRequestActivityNode[] | null;
+  } | null;
+}
+
+/**
+ * GitHub's aggregate PR `updatedAt` changes when the base branch is updated,
+ * which can stamp every open PR with the same time. Query the most recent
+ * human/head activity separately so the list remains useful after that churn.
+ */
+export function buildPullRequestActivityQuery(numbers: number[]): string {
+  const uniqueNumbers = Array.from(new Set(numbers.filter((number) => Number.isInteger(number) && number > 0)));
+  const pullRequests = uniqueNumbers
+    .map(
+      (number, index) =>
+        `pr${index}:pullRequest(number:${number}){number createdAt ` +
+        `timelineItems(last:1,itemTypes:[PULL_REQUEST_COMMIT,ISSUE_COMMENT,PULL_REQUEST_REVIEW]){` +
+        `nodes{__typename ... on PullRequestCommit{commit{committedDate pushedDate}} ` +
+        `... on IssueComment{createdAt updatedAt} ` +
+        `... on PullRequestReview{submittedAt updatedAt}}}}`,
+    )
+    .join(' ');
+  return `query($owner:String!,$name:String!){` + `repository(owner:$owner,name:$name){${pullRequests}}}`;
+}
+
+function parseActivityTimestamp(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** Return the latest commit/comment/review time, never the aggregate PR updatedAt. */
+export function derivePullRequestActivityAt(payload: PullRequestActivityPayload): number {
+  const timestamps = [parseActivityTimestamp(payload.createdAt)];
+  for (const node of payload.timelineItems?.nodes ?? []) {
+    timestamps.push(
+      parseActivityTimestamp(node.commit?.committedDate),
+      parseActivityTimestamp(node.commit?.pushedDate),
+      parseActivityTimestamp(node.createdAt),
+      parseActivityTimestamp(node.submittedAt),
+      parseActivityTimestamp(node.updatedAt),
+    );
+  }
+  const valid = timestamps.filter((value): value is number => value != null);
+  return valid.length > 0 ? Math.max(...valid) : 0;
 }
 
 /**
@@ -130,46 +222,6 @@ export interface ReviewThreadsResult {
   truncated: boolean;
 }
 
-export class GhApiError extends Error {
-  constructor(
-    message: string,
-    public readonly stderr: string,
-    public readonly exitCode: number | null,
-  ) {
-    super(message);
-    this.name = 'GhApiError';
-  }
-}
-
-/** Find the endpoint in a `gh api` argv list, including mutations with leading flags. */
-export function getGhApiEndpoint(args: string[]): string {
-  const valueOptions = new Set([
-    '-X', '--method', '-H', '--header', '-f', '--raw-field', '-F', '--field', '--cache',
-  ]);
-  for (let index = args[0] === 'api' ? 1 : 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (valueOptions.has(arg)) {
-      index += 1;
-      continue;
-    }
-    if (!arg.startsWith('-')) return arg;
-  }
-  return '';
-}
-
-export const GH_WORKFLOW_SCOPE_REFRESH_COMMAND = 'gh auth refresh -h github.com -s workflow';
-
-/** Return actionable guidance for GitHub's workflow-file OAuth restriction. */
-export function getWorkflowScopeRecoveryMessage(stderr: string): string | null {
-  const missingScope =
-    /refusing to allow an OAuth App to create or update workflow .* without [`'"]?workflow[`'"]? scope/i;
-  if (!missingScope.test(stderr)) return null;
-  return (
-    'GitHub blocked this merge because the PR changes a workflow file and the active GitHub CLI token lacks the `workflow` scope. ' +
-    `Run: ${GH_WORKFLOW_SCOPE_REFRESH_COMMAND}`
-  );
-}
-
 interface SpawnResult {
   stdout: string;
   stderr: string;
@@ -221,100 +273,34 @@ async function spawnGhApi(args: string[], token?: string): Promise<SpawnResult> 
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
+    // Decode across chunk boundaries, not per chunk: a multi-byte character
+    // straddling two `data` events would otherwise be replaced by U+FFFD,
+    // mojibaking any PR title or body containing non-ASCII text.
+    const outDecoder = new StringDecoder('utf8');
+    const errDecoder = new StringDecoder('utf8');
     let stdout = '';
     let stderr = '';
 
-    child.stdout?.on('data', (data) => {
-      stdout += data.toString();
+    child.stdout?.on('data', (data: Buffer) => {
+      stdout += outDecoder.write(data);
     });
-    child.stderr?.on('data', (data) => {
-      stderr += data.toString();
+    child.stderr?.on('data', (data: Buffer) => {
+      stderr += errDecoder.write(data);
     });
 
     child.on('close', (code) => {
-      resolve({ stdout, stderr, exitCode: code });
+      resolve({
+        stdout: stdout + outDecoder.end(),
+        stderr: stderr + errDecoder.end(),
+        exitCode: code,
+      });
     });
 
     child.on('error', (error) => {
       logger.warn('gh spawn error', { message: error.message });
-      resolve({ stdout, stderr: error.message, exitCode: null });
+      resolve({ stdout: stdout + outDecoder.end(), stderr: error.message, exitCode: null });
     });
   });
-}
-
-function buildApiArgs(
-  endpoint: string,
-  options: { cacheSeconds?: number; paginate?: boolean } = {},
-): string[] {
-  const args = [
-    'api',
-    endpoint,
-    '-H',
-    'Accept: application/vnd.github+json',
-    '-H',
-    'X-GitHub-Api-Version: 2022-11-28',
-  ];
-  if (options.paginate) {
-    args.push('--paginate');
-  }
-  if (options.cacheSeconds && options.cacheSeconds > 0) {
-    args.push('--cache', `${options.cacheSeconds}s`);
-  }
-  return args;
-}
-
-/**
- * `gh api --paginate` returns multiple JSON arrays concatenated on stdout
- * (one per page). Parse defensively: try single parse first, then fall back
- * to per-line / per-array splitting.
- */
-function parsePagedJson<T>(stdout: string): T[] {
-  const trimmed = stdout.trim();
-  if (!trimmed) return [];
-
-  // Single JSON value (most common).
-  try {
-    const parsed = JSON.parse(trimmed);
-    return Array.isArray(parsed) ? (parsed as T[]) : [parsed as T];
-  } catch {
-    // Fall through to concatenated-arrays parse.
-  }
-
-  // Concatenated JSON values from `--paginate`. Walk the string tracking
-  // bracket/brace depth (skipping string contents) and parse each top-level
-  // value, flattening arrays. Robust against spaces/newlines inside the JSON.
-  const out: T[] = [];
-  let depth = 0;
-  let sliceStart = 0;
-  let inStr = false;
-  let esc = false;
-  for (let i = 0; i < trimmed.length; i++) {
-    const c = trimmed[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (c === '\\') esc = true;
-      else if (c === '"') inStr = false;
-      continue;
-    }
-    if (c === '"') { inStr = true; continue; }
-    if (c === '[' || c === '{') {
-      depth++;
-    } else if (c === ']' || c === '}') {
-      depth--;
-      if (depth === 0) {
-        const slice = trimmed.slice(sliceStart, i + 1).trim();
-        try {
-          const parsed = JSON.parse(slice) as T[] | T;
-          if (Array.isArray(parsed)) out.push(...parsed);
-          else out.push(parsed);
-        } catch (error) {
-          logger.warn('Failed to parse gh api chunk', { error });
-        }
-        sliceStart = i + 1;
-      }
-    }
-  }
-  return out;
 }
 
 interface GhPullPayload {
@@ -413,7 +399,12 @@ function isNotFoundError(error: unknown): boolean {
   return error instanceof GhApiError && /Not Found|HTTP 404/i.test(error.stderr);
 }
 
-function mapPullToRow(workspaceId: string, remote: Remote, payload: GhPullPayload): PullRequestRow {
+function mapPullToRow(
+  workspaceId: string,
+  remote: Remote,
+  payload: GhPullPayload,
+  activityAt?: number,
+): PullRequestRow {
   const isMerged = payload.merged === true || Boolean(payload.merged_at);
   const state: PullRequestRow['state'] = isMerged
     ? 'merged'
@@ -460,7 +451,7 @@ function mapPullToRow(workspaceId: string, remote: Remote, payload: GhPullPayloa
     raw: payload,
     etag: null,
     createdAt: new Date(payload.created_at).getTime(),
-    updatedAt: new Date(payload.updated_at).getTime(),
+    updatedAt: activityAt && activityAt > 0 ? activityAt : new Date(payload.updated_at).getTime(),
     fetchedAt: now,
   };
 }
@@ -579,10 +570,27 @@ async function resolveGhToken(login: string): Promise<string | null> {
 export type GhAccountResolver = (workspaceId: string) => string | undefined;
 
 export class GhApiService {
+  private readonly issueApi: GhIssueApi | null;
+
   constructor(
     private readonly store: PullRequestsStore,
     private readonly accountResolver?: GhAccountResolver,
-  ) {}
+    issuesStore?: GithubIssuesStore,
+  ) {
+    this.issueApi = issuesStore
+      ? createGhIssueApi({
+          store: issuesStore,
+          request: (args, workspacePath) => this.ghApi(args, workspacePath),
+        })
+      : null;
+  }
+
+  private requireIssueApi(): GhIssueApi {
+    if (!this.issueApi) {
+      throw new Error('GithubIssuesStore not configured');
+    }
+    return this.issueApi;
+  }
 
   /** Resolve the per-workspace account's token (cached), or undefined to let gh pick the active account. */
   private async tokenFor(workspaceId?: string): Promise<string | undefined> {
@@ -602,9 +610,10 @@ export class GhApiService {
     const token = await this.tokenFor(workspaceId);
     const result = await spawnGhApi(args, token);
     const dur = Date.now() - t0;
+    const endpoint = getGhApiEndpoint(args);
+    const method = getGhApiMethod(args);
     if (result.exitCode !== 0) {
-      logger.warn('gh api failed', { args, exitCode: result.exitCode, stderr: result.stderr });
-      const endpoint = getGhApiEndpoint(args);
+      logger.warn('gh api failed', { method, endpoint, exitCode: result.exitCode });
       throw new GhApiError(
         `gh api ${endpoint} failed`,
         result.stderr,
@@ -612,9 +621,124 @@ export class GhApiService {
       );
     }
     if (dur > 2000) {
-      logger.info('gh api slow', { args: args.slice(0, 2), durationMs: dur });
+      logger.info('gh api slow', { method, endpoint, durationMs: dur });
     }
     return result.stdout;
+  }
+
+  async listIssues(
+    workspacePath: string,
+    remote: Remote,
+    options: GithubIssueListOptions = {},
+  ): Promise<GithubIssueRow[]> {
+    return this.requireIssueApi().listIssues(workspacePath, remote, options);
+  }
+
+  async getIssue(
+    workspacePath: string,
+    remote: Remote,
+    number: number,
+  ): Promise<GithubIssueRow> {
+    return this.requireIssueApi().getIssue(workspacePath, remote, number);
+  }
+
+  async getIssueComments(
+    workspacePath: string,
+    remote: Remote,
+    number: number,
+  ): Promise<GithubIssueCommentRow[]> {
+    return this.requireIssueApi().getIssueComments(workspacePath, remote, number);
+  }
+
+  async getIssueTimeline(
+    workspacePath: string,
+    remote: Remote,
+    number: number,
+  ): Promise<GithubIssueEventRow[]> {
+    return this.requireIssueApi().getIssueTimeline(workspacePath, remote, number);
+  }
+
+  async commentOnIssue(
+    workspacePath: string,
+    remote: Remote,
+    number: number,
+    body: string,
+  ): Promise<GithubIssueCommentRow> {
+    return this.requireIssueApi().commentOnIssue(workspacePath, remote, number, body);
+  }
+
+  async setIssueState(
+    workspacePath: string,
+    remote: Remote,
+    number: number,
+    state: 'open' | 'closed',
+  ): Promise<GithubIssueRow> {
+    return this.requireIssueApi().setIssueState(workspacePath, remote, number, state);
+  }
+
+  async getIssuePollCursor(workspacePath: string, remote: Remote): Promise<number | null> {
+    return this.requireIssueApi().getPollCursor(workspacePath, remote);
+  }
+
+  async setIssuePollCursor(
+    workspacePath: string,
+    remote: Remote,
+    cursor: number,
+  ): Promise<void> {
+    await this.requireIssueApi().setPollCursor(workspacePath, remote, cursor);
+  }
+
+  private async getPullRequestActivityTimes(
+    workspaceId: string,
+    remote: Remote,
+    numbers: number[],
+    cacheSeconds: number,
+  ): Promise<Map<number, number>> {
+    const separator = remote.indexOf('/');
+    if (separator <= 0 || separator === remote.length - 1) {
+      throw new Error(`Invalid GitHub remote: ${remote}`);
+    }
+    const owner = remote.slice(0, separator);
+    const name = remote.slice(separator + 1);
+    const activityByNumber = new Map<number, number>();
+
+    for (let offset = 0; offset < numbers.length; offset += PULL_REQUEST_ACTIVITY_BATCH_SIZE) {
+      const batch = numbers.slice(offset, offset + PULL_REQUEST_ACTIVITY_BATCH_SIZE);
+      const args = [
+        'api',
+        'graphql',
+        '-f',
+        `query=${buildPullRequestActivityQuery(batch)}`,
+        '-F',
+        `owner=${owner}`,
+        '-F',
+        `name=${name}`,
+      ];
+      if (cacheSeconds > 0) {
+        args.push('--cache', `${cacheSeconds}s`);
+      }
+
+      const stdout = await this.ghApi(args, workspaceId);
+      const result = JSON.parse(stdout.trim()) as {
+        data?: {
+          repository?: Record<string, PullRequestActivityPayload | null> | null;
+        };
+        errors?: Array<{ message?: string }>;
+      };
+      if (!result.data?.repository) {
+        const message = result.errors
+          ?.map((error) => error.message)
+          .filter(Boolean)
+          .join('; ');
+        throw new Error(message || 'GitHub returned no pull request activity data');
+      }
+      for (const payload of Object.values(result.data.repository)) {
+        if (!payload) continue;
+        activityByNumber.set(payload.number, derivePullRequestActivityAt(payload));
+      }
+    }
+
+    return activityByNumber;
   }
 
   async listPullRequests(
@@ -661,7 +785,31 @@ export class GhApiService {
       payloads = parsePagedJson<GhPullPayload>(stdout);
     }
 
-    let rows = payloads.map((p) => mapPullToRow(workspaceId, remote, p));
+    let activityByNumber = new Map<number, number>();
+    try {
+      activityByNumber = await this.getPullRequestActivityTimes(
+        workspaceId,
+        remote,
+        payloads.map((payload) => payload.number),
+        DEFAULT_CACHE_LIST_SECONDS,
+      );
+    } catch (error) {
+      logger.warn('PR activity fetch failed; preserving cached timestamps when available', { remote, error });
+    }
+    await Promise.all(
+      payloads
+        .filter((payload) => !activityByNumber.has(payload.number))
+        .map(async (payload) => {
+          const cached = await this.store.getByNumber(workspaceId, remote, payload.number);
+          if (cached?.updatedAt) {
+            activityByNumber.set(payload.number, cached.updatedAt);
+          }
+        }),
+    );
+
+    let rows = payloads.map((payload) =>
+      mapPullToRow(workspaceId, remote, payload, activityByNumber.get(payload.number)),
+    );
     if (filters.createdByMe && filters.search === undefined) {
       // createdByMe is a client-side filter against the authed user; the
       // caller passes the user separately via the IPC layer where we have
@@ -697,7 +845,24 @@ export class GhApiService {
       }),
     workspaceId,);
     const payload = JSON.parse(stdout.trim()) as GhPullPayload;
-    const row = mapPullToRow(workspaceId, remote, payload);
+    let activityAt: number | undefined;
+    try {
+      const activityByNumber = await this.getPullRequestActivityTimes(
+        workspaceId,
+        remote,
+        [number],
+        options.noCache ? 0 : DEFAULT_CACHE_DETAIL_SECONDS,
+      );
+      activityAt = activityByNumber.get(number);
+    } catch (error) {
+      logger.warn('PR activity fetch failed; preserving cached timestamp when available', {
+        remote,
+        number,
+        error,
+      });
+      activityAt = (await this.store.getByNumber(workspaceId, remote, number))?.updatedAt;
+    }
+    const row = mapPullToRow(workspaceId, remote, payload, activityAt);
     await this.store.upsertOne(row);
     return row;
   }

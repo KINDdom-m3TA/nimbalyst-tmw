@@ -22,6 +22,8 @@ export interface McpServerStatusInfo {
   name: string;
   status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled';
   error?: string;
+  /** project | user | local | claudeai | managed */
+  scope?: string;
   serverInfo?: { name: string; version: string };
   tools?: { name: string; description?: string }[];
 }
@@ -29,6 +31,7 @@ import { parse as parseShellCommand } from 'shell-quote';
 
 import { BaseAgentProvider } from './BaseAgentProvider';
 import {
+  AIProviderType,
   DocumentContext,
   ProviderConfig,
   ProviderCapabilities,
@@ -47,10 +50,12 @@ import {
   CLAUDE_CODE_SAFE_FALLBACK_MODEL,
   baseContextWindowForVariant,
 } from '../../modelConstants';
+import type { InterruptTurnResult } from '../AIProvider';
 import { isBedrockToolSearchError } from '../utils/errorDetection';
 import { AgentMessagesRepository } from '../../../storage/repositories/AgentMessagesRepository';
 import { TranscriptMigrationRepository } from '../../../storage/repositories/TranscriptMigrationRepository';
 import { TeammateManager, type TeammateToLeadMessage } from './TeammateManager';
+import { describeUnusableWorkspacePath } from './workspacePreconditions';
 import path from 'path';
 import os from 'os';
 import { buildClaudeCodeSystemPrompt, buildMetaAgentSystemPrompt, type MetaAgentWorkflowPreset } from '../../prompt';
@@ -65,6 +70,7 @@ import { getMcpConfigService, isInternalMcpServerEnabled, areTrackerToolsEnabled
 import { historyManager } from '../../../../../electron/src/main/HistoryManager';
 import {
   appendLargeAttachmentInstructions,
+  appendFailedAttachmentNotice,
   buildMessageWithDocumentContext,
   prepareClaudeCodeAttachments,
 } from './claudeCode/messagePreparation';
@@ -74,6 +80,7 @@ import {
   isTransientClaudeCodeChunk,
   slimClaudeCodeChunkForStorage,
 } from './claudeCode/toolChunkUtils';
+import { capClaudeCodeChunkForStorage } from '../../../storage/toolOutputBudget';
 import {
   INTERNAL_MCP_TOOLS,
   TEAM_TOOLS,
@@ -90,6 +97,7 @@ import {
   type PendingAskUserQuestionEntry,
 } from './claudeCode/askUserQuestion';
 import { ClaudeCodeTranscriptAdapter } from './claudeCode/ClaudeCodeTranscriptAdapter';
+import { findAttachmentDenyRule } from '../attachments/attachmentDenyMatcher';
 
 import {
   resolveImmediateToolDecision as resolveImmediateToolDecisionHelper,
@@ -99,10 +107,15 @@ import {
   handleToolPermissionWithService as handleToolPermissionWithServiceHelper,
 } from './claudeCode/toolAuthorization';
 import { ClaudeCodeDeps } from './claudeCode/dependencyInjection';
-import { buildSdkOptions, type PromptStreamController } from './claudeCode/sdkOptionsBuilder';
+import { buildSdkOptions, resolvePermissionMode, type PromptStreamController } from './claudeCode/sdkOptionsBuilder';
 import { resolveEffectiveSessionMode } from './claudeCode/resolveEffectiveSessionMode';
+import { resolveClaudeConfigDir } from './claudeCode/claudeConfigDir';
 import {
   hasRunningTasks as computeHasRunningTasks,
+  countRunningTasks,
+  reapRunningTasks,
+  resolvePromptEndDelay,
+  resolveShellDrainMs,
   shouldDeferTeardownForSubagents,
   shouldExitDrain,
   classifyDrainOutcome,
@@ -133,6 +146,8 @@ import {
   armAgentSdkDebugLogging,
   readLatestSdkDebugLogTail,
 } from './claudeCode/spawnCrashDiagnostics';
+import { classifyAbnormalChildExit } from './claudeCode/abnormalExit';
+import { normalizeStructuredContextUsage, type ParsedContextUsage } from '../utils/contextUsage';
 import { applyTaskListMutation, sortTaskList, type TaskListItem } from './claudeCode/taskListReconstruct';
 
 
@@ -195,8 +210,21 @@ export interface ScheduleWakeupRequest {
 
 export class ClaudeCodeProvider extends BaseAgentProvider {
   private currentMode?: 'planning' | 'agent' | 'auto'; // Track session mode for prompt customization and tool filtering
+  // The mode the UI asked for, before the bypass-all -> auto classifier upgrade.
+  // Kept separate from `currentMode` so a mid-turn permission change can redo the
+  // upgrade decision without clobbering an explicitly-picked 'auto'/'planning'.
+  private requestedMode?: 'planning' | 'agent' | 'auto';
+  // Path whose stored project permissions govern this turn (worktrees resolve to
+  // the parent project). Recorded so a permission change can re-evaluate it.
+  private pathForTrust?: string;
   private slashCommands: string[] = []; // Available slash commands from SDK
   private skills: string[] = []; // Available user-invocable skills from SDK
+
+  // Providers with a live `leadQuery`. Registered when a turn starts and removed
+  // in the turn's finally block, so this never accumulates idle instances.
+  // Drives `applyPermissionChange`, which is how a project permission change
+  // reaches a turn that is already in flight (NIM-2403).
+  private static readonly streamingInstances = new Set<ClaudeCodeProvider>();
 
   // Static cache of SDK-reported skills/commands so they survive across provider instances.
   // Once any session receives the init chunk, new sessions can use the cached list as a
@@ -213,6 +241,14 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
   // flips false->true when the agent names itself in-band on turn 1, which would
   // flip the appended system prompt on turn 2 and bust the whole prompt cache.
   private outOfBandNamingDecision: boolean | undefined = undefined;
+
+  // Git snapshot stated in the system prompt, resolved ONCE per session and then
+  // frozen — same invariant as outOfBandNamingDecision above, same reason
+  // (#1177). `gitContextFrozen` covers the failure case too: if the first
+  // resolve times out we freeze to "no git context" rather than acquiring one on
+  // turn 2, because adding the section later is the same cache miss.
+  private gitContextFrozen = false;
+  private frozenGitContext: string | undefined = undefined;
 
   private markMessagesAsHidden: boolean = false; // Flag to mark next messages as hidden
   private helperMethod: 'native' | 'custom' = 'native';
@@ -239,6 +275,12 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
   private streamClosedContinuationPrepared = false;
   private streamClosedContinuationMessagePending: string | null = null;
   private static readonly MAX_STREAM_CLOSED_RETRIES = 2;
+  // #1361: native subprocess crashes (access violation / segfault) are retried
+  // once, and only before anything has been streamed. Reset on a completed turn
+  // and on abort -- deliberately NOT at turn start, or a crash-retry chain
+  // would clear its own budget on every attempt and never terminate.
+  private abnormalExitRetryCount = 0;
+  private static readonly MAX_ABNORMAL_EXIT_RETRIES = 1;
   // Resolve function to break the for-await loop immediately when interrupt is called.
   // Racing this against .next() lets us unblock without waiting for the SDK transport.
   private interruptResolve: (() => void) | null = null;
@@ -286,6 +328,13 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
   // session with a visible continuation turn carrying the results. NIM-1470.
   private drainTerminalNotifications: TaskTerminalNotification[] = [];
 
+  // The drain grace timer expired while background tasks were still running, so
+  // we closed the prompt stream and the CLI killed them along with its process.
+  // Any 'stopped' that lands after this is OUR kill, not a user stop — without
+  // the distinction both took the same silent path and the agent could not tell
+  // "killed" from "stopped". See GitHub #1355.
+  private drainGraceExpired = false;
+
   // SDK-native task-list tracking (TaskCreate/TaskUpdate tools — the shared,
   // dependency-aware work queue, distinct from the sub-agent telemetry above).
   // Reconstructed incrementally from tool args/results because TaskUpdate only
@@ -295,6 +344,10 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
 
   // MCP server status tracking: last known statuses for change detection
   private mcpServerStatuses: Map<string, McpServerStatusInfo> = new Map();
+  // Epoch ms of the last poll that actually returned. Null means never polled,
+  // which the UI must distinguish from "polled and found nothing" — before the
+  // first poll every configured server looks absent.
+  private mcpStatusesLastCheckedAt: number | null = null;
   // Interval handle for periodic MCP health checks during active sessions
   private mcpHealthCheckInterval: ReturnType<typeof setInterval> | null = null;
   // Session ID for the current streaming session (needed for health check emissions)
@@ -322,6 +375,19 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
   // fresh object from the frozen bytes also prevents SDK mutation from changing
   // later turns. See NIM-1988 and ClaudeCodeProvider.mcpSnapshot.test.ts.
   private mcpServersSnapshotJsonPromise: Promise<string> | undefined;
+
+  // Server NAMES from the snapshot above, recorded as a side effect when that
+  // promise settles on its own. This is the comparison set that lets the UI say
+  // "configured but never reached this session" — mcpServerStatus() reports
+  // what the CLI has, never what the user expected.
+  //
+  // Names only, and never awaited from the accessor: reading this must not
+  // force the snapshot to resolve early or trigger a live config read, or
+  // NIM-1988 regresses. The snapshot itself holds credentials in server env and
+  // headers and must not cross the IPC boundary at all.
+  private mcpSnapshotServerNames: string[] | null = null;
+  /** Configured servers withheld from this session for failing the OAuth check. */
+  private mcpWithheldServerNames: string[] | null = null;
 
   // ---- Static dependency forwarding ----
   // All static fields and setters live in ClaudeCodeDeps.
@@ -385,14 +451,23 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
     if (!this.mcpServersSnapshotJsonPromise) {
       this.mcpServersSnapshotJsonPromise = this.mcpConfigService
         .getMcpServersConfig(options)
-        .then((mcpServers) => JSON.stringify(mcpServers));
+        .then((mcpServers) => {
+          // Record names for the absent-server diff. Piggybacking on the
+          // existing resolution keeps the accessor free of any await.
+          this.mcpSnapshotServerNames = Object.keys(mcpServers ?? {});
+          // Read in the same continuation as the loader that produced them, so
+          // the two always describe one pass (GH #1057).
+          this.mcpWithheldServerNames =
+            ClaudeCodeDeps.mcpWithheldNamesLoader?.(options.workspacePath) ?? null;
+          return JSON.stringify(mcpServers);
+        });
     }
 
     const snapshotJson = await this.mcpServersSnapshotJsonPromise;
     return JSON.parse(snapshotJson) as Record<string, any>;
   }
 
-  getProviderName(): string {
+  getProviderName(): AIProviderType {
     return 'claude-code';
   }
 
@@ -481,18 +556,72 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
   // Internal MCP-server ports / kill-switches / loaders / auth token are
   // configured once via `configureMcpServers` (shared registry), not per-provider.
   public static setMCPConfigLoader(loader: ((workspacePath?: string) => Promise<Record<string, any>>) | null): void { ClaudeCodeDeps.setMCPConfigLoader(loader); }
+  public static setMcpWithheldNamesLoader(loader: ((workspacePath?: string) => string[]) | null): void { ClaudeCodeDeps.setMcpWithheldNamesLoader(loader); }
   public static setExtensionPluginsLoader(loader: ((workspacePath?: string) => Promise<Array<{ type: 'local'; path: string }>>) | null): void { ClaudeCodeDeps.setExtensionPluginsLoader(loader); }
   public static setClaudeCodeSettingsLoader(loader: (() => Promise<{ projectCommandsEnabled: boolean; userCommandsEnabled: boolean }>) | null): void { ClaudeCodeDeps.setClaudeCodeSettingsLoader(loader); }
   public static setClaudeSettingsEnvLoader(loader: (() => Promise<Record<string, string>>) | null): void { ClaudeCodeDeps.setClaudeSettingsEnvLoader(loader); }
   public static setShellEnvironmentLoader(loader: (() => Record<string, string> | null) | null): void { ClaudeCodeDeps.setShellEnvironmentLoader(loader); }
   public static setEnhancedPathLoader(loader: (() => string) | null): void { ClaudeCodeDeps.setEnhancedPathLoader(loader); }
   public static setAdditionalDirectoriesLoader(loader: ((workspacePath: string) => string[]) | null): void { ClaudeCodeDeps.setAdditionalDirectoriesLoader(loader); }
+  public static setGitContextLoader(loader: ((workspacePath: string) => Promise<string | null>) | null): void { ClaudeCodeDeps.setGitContextLoader(loader); }
+  public static setAttachmentStagingLoader(loader: ((workspacePath: string) => { root: string; mode: 'temp' | 'workspace' | 'custom' }) | null): void { ClaudeCodeDeps.setAttachmentStagingLoader(loader); }
+  public static setAttachmentDenyRulesLoader(loader: ((workspacePath: string) => Promise<string[]>) | null): void { ClaudeCodeDeps.setAttachmentDenyRulesLoader(loader); }
   public static setSecurityLogger(logger: ((message: string, data?: any) => void) | null): void { BaseAgentProvider.setSecurityLogger(logger); }
   public static setImageCompressor(compressor: ((buffer: Buffer, mimeType: string, options?: { targetSizeBytes?: number }) => Promise<{ buffer: Buffer; mimeType: string; wasCompressed: boolean }>) | null): void { ClaudeCodeDeps.setImageCompressor(compressor); }
   public static setClaudeSettingsPatternSaver(saver: ((workspacePath: string, pattern: string) => Promise<void>) | null): void { ClaudeCodeDeps.setClaudeSettingsPatternSaver(saver); }
   public static setClaudeSettingsPatternChecker(checker: ((workspacePath: string, pattern: string) => Promise<boolean>) | null): void { ClaudeCodeDeps.setClaudeSettingsPatternChecker(checker); }
   public static setTrustChecker(checker: ((workspacePath: string) => { trusted: boolean; mode: 'ask' | 'allow-all' | 'bypass-all' | null; allowAllUsesClassifier?: boolean }) | null): void { BaseAgentProvider.setTrustChecker(checker); }
   public static setExtensionFileTypesLoader(loader: (() => Set<string>) | null): void { ClaudeCodeDeps.setExtensionFileTypesLoader(loader); }
+
+  /**
+   * Push a project permission change into every turn that is already in flight.
+   *
+   * A turn snapshots the effective session mode once (see sendMessage) and hands
+   * the derived `permissionMode` to `query()` for the life of that turn, so
+   * without this a user who switches to "Allow everything" mid-turn keeps being
+   * asked until the agent stops. Re-running the bypass-all -> auto upgrade against
+   * the fresh trust status and pushing the result through the SDK's
+   * `Query.setPermissionMode` makes the change land on the very next tool call.
+   *
+   * `requestedMode` (not `currentMode`) is the input, so an explicitly-picked
+   * 'auto' or 'planning' session is never silently downgraded.
+   *
+   * Every in-flight turn re-reads trust for its OWN path rather than the caller
+   * filtering by the changed path: worktrees, the subfolder trust cascade, and
+   * `permissionsPath` all mean the changed path and a session's trust path are
+   * often related but not equal. A turn whose effective mode did not move is a
+   * no-op, so the broad sweep is safe.
+   */
+  public static async applyPermissionChange(): Promise<void> {
+    for (const provider of [...ClaudeCodeProvider.streamingInstances]) {
+      await provider.applyPermissionChange();
+    }
+  }
+
+  private async applyPermissionChange(): Promise<void> {
+    const leadQuery = this.leadQuery;
+    if (!leadQuery || typeof leadQuery.setPermissionMode !== 'function') return;
+    if (this.requestedMode !== 'agent' || !this.pathForTrust || !BaseAgentProvider.trustChecker) return;
+
+    const trustStatus = BaseAgentProvider.trustChecker(this.pathForTrust);
+    // An untrusted workspace is handled by canUseTool's deny path, which already
+    // reads the live trust status. Nothing to re-negotiate with the SDK here.
+    if (!trustStatus.trusted) return;
+
+    const nextMode = resolveEffectiveSessionMode('agent', trustStatus);
+    if (nextMode === this.currentMode) return;
+
+    const previousMode = this.currentMode;
+    this.currentMode = nextMode;
+    try {
+      await leadQuery.setPermissionMode(resolvePermissionMode(nextMode));
+    } catch (error) {
+      // The transport can die between the permission change and this call. Roll
+      // back so canUseTool keeps honouring the mode the turn actually runs under.
+      this.currentMode = previousMode;
+      console.warn('[CLAUDE-CODE] Failed to apply permission change to in-flight turn:', error);
+    }
+  }
 
   private static scheduleWakeupHandler: ((request: ScheduleWakeupRequest) => Promise<void>) | null = null;
   public static setScheduleWakeupHandler(handler: ((request: ScheduleWakeupRequest) => Promise<void>) | null): void {
@@ -548,8 +677,14 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
     this.markMessagesAsHidden = false;
     this.resetStreamClosedTurnState();
 
+    // #1361: the crash-retry path re-enters sendMessage with the caller's
+    // original arguments. `message` is rewritten in place further down (document
+    // context, attachment instructions), so capture it before that happens.
+    const originalMessage = message;
+
     // Track session mode for MCP server configuration and tool filtering
     this.currentMode = (documentContext as any)?.mode || 'agent';
+    this.requestedMode = this.currentMode;
 
     // Trust-level upgrade: when workspace permission is "Allow All" (internal
     // mode 'bypass-all') and session mode is 'agent', the session is upgraded
@@ -559,6 +694,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
     // mode is never upgraded — it always uses the SDK's native read-only
     // enforcement.
     const pathForTrustUpgrade = (documentContext as any)?.permissionsPath || workspacePath;
+    this.pathForTrust = pathForTrustUpgrade;
     if (this.currentMode === 'agent' && pathForTrustUpgrade && BaseAgentProvider.trustChecker) {
       const trustStatus = BaseAgentProvider.trustChecker(pathForTrustUpgrade);
       this.currentMode = resolveEffectiveSessionMode(this.currentMode, trustStatus);
@@ -568,14 +704,34 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
     // This reduces initial token usage for very large attachments
     const LARGE_ATTACHMENT_CHAR_THRESHOLD = 10000;
 
+    const staging = workspacePath && ClaudeCodeDeps.attachmentStagingLoader
+      ? ClaudeCodeDeps.attachmentStagingLoader(workspacePath)
+      : { root: os.tmpdir(), mode: 'temp' as const };
+    let preflightAttachmentDenyRule: string | null = null;
+    if (attachments?.length && workspacePath && ClaudeCodeDeps.attachmentDenyRulesLoader) {
+      try {
+        const denyRules = await ClaudeCodeDeps.attachmentDenyRulesLoader(workspacePath);
+        preflightAttachmentDenyRule = findAttachmentDenyRule(
+          path.join(staging.root, 'nimbalyst-attachment-preflight'),
+          denyRules,
+        );
+      } catch (error) {
+        console.warn('[CLAUDE-CODE] Attachment deny pre-flight failed:', error);
+      }
+    }
+
     const {
       imageContentBlocks,
       documentContentBlocks,
       largeAttachmentFilePaths,
+      failedAttachments,
     } = await prepareClaudeCodeAttachments({
       attachments,
       largeAttachmentCharThreshold: LARGE_ATTACHMENT_CHAR_THRESHOLD,
       imageCompressor: ClaudeCodeDeps.imageCompressor || undefined,
+      stagingRoot: staging.root,
+      stagingMode: staging.mode,
+      sessionId,
     });
 
     // Abort any existing request before starting a new one
@@ -617,6 +773,11 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
     // result chunk's early-yield already fired before an error was thrown.
     let completeEmitted = false;
 
+    // Hoisted for the same reason: the crash-retry decision (#1361) must know
+    // whether any of this turn already reached the transcript, because
+    // replaying a partially-streamed turn would duplicate it.
+    let sawAssistantOutputThisTurn = false;
+
     try {
       // Append document context to message using pre-built prompts from DocumentContextService
       // Skip adding system message if the prompt starts with a slash command
@@ -635,6 +796,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
       // Add large attachment file paths to system message
       // These are text attachments over 10k chars that were written to /tmp
       message = appendLargeAttachmentInstructions(message, largeAttachmentFilePaths);
+      message = appendFailedAttachmentNotice(message, failedAttachments);
 
       // Load env vars from ~/.claude/settings.json early so they're available for both
       // system prompt building (agent teams flag) and SDK environment setup
@@ -667,6 +829,12 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
       const agentRole = await this.getAgentRole(sessionId);
       const isMetaAgent = agentRole === 'meta-agent';
       const workflowPreset = isMetaAgent ? await this.getWorkflowPreset(sessionId) : 'default';
+      // Resolve-and-freeze the git snapshot before the (synchronous) prompt
+      // build. First turn pays the git call; every later turn reads the frozen
+      // value, which is what keeps the prompt byte-stable (#1177).
+      // workspacePath is the CLI's cwd (see buildSdkOptions), so it is also the
+      // repo the suppressed CLI block would have described.
+      await this.ensureGitContext(workspacePath);
       const systemPrompt = this.buildSystemPrompt(documentContext, enableAgentTeams, isMetaAgent, workflowPreset);
 
       // Note: Attachments (images/documents) are NOT added to the message text.
@@ -695,9 +863,12 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
         });
       }
 
-      // Require workspace path
-      if (!workspacePath) {
-        throw new Error('[CLAUDE-CODE] workspacePath is required but was not provided');
+      // Require a workspace path that still exists on disk. Without this the
+      // Agent SDK spawns into a dead cwd and misreports the ENOENT as a
+      // libc/musl mismatch on the bundled binary.
+      const unusableWorkspace = describeUnusableWorkspacePath(workspacePath);
+      if (unusableWorkspace || !workspacePath) {
+        throw new Error(unusableWorkspace ?? 'No project folder is set for this session.');
       }
 
       // Build SDK options (settings, MCP config, env, session resumption, prompt input)
@@ -747,7 +918,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
 
       // Log the raw input to the SDK (include attachments and mode in metadata for UI restoration)
       if (sessionId) {
-        const metadataToLog: Record<string, any> = {};
+        const metadataToLog: Record<string, any> = this.withPromptProvenanceMetadata(documentContext);
         if (attachments && attachments.length > 0) {
           metadataToLog.attachments = attachments;
         }
@@ -758,9 +929,6 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
         if (teammateMatch) {
           metadataToLog.messageType = 'teammate_message_injected';
           metadataToLog.teammateName = teammateMatch[1];
-        }
-        if (documentContext?.promptOrigin) {
-          metadataToLog.promptOrigin = documentContext.promptOrigin;
         }
         await this.logAgentMessage(sessionId, 'claude-code', 'input', JSON.stringify({
           prompt: message,
@@ -777,6 +945,25 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
             thinking: options.thinking
           }
         }), metadataToLog, hideMessages, undefined, true /* searchable */);
+
+        if (preflightAttachmentDenyRule && !hideMessages) {
+          const firstAttachment = attachments?.[0];
+          await this.logAgentMessage(sessionId, 'claude-code', 'output', JSON.stringify({
+            type: 'system',
+            subtype: 'permission_denied',
+            tool_name: 'Read',
+            tool_input: { file_path: firstAttachment?.filepath ?? staging.root },
+            decision_reason: `Attachment staging matches ${preflightAttachmentDenyRule}`,
+            decision_reason_type: 'rule',
+            message: `Claude Code may be unable to read ${firstAttachment?.filename ?? 'this attachment'} because ${preflightAttachmentDenyRule} denies its staging directory.`,
+            is_attachment_staging_denied: true,
+            attachment_path: firstAttachment?.filepath ?? staging.root,
+            attachment_filename: firstAttachment?.filename ?? 'attachment',
+            attachment_staging_mode: staging.mode,
+            attachment_deny_rule: preflightAttachmentDenyRule,
+            attachment_detection: 'preflight',
+          }), undefined, false, undefined, true);
+        }
       }
 
       // Create transcript adapter as chunk parser (returns ParsedItems for the streaming loop).
@@ -814,11 +1001,13 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
       });
 
       this.leadQuery = leadQuery as unknown as Query;
+      ClaudeCodeProvider.streamingInstances.add(this);
       this.teammateIdleMessagePending = false;
       // Reset per-turn background-drain state (defensive; also reset in finally).
       this.drainingBackgroundTasks = false;
       this.drainExitCause = 'resolved';
       this.drainTerminalNotifications = [];
+      this.drainGraceExpired = false;
       const queryIterator = leadQuery as AsyncIterable<any>;
       const queryCallDuration = Date.now() - queryCallStart;
       if (queryCallDuration > 5000) {
@@ -887,13 +1076,29 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
       // gaps up to ~589s), NOT a ~1Hz keepalive -- so the window is sized generously
       // above that jitter to avoid reaping legitimate long rewrites (#802).
       const streamStallMs = resolveStreamStallMs();
+      // A backgrounded shell (local_bash) streams no chunks while it runs, so it
+      // can never reset the timer below and the 5-minute sub-agent window killed
+      // every one that outran it. Silence from a shell is not a stall. See #1355.
+      const shellDrainMs = resolveShellDrainMs();
       const armPromptEndTimer = (reason: string) => {
         if (this.promptEndTimer) {
           clearTimeout(this.promptEndTimer);
         }
-        const delay = this.hasRunningTasks() ? SUBAGENT_DRAIN_GRACE_MS : PROMPT_GRACE_MS;
+        const delay = resolvePromptEndDelay(this.activeTasks.values(), {
+          idle: PROMPT_GRACE_MS,
+          subagent: SUBAGENT_DRAIN_GRACE_MS,
+          shell: shellDrainMs,
+        });
         this.promptEndTimer = setTimeout(() => {
           this.promptEndTimer = null;
+          // Record that WE ended the stream on a still-running task. Ending it
+          // closes the CLI's stdin, which kills every live background task with
+          // the process — they then report 'stopped', indistinguishable from a
+          // user stop unless we remember that we caused it. See #1355.
+          if (this.hasRunningTasks()) {
+            this.drainGraceExpired = true;
+            console.warn(`[CLAUDE-CODE] SUBAGENT_DRAIN: grace window (${delay}ms) expired with ${countRunningTasks(this.activeTasks.values())} task(s) still running; ending stream will kill them`);
+          }
           this.promptController?.end(reason);
         }, delay);
       };
@@ -909,6 +1114,9 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
       // Track the last assistant message's usage separately (per-step, not cumulative).
       // Used for context window fill calculation: input + cacheRead + cacheCreation = actual context size.
       let lastAssistantUsage: typeof usageData | undefined;
+      // Set only on a /context turn, from the SDK's structured twin of the
+      // markdown report. Undefined on every ordinary turn.
+      let structuredContextUsage: ParsedContextUsage | undefined;
       // Track per-model usage from SDK result (contains inputTokens, outputTokens, costUSD, etc.)
       let modelUsageData: Record<string, {
         inputTokens?: number;
@@ -928,7 +1136,6 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
       // then an empty success result (num_turns=0) BEFORE processing the user's
       // prompt. Ending the turn on that result swallows the prompt. NIM-1470.
       let sawTaskNotificationThisTurn = false;
-      let sawAssistantOutputThisTurn = false;
 
 
       // Stream the response
@@ -1091,13 +1298,15 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
           // reacted to them, and the persistent reparse path (ClaudeCodeRawParser)
           // ignores them, so persisting just inflates ai_agent_messages + sync churn.
           if (sessionId && !isTransientClaudeCodeChunk(chunk)) {
-            // Drop dead-weight fields (tool_use_result.originalFile/patch/etc and
-            // thinking signatures) before persisting -- ~60% of the claude-code raw
-            // log otherwise, and no consumer reads them. Slims a clone; the live
-            // dispatch loop below still uses the untouched `chunk`.
+            // Two storage passes, both on clones -- the live dispatch loop below
+            // still uses the untouched `chunk`:
+            //   1. slim: drop dead-weight fields (tool_use_result.originalFile/
+            //      patch/etc and thinking signatures) that no consumer reads.
+            //   2. cap:  bound oversized tool_result payloads head-and-tail.
+            //      tool_use blocks and images pass through at any size.
             const rawChunkJson = typeof chunk === 'string'
               ? JSON.stringify({ type: 'text', content: chunk })
-              : JSON.stringify(slimClaudeCodeChunkForStorage(chunk));
+              : JSON.stringify(capClaudeCodeChunkForStorage(slimClaudeCodeChunkForStorage(chunk)));
             // Non-string chunks from SDK have a uuid field we can use for deduplication
             const providerMessageId = typeof chunk !== 'string' ? chunk.uuid : undefined;
 
@@ -1199,6 +1408,13 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
                 if (item.modelUsage) modelUsageData = item.modelUsage;
                 break;
 
+              case 'context_report':
+                // Only ever set on a /context turn. Carried to the `complete`
+                // chunk so AIService can use the exact figures instead of
+                // re-deriving them from the rendered markdown.
+                structuredContextUsage = normalizeStructuredContextUsage(item.usage);
+                break;
+
               case 'tool_use': {
                 toolCallCount++;
                 // A tool is now executing; disarm the stall watchdog until its
@@ -1246,11 +1462,23 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
               case 'tool_result': {
                 const toolCall = toolCallsById.get(item.toolUseId);
                 if (toolCall) {
-                  const { isDuplicate } = applyToolResultToToolCall(toolCall, item.content, item.isError);
+                  const { isDuplicate, isBackgroundAck } = applyToolResultToToolCall(toolCall, item.content, item.isError);
                   if (isDuplicate) break;
+                  // #1341: the harness backgrounded an interactive prompt that
+                  // is still waiting on the user. The call is still outstanding
+                  // -- don't decrement the watchdog's counter or settle
+                  // anything on a result that hasn't arrived yet.
+                  if (isBackgroundAck) break;
                   // Tool finished -- re-arm the stall watchdog for the model's
                   // next thinking/generation phase. NIM-1481.
                   outstandingToolCalls = Math.max(0, outstandingToolCalls - 1);
+
+                  // The result is attached by mutating the object yielded at
+                  // tool_use, which a consumer that already handled that chunk
+                  // can never observe. Announce the completion so liveness
+                  // tracking -- the Git journal behind the menu-bar indicator --
+                  // can settle the call instead of spinning until turn end.
+                  yield { type: 'tool_result', toolCall };
 
                   // Diagnostic: detect "Stream closed" errors from the native binary
                   const resultText = typeof item.content === 'string' ? item.content : JSON.stringify(item.content);
@@ -1517,9 +1745,13 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
               } : {}),
               ...(modelUsageData ? { modelUsage: modelUsageData } : {}),
               ...(lastMessageContextTokens !== undefined ? { contextFillTokens: lastMessageContextTokens } : {}),
+              ...(structuredContextUsage ? { contextReport: structuredContextUsage } : {}),
               ...(receivedCompactBoundary ? { contextCompacted: true } : {})
             };
             completeEmitted = true;
+            // The binary got a turn all the way through; give the next one a
+            // fresh crash-retry budget (#1361).
+            this.abnormalExitRetryCount = 0;
 
             // Break out of the chunk loop. The for-await would otherwise stay
             // alive indefinitely on sessions where the binary's task-list
@@ -1546,7 +1778,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
             // Keep draining until every task reports a terminal status (or the
             // loop exits for another reason, handled by finalizeBackgroundDrain).
             if (willDrainSubagents) {
-              console.log(`[CLAUDE-CODE] SUBAGENT_DRAIN: lead turn complete but ${this.activeTasks.size} sub-agent task(s) still running; deferring teardown to drain`);
+              console.log(`[CLAUDE-CODE] SUBAGENT_DRAIN: lead turn complete but ${countRunningTasks(this.activeTasks.values())} sub-agent task(s) still running; deferring teardown to drain`);
               continue;
             }
             break;
@@ -1763,6 +1995,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
           ...(modelUsageData ? { modelUsage: modelUsageData } : {}),
           // Context fill from last assistant message (for context window display)
           ...(lastMessageContextTokens !== undefined ? { contextFillTokens: lastMessageContextTokens } : {}),
+              ...(structuredContextUsage ? { contextReport: structuredContextUsage } : {}),
           // Signal that compaction happened so AIService clears stale currentContext
           ...(receivedCompactBoundary ? { contextCompacted: true } : {})
         };
@@ -1772,6 +2005,16 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
     } catch (error: any) {
       const errorTime = Date.now() - startTime;
       const isAbort = error.name === 'AbortError' || error.message?.includes('aborted');
+
+      // #1361: a native subprocess fault reaches here as a bare
+      // `exited with code <wait status>`. Classify it before anything else
+      // consumes error.message, so both the transcript and the retry decision
+      // work from the fault rather than the integer.
+      const abnormalExit = isAbort ? null : classifyAbnormalChildExit({
+        errorMessage: error.message,
+        stderrLines,
+        producedOutput: sawAssistantOutputThisTurn || completeEmitted,
+      });
 
       // Only log details for non-abort errors
       if (!isAbort) {
@@ -1814,6 +2057,19 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
             }
           }
         }
+
+        // #1361: log the same inherited-process attributes for a native fault,
+        // then swap the raw wait status for the readable cause. The transcript,
+        // the DB error record and the renderer all read error.message.
+        if (abnormalExit) {
+          const diag = collectSpawnCrashDiagnostics(spawnDiagContext ?? {});
+          console.error(
+            `[CLAUDE-CODE] Abnormal subprocess exit: kind=${abnormalExit.kind} `
+            + `code=${abnormalExit.exitCode} retryable=${abnormalExit.retryable} `
+            + `diagnostics=${JSON.stringify(diag)}`
+          );
+          error.message = abnormalExit.message;
+        }
       }
 
       if (isAbort) {
@@ -1826,6 +2082,36 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
             isComplete: true
           };
         }
+      } else if (
+        abnormalExit?.retryable
+        && this.abnormalExitRetryCount < ClaudeCodeProvider.MAX_ABNORMAL_EXIT_RETRIES
+      ) {
+        // #1361: the crash killed the subprocess before it produced anything,
+        // so nothing has reached the transcript and re-running the turn cannot
+        // duplicate output. In the reported case the fault was intermittent at
+        // ~80%, which one retry very nearly covers.
+        //
+        // Re-entry, not a loop: `yield*` delegates the whole retried turn, and
+        // the inner call re-runs setup from the caller's original arguments.
+        // The budget is per-provider and is only cleared by a completed turn or
+        // an abort, so a binary that crashes every time settles after one extra
+        // attempt instead of spinning.
+        this.abnormalExitRetryCount++;
+        console.warn(
+          `[CLAUDE-CODE] Retrying turn after ${abnormalExit.kind} `
+          + `(attempt ${this.abnormalExitRetryCount}/${ClaudeCodeProvider.MAX_ABNORMAL_EXIT_RETRIES})`
+        );
+        // sendMessage consumes this flag at entry, so restore it for the retry.
+        this.markMessagesAsHidden = hideMessages;
+        yield* this.sendMessage(
+          originalMessage,
+          documentContext,
+          sessionId,
+          messages,
+          workspacePath,
+          attachments,
+        );
+        return;
       } else {
         console.error(`[CLAUDE-CODE] Error occurred`);
 
@@ -1855,7 +2141,12 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
 
         yield {
           type: 'error',
-          error: error.message
+          error: error.message,
+          // #1361: the `complete` chunk below is emitted purely to clear the
+          // renderer's spinner. Without this flag the consumer cannot tell a
+          // crashed turn from a finished one and settles the session as a
+          // success with an empty response.
+          ...(abnormalExit ? { isProcessCrash: true } : {}),
         };
 
         // CRITICAL: Always send completion after error to clean up UI state.
@@ -1881,6 +2172,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
       // against the torn-down control channel and leaks. NIM-1470.
       const queryForDrainCleanup = this.leadQuery;
       this.leadQuery = null;
+      ClaudeCodeProvider.streamingInstances.delete(this);
       this.abortController = null;
       this.wasInterrupted = false;
       this.interruptResolve = null;
@@ -1908,6 +2200,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
       this.drainingBackgroundTasks = false;
       this.drainExitCause = 'resolved';
       this.drainTerminalNotifications = [];
+      this.drainGraceExpired = false;
 
       // Note: markMessagesAsHidden is reset at the START of sendMessage to prevent race conditions
 
@@ -1922,6 +2215,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
   abort(): void {
     console.log('[CLAUDE-CODE] Abort called, abortController:', this.abortController ? 'exists' : 'NULL');
     this.streamClosedRetryCount = 0;
+    this.abnormalExitRetryCount = 0;
     this.resetStreamClosedTurnState();
 
     // Resolve the interrupt promise so the Promise.race in the streaming loop
@@ -1953,6 +2247,17 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
 
     // Abort all managed teammates
     this.teammateManager.killAll();
+
+    // Background sub-agent tasks run inside the subprocess we just killed, so
+    // their terminal task_notification can never arrive. Left 'running', they
+    // make the NEXT turn's `result` defer teardown and burn the whole drain
+    // grace on work nobody is waiting for -- the session sits 'running' and
+    // its queued prompts stall behind it. NIM-2458.
+    const orphanedTasks = reapRunningTasks(this.activeTasks.values());
+    if (orphanedTasks.length > 0) {
+      console.warn(`[CLAUDE-CODE] SUBAGENT_TASK: abort orphaned ${orphanedTasks.length} running task(s); marking stopped. tasks=[${orphanedTasks.join(', ')}]`);
+      this.emitTaskUpdate(this.currentSessionId).catch(() => {});
+    }
 
     // Clean up MCP health checks and persistent query reference
     this.stopMcpHealthChecks();
@@ -2046,12 +2351,16 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
    * This is a graceful stop — unlike abort(), it doesn't kill the SDK subprocess.
    *
    * If there is no active lead query, defer to the BaseAIProvider default
-   * (hard abort) so the caller still gets a sensible signal back.
+   * (hard abort) so the caller still gets a sensible signal back, and report
+   * `hadActiveTurn: false` — with no query and (usually) no abortController
+   * that abort is a no-op, so the caller has to clear the session's live state
+   * itself or a stuck-running session strands its queue forever (NIM-2434).
    */
-  async interruptCurrentTurn(): Promise<{ method: 'interrupt' | 'abort' }> {
+  async interruptCurrentTurn(): Promise<InterruptTurnResult> {
     if (!this.leadQuery) {
       console.log('[CLAUDE-CODE] interruptCurrentTurn: no active lead query, falling back to abort');
-      return super.interruptCurrentTurn();
+      const outcome = await super.interruptCurrentTurn();
+      return { ...outcome, hadActiveTurn: false };
     }
 
     console.log('[CLAUDE-CODE] interruptCurrentTurn: interrupting active lead query');
@@ -2068,6 +2377,19 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
       await this.leadQuery.interrupt();
     } catch (err) {
       console.warn('[CLAUDE-CODE] interruptCurrentTurn: interrupt() failed (transport may be closed):', err);
+    }
+
+    // Background sub-agent tasks stream their task_notification on the query we
+    // just interrupted, and the streaming loop breaks on that interrupt, so a
+    // terminal status can no longer reach handleSystemTask -- the same reason
+    // abort() reaps them. Left 'running', they make the NEXT turn's `result`
+    // defer teardown to the drain loop: the session sits 'running' with its
+    // queued prompts stalled behind it, and a silent drain then tells the
+    // session a sub-agent was interrupted when none was. #1269.
+    const orphanedTasks = reapRunningTasks(this.activeTasks.values());
+    if (orphanedTasks.length > 0) {
+      console.warn(`[CLAUDE-CODE] SUBAGENT_TASK: interrupt orphaned ${orphanedTasks.length} running task(s); marking stopped. tasks=[${orphanedTasks.join(', ')}]`);
+      this.emitTaskUpdate(this.currentSessionId).catch(() => {});
     }
 
     return { method: 'interrupt' };
@@ -2521,13 +2843,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
     });
 
     if (outcome.markStopped) {
-      const stranded: string[] = [];
-      for (const task of this.activeTasks.values()) {
-        if (task.status === 'running') {
-          task.status = 'stopped';
-          stranded.push(task.description || task.taskId);
-        }
-      }
+      const stranded = reapRunningTasks(this.activeTasks.values());
       console.warn(`[CLAUDE-CODE] SUBAGENT_DRAIN: loop exited (cause=${this.drainExitCause}) with ${stranded.length} unresolved sub-agent task(s); marking stopped. autoContinue=${outcome.autoContinue}. tasks=[${stranded.join(', ')}]`);
       this.emitTaskUpdate(sessionId).catch(() => {});
     }
@@ -2620,12 +2936,17 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
         // the results (the CLI's own continuation turn cannot be surfaced —
         // the consumer already received complete). NIM-1470.
         if (this.drainingBackgroundTasks) {
+          const status = existing.status === 'running' ? 'completed' : existing.status;
           this.drainTerminalNotifications.push({
             taskId: chunk.task_id,
             description: existing.description,
-            status: existing.status === 'running' ? 'completed' : existing.status,
+            status,
             summary: chunk.summary,
             outputFile: chunk.output_file,
+            // A 'stopped' that arrives after our grace timer closed the stream
+            // is our own kill, not a user stop — report it as one. #1355.
+            killedByTeardown: status === 'stopped' && this.drainGraceExpired,
+            elapsedMs: Date.now() - existing.startedAt,
           });
         }
         this.emitTaskUpdate(sessionId).catch(() => {});
@@ -2820,6 +3141,10 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
    */
   private startMcpHealthChecks(): void {
     this.stopMcpHealthChecks();
+    // Poll once immediately so the in-session status surface has something to
+    // show during the first 30 seconds. Without this the UI cannot tell an
+    // unpolled session from one whose servers all vanished.
+    this.checkMcpServerStatuses().catch(() => {});
     // Poll every 30 seconds
     this.mcpHealthCheckInterval = setInterval(() => {
       this.checkMcpServerStatuses().catch(() => {});
@@ -2859,14 +3184,32 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
             console.warn(`[CLAUDE-CODE] MCP server "${server.name}" disconnected: ${server.error || 'unknown reason'}`);
           }
         }
-        this.mcpServerStatuses.set(server.name, server);
       }
 
-      if (changes.length > 0) {
+      // A server that drops out of the list entirely is a change too. Keeping
+      // the stale entry would leave the UI claiming it is still connected.
+      const reported = new Set(statuses.map((s) => s.name));
+      let removed = false;
+      for (const name of Array.from(this.mcpServerStatuses.keys())) {
+        if (!reported.has(name)) {
+          this.mcpServerStatuses.delete(name);
+          removed = true;
+        }
+      }
+
+      for (const server of statuses) {
+        this.mcpServerStatuses.set(server.name, server);
+      }
+      this.mcpStatusesLastCheckedAt = Date.now();
+
+      if (changes.length > 0 || removed) {
         this.emit('mcpServerStatus:changed', {
           sessionId: this.currentSessionId,
           servers: Array.from(this.mcpServerStatuses.values()),
           changes,
+          lastCheckedAt: this.mcpStatusesLastCheckedAt,
+          configuredNames: this.mcpSnapshotServerNames,
+          withheldNames: this.mcpWithheldServerNames,
         });
       }
     } catch {
@@ -2895,6 +3238,51 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
    */
   getMcpServerStatuses(): McpServerStatusInfo[] {
     return Array.from(this.mcpServerStatuses.values());
+  }
+
+  /**
+   * Server names from the frozen per-session MCP config snapshot, or null if
+   * that snapshot has not settled yet.
+   *
+   * Synchronous by design. Awaiting `mcpServersSnapshotJsonPromise` here would
+   * force the config read this session deliberately defers/freezes, so an
+   * unsettled snapshot reports nothing rather than triggering one. Names only —
+   * the snapshot values hold credentials. See NIM-1988.
+   */
+  getMcpConfiguredServerNames(): string[] | null {
+    return this.mcpSnapshotServerNames ? [...this.mcpSnapshotServerNames] : null;
+  }
+
+  /**
+   * Servers configured for this session but withheld from the CLI for failing
+   * the OAuth check. Names only, same as above — the config values hold
+   * credentials.
+   */
+  getMcpWithheldServerNames(): string[] | null {
+    return this.mcpWithheldServerNames ? [...this.mcpWithheldServerNames] : null;
+  }
+
+  /** Epoch ms of the last poll that returned, or null if never polled. */
+  getMcpStatusLastCheckedAt(): number | null {
+    return this.mcpStatusesLastCheckedAt;
+  }
+
+  /**
+   * Everything the in-session MCP status surface needs, in one call.
+   * Read-only: no SDK round trip, no config read, no prompt bytes.
+   */
+  getMcpSessionStatus(): {
+    servers: McpServerStatusInfo[];
+    configuredNames: string[] | null;
+    withheldNames: string[] | null;
+    lastCheckedAt: number | null;
+  } {
+    return {
+      servers: this.getMcpServerStatuses(),
+      configuredNames: this.getMcpConfiguredServerNames(),
+      withheldNames: this.getMcpWithheldServerNames(),
+      lastCheckedAt: this.mcpStatusesLastCheckedAt,
+    };
   }
 
   getCapabilities(): ProviderCapabilities {
@@ -3593,6 +3981,31 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
   }
 
 
+  /**
+   * Resolve the session's git snapshot on the first turn and freeze it.
+   * `buildSystemPrompt` is synchronous, so this must be awaited before it runs.
+   *
+   * #1177: the frozen-ness is the whole point. We disable the CLI's own
+   * git-status block because it is regenerated from the live working tree by
+   * every resumed turn's process, invalidating the message prefix behind it.
+   * Replacing it with a section that ALSO moves between turns would fix nothing.
+   * The flag is set before the await so a concurrent second turn cannot resolve
+   * a second value, and a rejected loader freezes to no context.
+   */
+  protected async ensureGitContext(workspacePath?: string): Promise<void> {
+    if (this.gitContextFrozen) return;
+    this.gitContextFrozen = true;
+    if (!workspacePath || !ClaudeCodeDeps.gitContextLoader) return;
+    try {
+      this.frozenGitContext = (await ClaudeCodeDeps.gitContextLoader(workspacePath)) || undefined;
+    } catch (error) {
+      // Degrade to no git context for the life of the session. A hung `git
+      // status` froze new agent sessions once already (#929) — never let this
+      // block a turn, and never retry it later.
+      console.warn('[CLAUDE-CODE] Failed to resolve git context:', error);
+    }
+  }
+
   protected buildSystemPrompt(documentContext?: DocumentContext, enableAgentTeams?: boolean, isMetaAgent: boolean = false, workflowPreset: MetaAgentWorkflowPreset = 'default'): string {
     if (isMetaAgent) {
       return buildMetaAgentSystemPrompt('claude', workflowPreset, {
@@ -3643,6 +4056,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
       hasSessionNaming,
       hasOutOfBandNaming: alreadyNamedOutOfBand,
       worktreePath,
+      gitContext: this.frozenGitContext,
       isVoiceMode,
       voiceModeCodingAgentPrompt,
       enableAgentTeams,
@@ -3776,11 +4190,10 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
    */
   private async checkSessionExists(sessionId: string): Promise<boolean> {
     try {
-      const os = await import('os');
       const fs = await import('fs/promises');
       const path = await import('path');
 
-      const historyPath = path.join(os.homedir(), '.claude', 'history.jsonl');
+      const historyPath = path.join(resolveClaudeConfigDir(), 'history.jsonl');
 
       let content: string;
       try {

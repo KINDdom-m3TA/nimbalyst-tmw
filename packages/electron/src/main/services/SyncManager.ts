@@ -15,24 +15,47 @@
 
 import type { SessionStore } from '@nimbalyst/runtime';
 import { asPersonalMemberId } from '@nimbalyst/runtime';
+import type { PersonalJwt, PersonalMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
 import type { DeviceInfo } from '@nimbalyst/runtime/sync';
 import * as syncModule from '@nimbalyst/runtime/sync';
-import { getSessionSyncConfig, setSessionSyncConfig, getReleaseChannel, getDefaultAIModel, getAlphaFeatures, getPreferredAgentLanguage, store, type SessionSyncConfig } from '../utils/store';
+import { getSessionSyncConfig, setSessionSyncConfig, getReleaseChannel, getDefaultAIModel, getAlphaFeatures, getPreferredAgentLanguage, getAttachmentStagingConfig, store, type SessionSyncConfig } from '../utils/store';
 import { logger } from '../utils/logger';
 import { getCredentials } from './CredentialService';
-import { getStytchUserId, isAuthenticated, getPersonalOrgId, getPersonalUserId, resolvePersonalUserId, getPersonalSessionJwt, refreshPersonalSession } from './StytchAuthService';
+import { getStytchUserId, isAuthenticated, getPersonalOrgId, getPersonalUserId, resolvePersonalUserId, getPersonalSessionJwt, refreshPersonalSessionDetailed } from './StytchAuthService';
+import { describePersonalJwtFailure, type PersonalRefreshFailureReason } from './auth/personalJwtFailure';
 import { app } from 'electron';
 import * as os from 'os';
 import { getProjectFileSyncService } from './ProjectFileSyncService';
 import { startProjectFileSync, stopAllProjectFileSync } from '../file/WorkspaceWatcher';
 import { windowStates } from '../window/WindowManager';
-import { getNormalizedGitRemote } from '../utils/gitUtils';
+import { getGitRemoteIdentities } from '../utils/gitUtils';
 import { resolveProjectPath } from '../utils/workspaceDetection';
 import { createHash } from 'crypto';
 import { setSleepPreventionMode, setSyncConnected, shutdownSleepPrevention, type PreventSleepMode } from './PowerSaveService';
 import { reconnectAllTrackerSyncs } from './TrackerSyncManager';
 import { BrowserWindow } from 'electron';
 import { timeStartupPhase } from '../utils/startupTiming';
+import { compressImageIfNeeded } from '../mcp/mcpImageCompression';
+import { resolveWorkspaceAttachmentStagingDirectory } from './attachments/attachmentStagingRoot';
+
+// Screenshots taken by a desktop session are only viewable on mobile if their
+// bytes ride along in the synced message -- there is no desktop -> mobile
+// attachment channel. Give the truncator a way to downscale the big ones
+// instead of dropping them (nativeImage lives in main, the truncator does not).
+//
+// The budget is much tighter than the MCP one: every screenshot permanently
+// occupies part of a SessionRoom's storage cap on the sync server. 150 KB at
+// 1600px still gives real zoom headroom on a phone.
+const MOBILE_SYNC_IMAGE_MAX_BYTES = 150 * 1024;
+const MOBILE_SYNC_IMAGE_MAX_DIMENSION = 1600;
+
+syncModule.setSyncImageCompressor((data, mimeType) => {
+  const { data: out, mimeType: outMime } = compressImageIfNeeded(data, mimeType, {
+    maxBytes: MOBILE_SYNC_IMAGE_MAX_BYTES,
+    maxDimension: MOBILE_SYNC_IMAGE_MAX_DIMENSION,
+  });
+  return { data: out, mimeType: outMime };
+});
 
 function loadSyncModule() {
   return syncModule;
@@ -161,9 +184,6 @@ let isScreenLocked = false;
 /** Timestamp when the desktop first connected */
 let connectionTime = Date.now();
 
-/** Cached user ID for device info */
-let cachedUserId: string | null = null;
-
 /** Configurable idle threshold - default 5 minutes, can be set lower for testing */
 let idleThresholdMs = 5 * 60 * 1000; // 5 minutes default
 
@@ -249,7 +269,7 @@ export function deriveDeviceStatus(): 'active' | 'idle' | 'away' {
  * Get or generate a stable device ID.
  * Uses the user ID + a hash of machine identifiers for stability.
  */
-function getDeviceId(userId: string): string {
+function getDeviceId(personalMemberId: PersonalMemberId): string {
   if (cachedDeviceId) {
     return cachedDeviceId;
   }
@@ -259,7 +279,7 @@ function getDeviceId(userId: string): string {
   const machineId = `${os.hostname()}-${process.platform}`;
   const crypto = require('crypto');
   const hash = crypto.createHash('sha256')
-    .update(`${userId}:${machineId}`)
+    .update(`${personalMemberId}:${machineId}`)
     .digest('hex')
     .substring(0, 16);
 
@@ -271,7 +291,7 @@ function getDeviceId(userId: string): string {
  * Get device info for sync presence awareness.
  * Returns current presence state (focus, activity, status).
  */
-function getDeviceInfo(userId: string): DeviceInfo {
+function getDeviceInfo(personalMemberId: PersonalMemberId): DeviceInfo {
   const platform = process.platform === 'darwin' ? 'macos'
     : process.platform === 'win32' ? 'windows'
     : process.platform === 'linux' ? 'linux'
@@ -286,7 +306,7 @@ function getDeviceInfo(userId: string): DeviceInfo {
     .replace(/\b\w/g, c => c.toUpperCase());
 
   return {
-    deviceId: getDeviceId(userId),
+    deviceId: getDeviceId(personalMemberId),
     name: friendlyName || 'Desktop',
     type: 'desktop',
     platform,
@@ -370,19 +390,13 @@ export async function initializeSync(baseStore: SessionStore): Promise<SessionSt
       personalUserId = getPersonalUserId();
     }
     if (!personalUserId) {
-      // Last-resort fallback: the active/team member id is NOT a personal member
-      // id (see jwtScopes / NIM-859) -- using it for the personal index room is
-      // wrong for multi-org users, but better than not syncing at all. The
-      // explicit cast records that we KNOW this is a personal-scope violation.
-      logger.main.warn('[SyncManager] Could not resolve personalUserId, falling back to stytchUserId (NOT personal-scoped):', stytchUserId);
-      // stytchUserId is guaranteed non-null (guarded above). The cast records
-      // that we KNOWINGLY use the active/team member id for the personal room.
-      personalUserId = asPersonalMemberId(stytchUserId);
+      logger.main.warn('[SyncManager] Could not resolve a personal member id; personal session sync remains disabled');
+      return baseStore;
     }
 
     logger.main.info('[SyncManager] Initializing session sync...', {
       serverUrl,
-      userId: stytchUserId,
+      activeMemberId: stytchUserId,
       personalUserId,
     });
 
@@ -397,8 +411,6 @@ export async function initializeSync(baseStore: SessionStore): Promise<SessionSt
     const encryptionKey = await deriveEncryptionKey(credentials.encryptionKeySeed, `nimbalyst:${personalUserId}`);
     state.encryptionKey = encryptionKey;
 
-    // Cache user ID for dynamic device info callback
-    cachedUserId = stytchUserId;
     connectionTime = Date.now(); // Reset connection time on init
 
     // Apply idle timeout from config (default 5 minutes)
@@ -407,7 +419,7 @@ export async function initializeSync(baseStore: SessionStore): Promise<SessionSt
     }
 
     // Get initial device info for logging
-    const initialDeviceInfo = getDeviceInfo(stytchUserId);
+    const initialDeviceInfo = getDeviceInfo(personalUserId);
     logger.main.info('[SyncManager] Initial device info:', JSON.stringify(initialDeviceInfo));
 
     // Refresh the personal JWT when its `exp` claim is within this window.
@@ -421,13 +433,17 @@ export async function initializeSync(baseStore: SessionStore): Promise<SessionSt
     // throttle on success -- the expiry check above is what gates that path.
     const FAILED_REFRESH_BACKOFF_MS = 5_000;
     let lastFailedRefreshTime = 0;
+    /** Why the most recent refresh attempt failed, so the thrown error can say so. */
+    let lastRefreshFailureReason: PersonalRefreshFailureReason | null = null;
+    /** The rendered transport error behind a `network` failure, for the log line. */
+    let lastRefreshFailureDetail: string | null = null;
 
     /**
      * Returns the `exp` claim (in ms since epoch) for the JWT, or null if it
      * can't be decoded. JWT signatures are verified by the server; we only
      * read `exp` to decide if a refresh is needed before reconnect.
      */
-    function getJwtExpiryMs(jwt: string | null): number | null {
+    function getJwtExpiryMs(jwt: PersonalJwt | null): number | null {
       if (!jwt) return null;
       const parts = jwt.split('.');
       if (parts.length !== 3) return null;
@@ -495,7 +511,7 @@ export async function initializeSync(baseStore: SessionStore): Promise<SessionSt
     const provider = createCollabV3Sync({
       serverUrl,
       orgId: personalOrgId,
-      userId: personalUserId,
+      personalMemberId: personalUserId,
       getJwt: async () => {
         // Session sync uses the PERSONAL JWT -- its sub claim matches personalUserId
         // which the server validates against the room URL path. The team-scoped JWT
@@ -513,12 +529,22 @@ export async function initializeSync(baseStore: SessionStore): Promise<SessionSt
           const failedRecently =
             lastFailedRefreshTime > 0 && now - lastFailedRefreshTime < FAILED_REFRESH_BACKOFF_MS;
           if (!failedRecently) {
-            const refreshed = await refreshPersonalSession(serverUrl);
-            if (!refreshed) {
+            const outcome = await refreshPersonalSessionDetailed(serverUrl);
+            if (!outcome.ok) {
               lastFailedRefreshTime = Date.now();
-              logger.main.warn('[SyncManager] Personal session refresh failed, JWT may be stale');
+              lastRefreshFailureReason = outcome.reason;
+              lastRefreshFailureDetail = outcome.reason === 'network' ? outcome.detail ?? null : null;
+              // Name the URL AND the transport error. "refresh failed" alone is
+              // what made an unreachable collab worker unreadable in main.log.
+              logger.main.warn(
+                outcome.reason === 'network'
+                  ? `[SyncManager] Sync server ${serverUrl} is unreachable (${lastRefreshFailureDetail ?? 'unknown transport error'}) - personal session refresh will retry; credentials are NOT being cleared`
+                  : `[SyncManager] Personal session refresh rejected by ${serverUrl} (${outcome.reason}), JWT may be stale`,
+              );
             } else {
               lastFailedRefreshTime = 0;
+              lastRefreshFailureReason = null;
+              lastRefreshFailureDetail = null;
             }
           }
         }
@@ -533,16 +559,22 @@ export async function initializeSync(baseStore: SessionStore): Promise<SessionSt
           // Returning an already-expired JWT guarantees the server rejects the
           // upgrade and the WS error loop never escapes. Throw so the caller's
           // reconnect-with-backoff path runs instead of the bad-token hammer.
-          throw new Error(
-            `[SyncManager] Personal JWT is expired (exp=${new Date(freshExpiryMs).toISOString()}) and refresh did not produce a fresh one`,
-          );
+          // The message must name the ACTUAL cause: an unreachable sync server
+          // is not a token problem, and calling it one has twice sent
+          // investigations after a JWT bug that did not exist.
+          throw describePersonalJwtFailure({
+            reason: lastRefreshFailureReason,
+            expiryMs: freshExpiryMs,
+            serverUrl,
+            detail: lastRefreshFailureDetail,
+          });
         }
 
         return freshJwt;
       },
       encryptionKey,
       // Use callback for dynamic presence updates (called every 30s)
-      getDeviceInfo: () => getDeviceInfo(stytchUserId),
+      getDeviceInfo: () => getDeviceInfo(personalUserId),
     });
     logger.main.info('[SyncManager] Created CollabV3 sync provider with device:', initialDeviceInfo.name);
 
@@ -933,14 +965,16 @@ export function isSyncProviderReady(): boolean {
 export function getPersonalDocSyncConfig(): {
   serverUrl: string;
   orgId: string;
-  userId: string;
+  personalMemberId: PersonalMemberId;
   encryptionKeyRaw: CryptoKey;
 } | null {
   if (!isSyncEnabled() || !state.encryptionKey || !state.config) return null;
 
   const personalOrgId = state.config.personalOrgId || getPersonalOrgId();
-  const personalUserId = state.config.personalUserId || getPersonalUserId() || getStytchUserId();
-  if (!personalOrgId || !personalUserId) return null;
+  const personalMemberId = state.config.personalUserId
+    ? asPersonalMemberId(state.config.personalUserId)
+    : getPersonalUserId();
+  if (!personalOrgId || !personalMemberId) return null;
 
   const isDev = process.env.NODE_ENV !== 'production';
   const env = isDev ? state.config.environment : undefined;
@@ -949,7 +983,7 @@ export function getPersonalDocSyncConfig(): {
   return {
     serverUrl,
     orgId: personalOrgId,
-    userId: personalUserId,
+    personalMemberId,
     encryptionKeyRaw: state.encryptionKey,
   };
 }
@@ -1215,7 +1249,9 @@ async function getAvailableModelsForMobile(): Promise<{ models: Array<{ id: stri
       ...apiKeys,
       lmstudio_url: providerSettings['lmstudio']?.baseUrl || 'http://127.0.0.1:8234'
     };
-    const allModels = await ModelRegistry.getAllModels(modelsConfig, enabledSet as Set<any>);
+    // Mobile syncs one account-wide model list, not a per-project one, and
+    // `enabledSet` above never includes opencode -- the only project-scoped lane.
+    const allModels = await ModelRegistry.getAllModels(modelsConfig, undefined, enabledSet as Set<any>);
     // Filter to enabled models (model-level filtering for specific model selection)
     const enabledModels = allModels.filter(model => {
       const ps = providerSettings[model.provider] as { enabled?: boolean; models?: string[]; hiddenModels?: string[] } | undefined;
@@ -1317,11 +1353,12 @@ export async function syncProjectCommandsToMobile(
   }
 
   try {
-    // Compute gitRemoteHash from the workspace's git remote URL
+    // Compute gitRemoteHash from the workspace's git remote URL. This is a
+    // freshly written identity, so it uses the canonical (credential-free) form.
     let gitRemoteHash: string | undefined;
-    const gitRemote = await getNormalizedGitRemote(workspacePath);
+    const gitRemote = await getGitRemoteIdentities(workspacePath);
     if (gitRemote) {
-      gitRemoteHash = createHash('sha256').update(gitRemote).digest('hex');
+      gitRemoteHash = createHash('sha256').update(gitRemote.canonical).digest('hex');
     }
 
     await provider.syncProjectConfig(workspacePath, {
@@ -1364,8 +1401,9 @@ export async function decryptMobileAttachments(
   }
 
   const { AttachmentService } = await import('./AttachmentService');
-  const userDataPath = app.getPath('userData');
-  const attachmentService = new AttachmentService(workspacePath, userDataPath);
+  const stagingConfig = getAttachmentStagingConfig();
+  const stagingDirectory = resolveWorkspaceAttachmentStagingDirectory(workspacePath);
+  const attachmentService = new AttachmentService(workspacePath, stagingDirectory, stagingConfig.mode);
 
   const results: import('@nimbalyst/runtime').ChatAttachment[] = [];
 

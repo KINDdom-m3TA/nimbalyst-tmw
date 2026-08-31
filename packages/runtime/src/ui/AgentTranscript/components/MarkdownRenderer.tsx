@@ -14,9 +14,14 @@ import { rehypeAutolinkTrackerRefs } from '../markdown/rehypeAutolinkTrackerRefs
 import { rehypeAutolinkSessionRefs } from '../markdown/rehypeAutolinkSessionRefs';
 import { TrackerReferenceChip } from '../../../plugins/TrackerLinkPlugin';
 import { TRACKER_REFERENCE_URN_SCHEME } from '../../../plugins/TrackerLinkPlugin/TrackerReferenceNode';
+import { isTrackerReferenceKey } from '../../../plugins/TrackerLinkPlugin/trackerReferenceHref';
 import { trackerIssueKeyPrefixesAtom } from '../../../plugins/TrackerPlugin/trackerDataAtoms';
 import { SessionReferenceChip } from '../session/SessionReferenceChip';
 import { sessionRefMapAtom } from '../session/sessionRefAtoms';
+import {
+  dispatchAppActionHref,
+  isAppActionHref,
+} from '../../../utils/appActionLinks';
 
 // Inject MarkdownRenderer styles once (for syntax highlighting, scrollbar, and overflow wrapper)
 const injectMarkdownRendererStyles = () => {
@@ -255,8 +260,10 @@ interface MarkdownRendererProps {
   content: string;
   isUser?: boolean;
   isSystemMessage?: boolean;
-  /** Optional: Open local file links directly in the editor */
-  onOpenFile?: (filePath: string) => void;
+  /** Optional: Open local file links directly in the editor. `location` carries
+   *  the `:line[:col]` suffix when the link had one, so the editor can scroll
+   *  there instead of opening at the top. */
+  onOpenFile?: (filePath: string, location?: TranscriptFileLocation) => void;
   /**
    * @deprecated Session UUID references now render as a `SessionReferenceChip`
    * that opens the session via the `open-ai-session` event. Still accepted so
@@ -290,9 +297,63 @@ function stripQueryAndHash(value: string): string {
   return result;
 }
 
-function stripLineAndColumnSuffix(filePath: string): string {
-  // Supports /path/file.ts:42 and /path/file.ts:42:7 references.
-  return filePath.replace(/:(\d+)(?::(\d+))?$/, '');
+/** A position inside a file, as carried by a `:42` / `:42:7` link suffix. */
+export interface TranscriptFileLocation {
+  /** 1-based line. */
+  line: number;
+  /** 1-based column. Honored by Monaco; the rich markdown view is block-granular. */
+  column?: number;
+}
+
+/** A file reference from the transcript, with the location suffix parsed out. */
+export interface TranscriptFileTarget {
+  path: string;
+  line?: number;
+  column?: number;
+}
+
+/** Narrow a target to its location, or undefined when the link carried no line. */
+export function transcriptFileLocation(
+  target: TranscriptFileTarget | null | undefined,
+): TranscriptFileLocation | undefined {
+  if (!target || target.line === undefined) return undefined;
+  return target.column === undefined
+    ? { line: target.line }
+    : { line: target.line, column: target.column };
+}
+
+/**
+ * Upper bound on an accepted line number. Anything past this is a false
+ * positive (a port, a timestamp, a hash fragment) rather than a real location,
+ * so it is rejected here rather than being carried to an editor that would
+ * clamp it to the last line and scroll somewhere arbitrary.
+ */
+const MAX_PLAUSIBLE_LINE = 10_000_000;
+
+function isPlausibleLocation(value: number): boolean {
+  return Number.isInteger(value) && value >= 1 && value <= MAX_PLAUSIBLE_LINE;
+}
+
+/**
+ * Split a `/path/file.ts:42` or `/path/file.ts:42:7` reference into its path
+ * and location. Anchored to the end, so a Windows drive colon (`D:/work/x.ts`)
+ * is never mistaken for a line number.
+ */
+function parseLineAndColumnSuffix(filePath: string): TranscriptFileTarget {
+  const match = filePath.match(/:(\d+)(?::(\d+))?$/);
+  if (!match) return { path: filePath };
+
+  const line = Number(match[1]);
+  const column = match[2] === undefined ? undefined : Number(match[2]);
+  const path = filePath.slice(0, match.index);
+
+  if (!isPlausibleLocation(line)) return { path };
+
+  return {
+    path,
+    line,
+    ...(column !== undefined && isPlausibleLocation(column) ? { column } : {}),
+  };
 }
 
 function isAbsoluteFilePath(filePath: string): boolean {
@@ -318,8 +379,8 @@ const WINDOWS_DRIVE_PATH_RE = /^\/?([A-Za-z]:[\\/].*)$/;
  * reference URNs, which made `[NIM-123](nimbalyst://NIM-123)` links fall through
  * to a blank `<a>` (the tracker-chip check in the `a` renderer never saw the
  * href) and open an empty window on click. Preserve Windows absolute paths and
- * tracker reference URNs verbatim, and delegate everything else to the default
- * so `javascript:`/`data:` links stay sanitized.
+ * internal nimbalyst links verbatim, and delegate everything else to the
+ * default so `javascript:`/`data:` links stay sanitized.
  */
 export function transcriptUrlTransform(url: string): string {
   if (
@@ -340,14 +401,26 @@ export function parseTrackerReferenceHref(href?: string): string | null {
   const trimmed = href.trim();
   if (!trimmed.startsWith(TRACKER_REFERENCE_URN_SCHEME)) return null;
   const key = trimmed.slice(TRACKER_REFERENCE_URN_SCHEME.length);
-  return key.length > 0 ? key : null;
+  return isTrackerReferenceKey(key) ? key : null;
 }
 
 /**
  * Resolve href to an openable local file path when it looks like a filesystem link.
  * Returns null for non-file/external links.
+ *
+ * Path-only view of `resolveTranscriptFileTargetFromHref`, kept because most
+ * callers only ever need somewhere to open.
  */
 export function resolveTranscriptFilePathFromHref(href?: string): string | null {
+  return resolveTranscriptFileTargetFromHref(href)?.path ?? null;
+}
+
+/**
+ * Resolve href to an openable local file path plus any `:line[:col]` suffix, so
+ * a link like `/abs/notes.md:653` can land on line 653 rather than the top.
+ * Returns null for non-file/external links.
+ */
+export function resolveTranscriptFileTargetFromHref(href?: string): TranscriptFileTarget | null {
   if (!href) return null;
 
   const trimmedHref = href.trim();
@@ -386,7 +459,8 @@ export function resolveTranscriptFilePathFromHref(href?: string): string | null 
     }
   }
 
-  let cleanedPath = stripLineAndColumnSuffix(candidate);
+  const parsed = parseLineAndColumnSuffix(candidate);
+  let cleanedPath = parsed.path;
   if (!cleanedPath) {
     return null;
   }
@@ -402,7 +476,13 @@ export function resolveTranscriptFilePathFromHref(href?: string): string | null 
     cleanedPath = cleanedPath.slice('/abs/path/'.length);
   }
 
-  return isAbsoluteFilePath(cleanedPath) ? cleanedPath : null;
+  if (!isAbsoluteFilePath(cleanedPath)) return null;
+
+  return {
+    path: cleanedPath,
+    ...(parsed.line !== undefined ? { line: parsed.line } : {}),
+    ...(parsed.column !== undefined ? { column: parsed.column } : {}),
+  };
 }
 
 export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
@@ -678,6 +758,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
           ),
           // Links
           a: ({ href, children, node, style, ...props }: any) => {
+            const appActionLink = isAppActionHref(href);
             // Tracker reference links (`nimbalyst://NIM-123`) render as a live
             // status chip instead of an anchor.
             const trackerKey = parseTrackerReferenceHref(href);
@@ -705,10 +786,11 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
             // opening.
             const autolinkedPath = node?.properties?.dataFilePath as string | undefined;
             const resolvedAutolink =
-              onOpenFile && autolinkedPath ? stripLineAndColumnSuffix(autolinkedPath) : null;
-            const filePath =
-              resolvedAutolink ?? (onOpenFile ? resolveTranscriptFilePathFromHref(href) : null);
-            const isInternalLink = Boolean(filePath);
+              onOpenFile && autolinkedPath ? parseLineAndColumnSuffix(autolinkedPath) : null;
+            const fileTarget =
+              resolvedAutolink ?? (onOpenFile ? resolveTranscriptFileTargetFromHref(href) : null);
+            const filePath = fileTarget?.path ?? null;
+            const isInternalLink = Boolean(filePath) || appActionLink;
             return (
               <a
                 {...props}
@@ -716,9 +798,15 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
                 target={isInternalLink ? undefined : '_blank'}
                 rel={isInternalLink ? undefined : 'noopener noreferrer'}
                 onClick={(event) => {
+                  if (appActionLink) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    dispatchAppActionHref(href);
+                    return;
+                  }
                   if (filePath && onOpenFile) {
                     event.preventDefault();
-                    onOpenFile(filePath);
+                    onOpenFile(filePath, transcriptFileLocation(fileTarget));
                   }
                 }}
                 style={{

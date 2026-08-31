@@ -28,6 +28,7 @@
 import { Worker } from 'worker_threads';
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import { getDatabaseMaintenanceSettings } from '../../utils/store';
 import { app, BrowserWindow } from 'electron';
 import { logger } from '../../utils/logger';
 import { getPackageRoot } from '../../utils/appPaths';
@@ -108,6 +109,16 @@ function serializeBridgeError(err: unknown): SerializedError {
   return { message: String(err) };
 }
 
+/**
+ * Backup requests copy and scan the whole database, so their duration scales
+ * with the store, not with a UI expectation: a 6.3 GB database takes ~44s for
+ * the online copy alone. Under the default 60s request timeout the proxy gave
+ * up, dropped the pending entry, and discarded the success response that
+ * arrived later — so a backup that in fact completed was logged as failed and
+ * never recorded in backup health. This ceiling is a bus-drop guard only.
+ */
+const BACKUP_REQUEST_TIMEOUT_MS = 30 * 60_000;
+
 /** Resolve the on-disk path to the SQLite worker bundle. */
 function resolveWorkerPath(): string {
   if (app.isPackaged) {
@@ -131,6 +142,7 @@ export class SQLiteDatabaseProxy {
   private backupServiceFacade: AppDatabaseBackupService;
   private pgliteReader: LivePgliteReader | null = null;
   private migrationControl: MigrationControlHandler | null = null;
+  private migrationObserver: ((event: string, payload: unknown) => void) | null = null;
 
   constructor(opts: SQLiteDatabaseProxyOptions) {
     this.opts = opts;
@@ -144,6 +156,15 @@ export class SQLiteDatabaseProxy {
    */
   setPgliteReader(reader: LivePgliteReader): void {
     this.pgliteReader = reader;
+  }
+
+  /**
+   * Observe migration progress on the main process. Used by the boot-time
+   * forced migration to drive the splash screen; the renderer path uses the
+   * IPC broadcast instead.
+   */
+  setMigrationObserver(observer: (event: string, payload: unknown) => void): void {
+    this.migrationObserver = observer;
   }
 
   /** Inject the control handler used for `closePglite` / cutover hooks. */
@@ -183,6 +204,9 @@ export class SQLiteDatabaseProxy {
       schemaDir: this.opts.schemaDir,
       slowQueryThresholdMs: this.opts.slowQueryThresholdMs,
       sampleRate: this.opts.sampleRate,
+      // Resolved here rather than in the worker: electron-store needs the
+      // `electron` module, which a worker bundle cannot resolve.
+      backupCopiesKept: getDatabaseMaintenanceSettings().backupCopiesKept,
     };
     await this.send('init', payload, 120_000);
     this.initialized = true;
@@ -255,7 +279,7 @@ export class SQLiteDatabaseProxy {
     sessionCount?: number;
     historyCount?: number;
   }> {
-    return (await this.send('verifyBackup', { backupPath })) as {
+    return (await this.send('verifyBackup', { backupPath }, BACKUP_REQUEST_TIMEOUT_MS)) as {
       valid: boolean;
       error?: string;
       hasData?: boolean;
@@ -265,7 +289,11 @@ export class SQLiteDatabaseProxy {
   }
 
   async createBackup(): Promise<{ success: boolean; error?: string }> {
-    return (await this.send('createBackup')) as { success: boolean; error?: string };
+    return (await this.send(
+      'createBackup',
+      undefined,
+      BACKUP_REQUEST_TIMEOUT_MS,
+    )) as { success: boolean; error?: string };
   }
 
   /** Read-side backup status (returns null when no backup has run yet). */
@@ -322,6 +350,50 @@ export class SQLiteDatabaseProxy {
 
   async walCheckpoint(): Promise<unknown> {
     return this.send('walCheckpoint');
+  }
+
+  /** Apply a new backup-retention setting to the live service. */
+  async setBackupCopiesKept(copiesKept: number): Promise<void> {
+    await this.send('setBackupCopiesKept', { copiesKept });
+  }
+
+  /**
+   * Estimate what the tool-output retention pass would reclaim, from a bounded
+   * sample. Cheap enough for a confirmation prompt.
+   */
+  async toolRetentionEstimate(retentionDays: number): Promise<{
+    sampledRows: number;
+    sampleBytesSaved: number;
+    candidateRows: number;
+    estimatedBytesSaved: number;
+  }> {
+    return (await this.send('toolRetentionEstimate', { retentionDays })) as {
+      sampledRows: number;
+      sampleBytesSaved: number;
+      candidateRows: number;
+      estimatedBytesSaved: number;
+    };
+  }
+
+  /**
+   * Run the retention pass. Executes on the worker's background lane, so the
+   * app stays responsive while it works.
+   */
+  async toolRetentionRun(retentionDays: number, maxRows?: number): Promise<unknown> {
+    return this.send('toolRetentionRun', { retentionDays, maxRows });
+  }
+
+  /**
+   * Delete raw rows that render nothing, and collapse duplicate session/init
+   * frames. Separate from `toolRetentionRun` because it removes rows rather
+   * than rewriting payloads; see `createRawMessagePruneWork`.
+   */
+  async rawMessagePruneRun(
+    retentionDays: number,
+    maxRows?: number,
+    ignoreAge?: boolean,
+  ): Promise<unknown> {
+    return this.send('rawMessagePruneRun', { retentionDays, maxRows, ignoreAge });
   }
 
   // --------------------------------------------------------------------------
@@ -510,6 +582,17 @@ export class SQLiteDatabaseProxy {
       || msg.event === 'db:migration:failed'
     ) {
       this.broadcastToWindows(msg.event, msg.payload);
+      // Main-side observer. The boot-time forced migration drives the splash
+      // screen, which is a plain data-URL BrowserWindow with no preload — it
+      // cannot receive an ipcRenderer message, so the broadcast above never
+      // reaches it.
+      if (this.migrationObserver) {
+        try {
+          this.migrationObserver(msg.event, msg.payload);
+        } catch (err) {
+          logger.main.warn('[SQLiteProxy] migration observer threw', err);
+        }
+      }
       return;
     }
     if (msg.event === 'db:migration:cutoverSuccess') {

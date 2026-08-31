@@ -61,14 +61,59 @@ describe('SQLiteBackupService', () => {
     expect(status.lastSuccessfulBackup).toBeTruthy();
   });
 
-  it('rolls 3 backups: current -> previous -> oldest with each new backup', async () => {
+  const slotPath = (slot: 'current' | 'previous' | 'oldest') =>
+    path.join(backupDir, `nimbalyst.backup-${slot}.sqlite`);
+
+  it('keeps two generations by default: current -> previous', async () => {
+    // Each generation is a FULL copy, so this count is a direct multiplier on
+    // disk. The old hardcoded rolling-3 made a 4.6 GiB store occupy 18.5 GiB
+    // (#1248); two keeps a fallback generation at 3x instead of 4x.
     await svc.createBackup();
     await svc.createBackup();
     await svc.createBackup();
 
-    expect(fs.existsSync(path.join(backupDir, 'nimbalyst.backup-current.sqlite'))).toBe(true);
-    expect(fs.existsSync(path.join(backupDir, 'nimbalyst.backup-previous.sqlite'))).toBe(true);
-    expect(fs.existsSync(path.join(backupDir, 'nimbalyst.backup-oldest.sqlite'))).toBe(true);
+    expect(fs.existsSync(slotPath('current'))).toBe(true);
+    expect(fs.existsSync(slotPath('previous'))).toBe(true);
+    expect(fs.existsSync(slotPath('oldest'))).toBe(false);
+  });
+
+  it('rolls all three generations when the user opts back up to 3', async () => {
+    svc.setCopiesKept(3);
+
+    await svc.createBackup();
+    await svc.createBackup();
+    await svc.createBackup();
+
+    expect(fs.existsSync(slotPath('current'))).toBe(true);
+    expect(fs.existsSync(slotPath('previous'))).toBe(true);
+    expect(fs.existsSync(slotPath('oldest'))).toBe(true);
+  });
+
+  it('reclaims the extra copies when retention is lowered', async () => {
+    svc.setCopiesKept(3);
+    await svc.createBackup();
+    await svc.createBackup();
+    await svc.createBackup();
+    expect(fs.existsSync(slotPath('oldest'))).toBe(true);
+
+    // Lowering the setting has to actually delete the surplus file, not just
+    // stop writing to it -- otherwise the disk never comes back.
+    svc.setCopiesKept(1);
+    await svc.createBackup();
+
+    expect(fs.existsSync(slotPath('current'))).toBe(true);
+    expect(fs.existsSync(slotPath('previous'))).toBe(false);
+    expect(fs.existsSync(slotPath('oldest'))).toBe(false);
+  });
+
+  it('never drops below one backup, whatever the setting says', async () => {
+    svc.setCopiesKept(0);
+    await svc.createBackup();
+    expect(fs.existsSync(slotPath('current'))).toBe(true);
+
+    // A second pass must still leave a backup on disk.
+    await svc.createBackup();
+    expect(fs.existsSync(slotPath('current'))).toBe(true);
   });
 
   it('rejects a new backup that is < 50% of the current size', async () => {
@@ -145,6 +190,37 @@ describe('SQLiteBackupService', () => {
       .readdirSync(backupDir)
       .filter((n) => n.startsWith('temp-backup-'));
     expect(stragglers).toEqual([]);
+  });
+
+  it('verifies through the injected verifier, never the live connection', async () => {
+    // The whole point of the injection: verification is a synchronous multi-GB
+    // scan, and the live connection lives on the thread that serves every
+    // `query`. If this ever falls back to `sqlite.verifyBackup` inside the
+    // worker, the worker stops dequeuing messages for the duration and every
+    // queued request times out. Nothing at the call site shows that.
+    const inlineVerify = vi.spyOn(sqlite, 'verifyBackup');
+    const verify = vi.fn().mockResolvedValue({ valid: true, hasData: true });
+    const injected = new SQLiteBackupService({ sqliteDir, backupDir, sqlite, verify });
+    await injected.initialize();
+
+    const result = await injected.createBackup();
+
+    expect(result.success).toBe(true);
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(inlineVerify).not.toHaveBeenCalled();
+  });
+
+  it('does not promote a backup the verifier rejects', async () => {
+    const verify = vi.fn().mockResolvedValue({ valid: false, error: 'quick_check returned: bad' });
+    const injected = new SQLiteBackupService({ sqliteDir, backupDir, sqlite, verify });
+    await injected.initialize();
+
+    const result = await injected.createBackup();
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('quick_check returned: bad');
+    expect(fs.existsSync(slotPath('current'))).toBe(false);
+    expect(fs.readdirSync(backupDir).filter((n) => n.startsWith('temp-backup-'))).toEqual([]);
   });
 
   it('cleanupOldCorruptedBackups removes pre-existing stranded temp files', async () => {

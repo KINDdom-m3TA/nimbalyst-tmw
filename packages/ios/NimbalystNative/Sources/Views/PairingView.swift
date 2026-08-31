@@ -25,7 +25,7 @@ public struct PairingView: View {
                     .font(.title)
                     .fontWeight(.bold)
 
-                Text("Open Nimbalyst on your Mac, go to Settings > Mobile Sync, and scan the QR code to pair this device.")
+                Text("Open Nimbalyst on your computer, go to Settings > Mobile Sync, and scan the QR code to pair this device.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -59,6 +59,17 @@ public struct PairingView: View {
             #endif
             .sheet(isPresented: $isScanning) {
                 scannerSheet
+            }
+            .onAppear {
+                if appState.pairingScannerRequested {
+                    appState.pairingScannerRequested = false
+                    requestCameraAndScan()
+                }
+            }
+            .onChange(of: appState.pairingScannerRequested) { _, requested in
+                guard requested else { return }
+                appState.pairingScannerRequested = false
+                requestCameraAndScan()
             }
         }
     }

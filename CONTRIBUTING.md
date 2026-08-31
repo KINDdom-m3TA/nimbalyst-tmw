@@ -18,6 +18,31 @@ over the wire protocol defined in
 4. Submit a pull request with a clear description of the change and any user or
    developer impact.
 
+If you want to work on an accepted issue, say so on the issue — we'll assign it to you and can point you at the relevant code before you start.
+
+## Review and merge
+
+Every change to `main` arrives through a pull request, and merges need an approving review alongside green required checks and resolved review conversations. [MAINTAINERS.md](./MAINTAINERS.md) describes the roles and who currently holds them.
+
+A small set of release and security-sensitive paths carries an additional ownership requirement, listed in [`.github/CODEOWNERS`](./.github/CODEOWNERS).
+
+Pull requests that change `package-lock.json` or anything in `patches/` need review from the release manager as well as a maintainer, because the signed release build installs dependencies and applies those patches while holding code-signing credentials. See [MAINTAINERS.md](./MAINTAINERS.md). These land a little slower; that is expected and not a reflection on the change.
+
+## Commit authorship
+
+Every commit in a pull request must be authored by the person who wrote it. Before you commit, confirm your identity is your own and not something the checkout, container, or agent worktree inherited:
+
+```bash
+git config user.name    # your name
+git config user.email   # an email attached to your account
+```
+
+Commits authored under someone else's name are rejected, even when the code itself is fine. Contributors get credit for their own work, and a commit attributed to a person who did not write it is misleading in the history.
+
+Signed commits are strongly preferred. SSH signing takes about a minute to set up and makes your commits show as Verified: see [GitHub's signature verification docs](https://docs.github.com/en/authentication/managing-commit-signature-verification).
+
+If a test or tooling run ever produces commits you did not intend to make, drop them before pushing rather than bypassing the pre-push hook. `scripts/check-push-authors.mjs` catches the known fixture identities, but it cannot catch a fixture wearing a real person's name.
+
 ## Developer Certificate of Origin
 
 By contributing to this repository, you certify that you have the right to

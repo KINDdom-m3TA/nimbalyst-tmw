@@ -1,6 +1,15 @@
-import React from 'react';
+// @vitest-environment jsdom
+import React, { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import type { CollabScope } from '@nimbalyst/collab-client/core';
+import { asTeamMemberId } from '@nimbalyst/runtime/auth/jwtScopes';
+
+const SCOPE: CollabScope = {
+  scopeKey: '/workspace',
+  orgId: 'test-org',
+  indexConfig: { serverUrl: 'wss://example.test', teamMemberId: asTeamMemberId('test-user') },
+};
 
 const persistenceMocks = vi.hoisted(() => ({
   load: vi.fn(),
@@ -29,14 +38,26 @@ vi.mock('../../../store/atoms/collabDocuments', async () => {
   const { atom } = await import('jotai');
   return {
     initSharedDocuments: vi.fn(),
+    getElectronCollabHost: () => ({
+      setOpenArtifactAdapter: vi.fn(() => () => undefined),
+    }),
     pendingCollabDocumentAtom: atom(null),
     sharedDocumentsAtom: atom([]),
     sharedFoldersAtom: atom([]),
   };
 });
 
-vi.mock('../../../store/atoms/collabDiscovery', () => ({
-  hydrateCollabDiscovery: vi.fn(),
+vi.mock('../../../store/atoms/collabDiscovery', async () => {
+  const { atom } = await import('jotai');
+  return {
+    changedDocIdsAtom: atom(new Set<string>()),
+    hydrateCollabDiscovery: vi.fn(),
+    hydrateCollabPersonalState: vi.fn(async () => undefined),
+  };
+});
+
+vi.mock('../../../utils/teamAnalytics', () => ({
+  trackTeamAnalyticsEvent: vi.fn(),
 }));
 
 vi.mock('../../../services/ErrorNotificationService', () => ({
@@ -51,8 +72,12 @@ vi.mock('../../../stores/editorContextStore', () => ({
   getActiveEditorContextItems: vi.fn(() => []),
 }));
 
-vi.mock('../CollabSidebar', () => ({
+vi.mock('@nimbalyst/collab-client/docs-ui', () => ({
   CollabSidebar: () => <div data-testid="collab-sidebar" />,
+}));
+
+vi.mock('../ElectronCollabDocsUIProvider', () => ({
+  ElectronCollabDocsUIProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 vi.mock('../../TabManager/TabManager', () => ({
@@ -70,7 +95,7 @@ vi.mock('../../ChatSidebar', () => ({
 }));
 
 import { TabsProvider, useTabs } from '../../../contexts/TabsContext';
-import { CollabModeInner } from '../CollabMode';
+import { CollabModeInner, type CollabModeRef } from '../CollabMode';
 
 function TabProbe() {
   const { tabs } = useTabs();
@@ -132,7 +157,7 @@ describe('CollabMode pinned tab persistence', () => {
     render(
       <TabsProvider workspacePath="/workspace" disablePersistence>
         <CollabModeInner
-          workspacePath="/workspace"
+          scope={SCOPE}
           isActive
           onFileOpen={() => {}}
         />
@@ -140,13 +165,16 @@ describe('CollabMode pinned tab persistence', () => {
       </TabsProvider>,
     );
 
+    expect(screen.getByTestId('collab-sidebar')).toBeTruthy();
+
     await waitFor(() => expect(openerMocks.open).toHaveBeenCalledTimes(2));
     expect(openerMocks.open.mock.calls.map(([options]) => ({
       documentId: options.documentId,
       isPinned: options.isPinned,
+      scope: options.scope,
     }))).toEqual([
-      { documentId: 'pinned-doc', isPinned: true },
-      { documentId: 'regular-doc', isPinned: false },
+      { documentId: 'pinned-doc', isPinned: true, scope: SCOPE },
+      { documentId: 'regular-doc', isPinned: false, scope: SCOPE },
     ]);
 
     await waitFor(() => {
@@ -161,11 +189,57 @@ describe('CollabMode pinned tab persistence', () => {
     });
 
     await waitFor(() => expect(persistenceMocks.persist).toHaveBeenCalledWith(
-      '/workspace',
+      SCOPE,
       [
         expect.objectContaining({ documentId: 'pinned-doc', isPinned: true }),
         expect.objectContaining({ documentId: 'regular-doc', isPinned: false }),
       ],
     ));
+  });
+
+  it('exposes the existing persisted pane toggles and reports their state', async () => {
+    const ref = createRef<CollabModeRef>();
+    const onPanelStateChange = vi.fn();
+
+    render(
+      <TabsProvider workspacePath="/workspace" disablePersistence>
+        <CollabModeInner
+          ref={ref}
+          scope={SCOPE}
+          isActive
+          onFileOpen={() => {}}
+          onPanelStateChange={onPanelStateChange}
+        />
+      </TabsProvider>,
+    );
+
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    await act(async () => {
+      ref.current?.toggleSidebarCollapsed();
+    });
+    await waitFor(() => expect(onPanelStateChange).toHaveBeenLastCalledWith({
+      sidebarCollapsed: true,
+      chatCollapsed: false,
+    }));
+    await act(async () => {
+      ref.current?.toggleChatCollapsed();
+    });
+
+    await waitFor(() => expect(onPanelStateChange).toHaveBeenLastCalledWith({
+      sidebarCollapsed: true,
+      chatCollapsed: true,
+    }));
+    await waitFor(() => {
+      expect(window.electronAPI.invoke).toHaveBeenCalledWith(
+        'workspace:update-state',
+        '/workspace',
+        expect.objectContaining({
+          collabLayout: expect.objectContaining({
+            sidebarCollapsed: true,
+            chatCollapsed: true,
+          }),
+        }),
+      );
+    });
   });
 });

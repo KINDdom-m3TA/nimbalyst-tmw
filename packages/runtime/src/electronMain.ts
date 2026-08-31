@@ -14,7 +14,90 @@ export {
   asPersonalJwt,
   asPersonalMemberId,
   asTeamJwt,
+  asTeamMemberId,
 } from './auth/jwtScopes';
+export type {
+  PersonalJwt,
+  PersonalMemberId,
+  TeamJwt,
+  TeamMemberId,
+} from './auth/jwtScopes';
+export {
+  ConversationSync,
+  ConversationSyncError,
+} from './sync/ConversationSync';
+export type {
+  ConversationAppendInput,
+  ConversationHistoryPage,
+  ConversationSyncConfig,
+  ConversationSyncEvent,
+  ConversationTarget,
+} from './sync/ConversationSync';
+export {
+  FeedbackRequestSync,
+  FeedbackRequestSyncError,
+} from './sync/FeedbackRequestSync';
+export type {
+  FeedbackRequestNudgeReceipt,
+  FeedbackRequestSyncConfig,
+  FeedbackRequestSyncEvent,
+  FeedbackRequestSyncState,
+  FeedbackRequestTarget,
+} from './sync/FeedbackRequestSync';
+export type {
+  AgentMessage,
+  ChatAttachment,
+  CreateAgentMessageInput,
+  FileLink,
+  FileLinkType,
+} from './ai/server/types';
+export type {
+  ChatSession,
+  CreateSessionPayload,
+  SessionListOptions,
+  SessionMeta,
+  SessionSearchOptions,
+  SessionStore,
+  UpdateSessionMetadataPayload,
+} from './ai/adapters/sessionStore';
+export type {
+  Document,
+  DocumentMetadataEntry,
+  DocumentOpenOptions,
+  DocumentService,
+  ExternalSourceRef,
+  MetadataChangeEvent,
+  TrackerIdentity,
+  TrackerItem,
+  TrackerItemChangeEvent,
+  TrackerItemType,
+  TrackerOrigin,
+} from './core/DocumentService';
+export type { DocumentRecord } from './core/types';
+export type { DocumentsRepository } from './storage/repositories/DocumentsRepository';
+export { trackerItemToRecord } from './core/TrackerRecord';
+export type { LinkedCommit } from './core/TrackerRecord';
+export type {
+  FileInfo,
+  FileListOptions,
+  FileReadOptions,
+  FileSearchOptions,
+  FileSearchResult,
+  FileSystemService,
+} from './core/FileSystemService';
+export type {
+  PreparedDocumentContext,
+  RawDocumentContext,
+} from './ai/services/types';
+export type { SessionFileStore } from './storage/repositories/SessionFilesRepository';
+export type {
+  ProjectFileEdit,
+  ProjectFileSnapshot,
+  ProjectFileWriteReceipt,
+} from '@nimbalyst/extension-sdk';
+export type {
+  PermissionScope,
+} from './ui/AgentTranscript/components/CustomToolWidgets/InteractiveWidgetHost';
 export {
   clearFileSystemService,
   clearFileSystemServiceFor,
@@ -22,14 +105,37 @@ export {
   setFileSystemServiceFor,
 } from './core/FileSystemService';
 export { VIRTUAL_DOCS, isVirtualPath } from './constants/virtualDocs';
+export {
+  PLAN_INVALID_STATUS_SIGNAL_KIND,
+  PLAN_STATUS_DRIFT_SIGNAL_KIND,
+  derivePlanStatusSignals,
+  normalizePlanStatusForProjection,
+} from './plugins/TrackerPlugin/models/planStatusIntegrity';
+export type {
+  InvalidPlanStatusSignal,
+  PlanStatusDriftSignal,
+  StalePlanStatus,
+} from './plugins/TrackerPlugin/models/planStatusIntegrity';
 export { fuzzyMatchPath } from './utils/fuzzyMatch';
 export { DocumentContextService } from './ai/services/DocumentContextService';
 export {
   CLAUDE_CODE_NATIVE_1M_VARIANTS,
+  claudeCodeFamilyKeyword,
   normalizeClaudeCodeVariant,
   resolveClaudeCodeParentContextWindow,
 } from './ai/modelConstants';
 export { slimClaudeCodeChunkForStorage } from './ai/server/providers/claudeCode/toolChunkUtils';
+export {
+  capClaudeCodeChunkForStorage,
+  capToolResultContent,
+  capToolResultText,
+  STORAGE_TOOL_RESULT_BUDGET_BYTES,
+} from './storage/toolOutputBudget';
+export {
+  isTombstoned,
+  tombstoneMarker,
+  tombstoneRawContent,
+} from './storage/toolOutputRetention';
 export { AISessionsRepository } from './storage/repositories/AISessionsRepository';
 export { AgentMessagesRepository } from './storage/repositories/AgentMessagesRepository';
 export { SessionFilesRepository } from './storage/repositories/SessionFilesRepository';

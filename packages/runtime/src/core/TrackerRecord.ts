@@ -8,6 +8,16 @@
 
 import type { TrackerIdentity, TrackerActivity, TrackerItem, TrackerItemSource, TrackerOrigin } from './DocumentService';
 import type { TrackerCommentEntry as TrackerComment } from '../sync/trackerProtocol';
+import { fromDbBoolean } from './dbBoolean';
+import {
+  derivePlanStatusSignals,
+  type TrackerDerivedSignal,
+} from '../plugins/TrackerPlugin/models/planStatusIntegrity';
+
+export type { TrackerDerivedSignal } from '../plugins/TrackerPlugin/models/planStatusIntegrity';
+
+// Re-exported so hosts reading tracker rows share one coercion (NIM-2280).
+export { fromDbBoolean } from './dbBoolean';
 
 // ---------------------------------------------------------------------------
 // Canonical Record
@@ -33,6 +43,19 @@ export interface LinkedPullRequest {
   url?: string;
 }
 
+/**
+ * Explicit link from a tracker item to a GitHub issue, written by the issue
+ * view's "Link tracker item" action (or agent tooling). Complements the
+ * zero-config path where any url-type field matching an issue URL counts as a
+ * reference (see plugins/TrackerPlugin/issueReferences.ts).
+ */
+export interface LinkedIssue {
+  /** GitHub remote as "owner/repo" (lowercase). */
+  remote: string;
+  number: number;
+  url?: string;
+}
+
 export interface TrackerRecordSystem {
   workspace: string;
   documentPath?: string;
@@ -46,12 +69,23 @@ export interface TrackerRecordSystem {
   linkedSessions?: string[];
   linkedCommitSha?: string;
   linkedCommits?: LinkedCommit[];
+  /** Read-only signals derived from fields and linked evidence; never persisted. */
+  derivedSignals?: TrackerDerivedSignal[];
   linkedPullRequests?: LinkedPullRequest[];
+  linkedIssues?: LinkedIssue[];
   documentId?: string;
   activity?: TrackerActivity[];
   comments?: TrackerComment[];
   /** Structured origin (how the item entered Nimbalyst; pointer to upstream for imports). */
   origin?: TrackerOrigin;
+  /**
+   * When a person decided this item is correctly where it is and retired it from
+   * the triage inbox without changing it. Shared rather than personal (unlike
+   * snooze): triage is a decision the team makes once, so a colleague's pass
+   * clears the item for everyone.
+   */
+  triagedAt?: string;
+  triagedBy?: TrackerIdentity | null;
 }
 
 export interface TrackerRecord {
@@ -60,6 +94,13 @@ export interface TrackerRecord {
   typeTags: string[];
   issueNumber?: number;
   issueKey?: string;
+  /**
+   * This machine's private number for the item (`NIM.12`). Never synced: a
+   * teammate's copy of the same item has none, and the same value on another
+   * machine means a different item. Separate from `issueKey` because the room
+   * owns that field and rejects an item that arrives already carrying a key.
+   */
+  localKey?: string;
   source: 'native' | 'inline' | 'frontmatter' | 'import';
   sourceRef?: string;
   archived: boolean;
@@ -67,6 +108,21 @@ export interface TrackerRecord {
   content?: unknown;
   system: TrackerRecordSystem;
   fields: Record<string, unknown>;
+}
+
+function attachDerivedSignals(record: TrackerRecord): TrackerRecord {
+  const derivedSignals = derivePlanStatusSignals({
+    primaryType: record.primaryType,
+    status: record.fields.status,
+    linkedCommits: record.system.linkedCommits,
+  });
+  if (derivedSignals.length > 0) {
+    record.system.derivedSignals = [
+      ...(record.system.derivedSignals ?? []),
+      ...derivedSignals,
+    ];
+  }
+  return record;
 }
 
 // ---------------------------------------------------------------------------
@@ -81,10 +137,14 @@ const SYSTEM_KEYS = new Set([
   'linkedCommitSha',
   'linkedCommits',
   'linkedPullRequests',
+  'linkedIssues',
   'documentId',
   'activity',
   'comments',
   'origin',
+  'triagedAt',
+  'triagedBy',
+  'derivedSignals',
   // also pulled from row-level columns, not from data JSONB
   'assigneeId',
   'reporterId',
@@ -96,7 +156,7 @@ const SYSTEM_KEYS = new Set([
  */
 const NON_FIELD_KEYS = new Set([
   // top-level record props
-  'id', 'type', 'typeTags', 'issueNumber', 'issueKey',
+  'id', 'type', 'typeTags', 'issueNumber', 'issueKey', 'localKey',
   'source', 'sourceRef', 'archived', 'archivedAt', 'syncStatus',
   'content', 'module', 'lineNumber', 'workspace', 'lastIndexed',
   'created', 'updated',
@@ -178,9 +238,10 @@ export function trackerItemToRecord(item: TrackerItem): TrackerRecord {
     typeTags: item.typeTags ?? [item.type],
     issueNumber: item.issueNumber,
     issueKey: item.issueKey,
+    localKey: item.localKey,
     source: (item.source as TrackerRecord['source']) ?? 'native',
     sourceRef: item.sourceRef,
-    archived: item.archived ?? false,
+    archived: fromDbBoolean(item.archived),
     syncStatus: (item.syncStatus as TrackerRecord['syncStatus']) ?? 'local',
     content: item.content,
     system: {
@@ -213,7 +274,7 @@ export function trackerItemToRecord(item: TrackerItem): TrackerRecord {
     }
   }
 
-  return record;
+  return attachDerivedSignals(record);
 }
 
 /**
@@ -238,7 +299,7 @@ export function trackerRecordToItem(record: TrackerRecord): TrackerItem {
       customFields[key] = value;
     }
   }
-  for (const key of ['linkedPullRequests', 'activity', 'comments'] as const) {
+  for (const key of ['linkedPullRequests', 'linkedIssues', 'activity', 'comments', 'triagedAt', 'triagedBy'] as const) {
     const value = record.system[key];
     if (value !== undefined) customFields[key] = value;
   }
@@ -249,6 +310,7 @@ export function trackerRecordToItem(record: TrackerRecord): TrackerItem {
     typeTags: record.typeTags,
     issueNumber: record.issueNumber,
     issueKey: record.issueKey,
+    localKey: record.localKey,
     // Map fields to TrackerItem's fixed properties
     title: (f.title as string) ?? '',
     status: (f.status as string) ?? 'to-do',
@@ -288,6 +350,21 @@ export function trackerRecordToItem(record: TrackerRecord): TrackerItem {
 // ---------------------------------------------------------------------------
 // DB Row <-> TrackerRecord converters
 // ---------------------------------------------------------------------------
+
+function normalizeRecordTimestamp(value: unknown, fallback: unknown): string {
+  for (const candidate of [value, fallback]) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate;
+    }
+    if (candidate instanceof Date || typeof candidate === 'number') {
+      const date = candidate instanceof Date ? candidate : new Date(candidate);
+      if (!Number.isNaN(date.getTime())) {
+        return date.toISOString();
+      }
+    }
+  }
+  return new Date().toISOString();
+}
 
 /**
  * Convert a PGLite tracker_items row to a TrackerRecord.
@@ -344,23 +421,24 @@ export function dbRowToRecord(row: any): TrackerRecord {
   const systemValue = (key: string): unknown =>
     data[key] !== undefined ? data[key] : nestedCustomFields?.[key];
 
-  return {
+  const record: TrackerRecord = {
     id: row.id,
     primaryType: row.type,
     typeTags,
     issueNumber: row.issue_number ?? undefined,
     issueKey: row.issue_key ?? undefined,
+    localKey: row.local_key ?? undefined,
     source: row.source || (row.document_path ? 'inline' : 'native'),
     sourceRef: row.source_ref ?? undefined,
-    archived: row.archived ?? false,
+    archived: fromDbBoolean(row.archived),
     syncStatus: row.sync_status || 'local',
     content: row.content ?? undefined,
     system: {
       workspace: row.workspace,
       documentPath: row.document_path || undefined,
       lineNumber: row.line_number ?? undefined,
-      createdAt: data.created || (row.created ? new Date(row.created).toISOString() : new Date().toISOString()),
-      updatedAt: data.updated || (row.updated ? new Date(row.updated).toISOString() : new Date().toISOString()),
+      createdAt: normalizeRecordTimestamp(data.created, row.created),
+      updatedAt: normalizeRecordTimestamp(data.updated, row.updated),
       lastIndexed: row.last_indexed ? new Date(row.last_indexed).toISOString() : undefined,
       authorIdentity: systemValue('authorIdentity') as TrackerIdentity | null | undefined,
       lastModifiedBy: systemValue('lastModifiedBy') as TrackerIdentity | null | undefined,
@@ -369,13 +447,18 @@ export function dbRowToRecord(row: any): TrackerRecord {
       linkedCommitSha: systemValue('linkedCommitSha') as string | undefined,
       linkedCommits: systemValue('linkedCommits') as LinkedCommit[] | undefined,
       linkedPullRequests: systemValue('linkedPullRequests') as LinkedPullRequest[] | undefined,
+      linkedIssues: systemValue('linkedIssues') as LinkedIssue[] | undefined,
       documentId: systemValue('documentId') as string | undefined,
       activity: systemValue('activity') as TrackerActivity[] | undefined,
       comments: systemValue('comments') as TrackerComment[] | undefined,
       origin: systemValue('origin') as TrackerOrigin | undefined,
+      triagedAt: systemValue('triagedAt') as string | undefined,
+      triagedBy: systemValue('triagedBy') as TrackerIdentity | null | undefined,
     },
     fields,
   };
+
+  return attachDerivedSignals(record);
 }
 
 /**
@@ -409,10 +492,13 @@ export function recordToDbParams(record: TrackerRecord): {
   if (record.system.linkedCommitSha) data.linkedCommitSha = record.system.linkedCommitSha;
   if (record.system.linkedCommits?.length) data.linkedCommits = record.system.linkedCommits;
   if (record.system.linkedPullRequests?.length) data.linkedPullRequests = record.system.linkedPullRequests;
+  if (record.system.linkedIssues?.length) data.linkedIssues = record.system.linkedIssues;
   if (record.system.documentId) data.documentId = record.system.documentId;
   if (record.system.activity?.length) data.activity = record.system.activity;
   if (record.system.comments?.length) data.comments = record.system.comments;
   if (record.system.origin) data.origin = record.system.origin;
+  if (record.system.triagedAt) data.triagedAt = record.system.triagedAt;
+  if (record.system.triagedBy) data.triagedBy = record.system.triagedBy;
   if (record.system.createdAt) data.created = record.system.createdAt;
   if (record.system.updatedAt) data.updated = record.system.updatedAt;
 

@@ -173,6 +173,7 @@ export const HOST_TOOLS: readonly string[] = [
  */
 export const TRACKER_TOOLS: readonly string[] = [
   'tracker_list',
+  'tracker_ready',
   'tracker_get',
   'tracker_get_by_urn',
   'tracker_create',
@@ -207,12 +208,23 @@ export const SITUATIONAL_TOOLS: readonly string[] = [
   // collab doc in context only
   'readCollabDoc',
   'applyCollabDocEdit',
+  'readCollabDocComments',
+  'replyToCollabDocComment',
+  'createCollabDocComment',
+  // project canvas presence: an attention declaration, never a lock
+  'declareCanvasWorkingSet',
+  'releaseCanvasWorkingSet',
   // shared-index (first-class shared folders + documents) management
   'createSharedDoc',
   'createSharedFolder',
   'moveSharedItem',
   'renameSharedItem',
   'deleteSharedItem',
+  // read-only organization/resource discovery for cross-user collaboration
+  'findOrgMembers',
+  'getResourceSharingStatus',
+  // cross-user feedback draft; author confirmation performs the later send
+  'RequestFeedback',
   // feedback (deferred)
   'feedback_anonymize_text',
   'feedback_get_environment',

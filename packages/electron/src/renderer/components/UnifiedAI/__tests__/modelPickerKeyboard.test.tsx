@@ -7,8 +7,12 @@ import { ModelSelector } from '../ModelSelector';
 import { isOpenModelPickerShortcut } from '../AIInput';
 import { advancedSettingsAtom } from '../../../store/atoms/appSettings';
 
-vi.mock('@nimbalyst/runtime', () => ({
+vi.mock('@nimbalyst/runtime/ui/icons/MaterialSymbol', () => ({
   MaterialSymbol: () => null,
+}));
+
+vi.mock('@nimbalyst/runtime/ui/icons/ProviderIcons', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@nimbalyst/runtime/ui/icons/ProviderIcons')>(),
   getProviderIcon: () => null,
 }));
 
@@ -43,6 +47,31 @@ describe('AI model picker keyboard controls', () => {
     expect(isOpenModelPickerShortcut({ key: 'm', metaKey: true, ctrlKey: false, shiftKey: true })).toBe(true);
     expect(isOpenModelPickerShortcut({ key: 'M', metaKey: false, ctrlKey: true, shiftKey: true })).toBe(true);
     expect(isOpenModelPickerShortcut({ key: 'm', metaKey: true, ctrlKey: false, shiftKey: false })).toBe(false);
+  });
+
+  it('preloads the catalog before the picker opens', async () => {
+    const aiGetModels = vi.fn().mockResolvedValue({
+      success: true,
+      grouped: {
+        claude: [{ id: 'claude:haiku', name: 'Haiku', provider: 'claude' }],
+      },
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { aiGetModels },
+    });
+
+    renderModelSelector(
+      <ModelSelector currentModel="claude:haiku" onModelChange={() => {}} />,
+      true,
+    );
+
+    expect(screen.queryByRole('menu')).toBeNull();
+    await waitFor(() => expect(aiGetModels).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByTestId('model-picker'));
+    expect(await screen.findByRole('button', { name: 'Haiku' })).toBeTruthy();
+    expect(screen.queryByText('Loading models...')).toBeNull();
   });
 
   it('opens from the input shortcut, then changes models with ArrowDown and Enter', async () => {
@@ -263,8 +292,8 @@ describe('AI model picker provider visibility', () => {
     fireEvent.click(screen.getByTestId('model-picker'));
 
     expect(await screen.findByRole('button', { name: 'Haiku' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'GPT-5' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Local Model' })).toBeTruthy();
+    screen.getByRole('button', { name: 'GPT-5' });
+    screen.getByRole('button', { name: 'Local Model' });
   });
 
   it('keeps the current direct provider reachable for a started session', async () => {

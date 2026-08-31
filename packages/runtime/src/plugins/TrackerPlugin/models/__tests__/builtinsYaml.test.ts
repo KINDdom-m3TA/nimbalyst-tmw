@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import {
   BUILTIN_TRACKER_YAML,
@@ -22,19 +23,25 @@ const EXPECTED = [
   'bug',
   'task',
   'idea',
+  'milestone',
+  'release',
 ] as const;
 
 // Behavior-preserving invariants carried over from the pre-migration code array.
 const INVARIANTS: Record<string, {
   idPrefix: string;
-  syncMode: 'local' | 'shared' | 'hybrid';
+  sharing: 'personal' | 'team';
+  draftByDefault: boolean;
   creatable?: boolean;
 }> = {
-  plan: { idPrefix: 'pln', syncMode: 'hybrid' },
-  decision: { idPrefix: 'dec', syncMode: 'shared' },
-  bug: { idPrefix: 'bug', syncMode: 'shared' },
-  task: { idPrefix: 'tsk', syncMode: 'shared' },
-  idea: { idPrefix: 'id', syncMode: 'local' },
+  plan: { idPrefix: 'pln', sharing: 'team', draftByDefault: true },
+  decision: { idPrefix: 'dec', sharing: 'team', draftByDefault: false },
+  bug: { idPrefix: 'bug', sharing: 'team', draftByDefault: false },
+  task: { idPrefix: 'tsk', sharing: 'team', draftByDefault: false },
+  idea: { idPrefix: 'id', sharing: 'personal', draftByDefault: false },
+  // Collection types: both shared, since a sprint or release is a team artifact.
+  milestone: { idPrefix: 'mst', sharing: 'team', draftByDefault: false },
+  release: { idPrefix: 'rel', sharing: 'team', draftByDefault: false },
 };
 
 describe('bundled builtin tracker YAML', () => {
@@ -76,7 +83,8 @@ describe('bundled builtin tracker YAML', () => {
       const model = byType.get(type)!;
       const inv = INVARIANTS[type];
       expect(model.idPrefix, `${type} idPrefix`).toBe(inv.idPrefix);
-      expect(model.sync?.mode, `${type} sync mode`).toBe(inv.syncMode);
+      expect(model.sharing, `${type} sharing`).toBe(inv.sharing);
+      expect(model.draftByDefault, `${type} draft default`).toBe(inv.draftByDefault);
       if (inv.creatable !== undefined) {
         expect(model.creatable, `${type} creatable`).toBe(inv.creatable);
       }
