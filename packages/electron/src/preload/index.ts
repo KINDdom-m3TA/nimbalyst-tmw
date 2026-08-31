@@ -374,6 +374,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Window operations
   setDocumentEdited: (edited: boolean) => ipcRenderer.send('set-document-edited', edited),
   setTitle: (title: string) => ipcRenderer.send('set-title', title),
+  /** Point the window's AXDocument at the visible document; null clears it. */
+  setRepresentedFile: (filePath: string | null) => ipcRenderer.send('set-represented-file', filePath),
   openAccountSettings: () => ipcRenderer.invoke('app:open-account-settings'),
   /** Report user activity for sync presence awareness */
   reportUserActivity: () => ipcRenderer.send('user-activity'),
