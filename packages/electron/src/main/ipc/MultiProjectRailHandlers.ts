@@ -371,7 +371,7 @@ export function registerMultiProjectRailHandlers(): void {
 
             const folders = [workspacePath, ...result.attachedFolders];
             for (const [, listener] of windowsShowingWorkspace(workspacePath)) {
-                startRootWatcher(listener, folderPath);
+                startRootWatcher(listener, folderPath, workspacePath);
                 listener.webContents.send('workspace:folders-changed', { workspacePath, folders });
             }
 

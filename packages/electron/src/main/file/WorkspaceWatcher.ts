@@ -106,7 +106,7 @@ export function startWorkspaceWatcher(window: BrowserWindow, workspacePath: stri
     }
 
     for (const rootPath of getWorkspaceRoots(workspacePath)) {
-        startRootWatcher(window, rootPath);
+        startRootWatcher(window, rootPath, workspacePath);
     }
 
     // Project file sync is a workspace-level (primary root) concern: it syncs
@@ -122,15 +122,19 @@ export function startWorkspaceWatcher(window: BrowserWindow, workspacePath: stri
  * keep running. Called for each root at workspace open and again when a folder
  * is attached.
  */
-export function startRootWatcher(window: BrowserWindow, rootPath: string) {
+export function startRootWatcher(window: BrowserWindow, rootPath: string, owningWorkspace?: string) {
     // Use optimized chokidar-based workspace watcher
     optimizedWorkspaceWatcher.start(window, rootPath);
 
     // One git-ref watcher per repo the root contains, not per root: a root may
     // be no repo at all (nothing to watch) or a container holding several
     // (watching only the container would miss every commit).
+    //
+    // The owning workspace goes with it: git status is routed per repo, but
+    // pending reviews are workspace-scoped, and a repo under an attached folder
+    // has no workspace identity of its own to broadcast under.
     for (const repoPath of listReposForRoot(rootPath)) {
-        gitRefWatcher.start(repoPath).catch((error) => {
+        gitRefWatcher.start(repoPath, owningWorkspace ?? rootPath).catch((error) => {
             logger.workspaceWatcher.error('Failed to start GitRefWatcher:', error);
         });
     }

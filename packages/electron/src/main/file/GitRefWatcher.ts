@@ -22,6 +22,12 @@ interface WatcherEntry {
   /** Where refs/heads lives — the shared parent dir for a worktree. */
   commonDir: string;
   git: SimpleGit;
+  /**
+   * The workspace this repo was registered under, which is not the repo path
+   * once a project spans several folders. Git status is routed by repo, but
+   * pending reviews are workspace-scoped, so the two must not be conflated.
+   */
+  owningWorkspace: string;
 }
 
 /**
@@ -180,9 +186,14 @@ export class GitRefWatcher {
   }
 
   /**
-   * Start watching a workspace for git state changes
+   * Start watching a repo for git state changes.
+   *
+   * `owningWorkspace` is the workspace this repo was registered under. It
+   * differs from `workspacePath` whenever the repo lives in an attached folder
+   * or below a container root, and it is what pending-review updates must be
+   * attributed to. Defaults to the repo itself for single-root callers.
    */
-  async start(workspacePath: string): Promise<void> {
+  async start(workspacePath: string, owningWorkspace?: string): Promise<void> {
     // Already watching this workspace
     if (this.watchers.has(workspacePath)) {
       logger.main.debug('[GitRefWatcher] Already watching workspace:', path.basename(workspacePath));
@@ -290,6 +301,7 @@ export class GitRefWatcher {
         currentBranch,
         commonDir,
         git,
+        owningWorkspace: owningWorkspace ?? workspacePath,
       });
 
       logger.main.info('[GitRefWatcher] Started watching:', {
@@ -531,10 +543,24 @@ export class GitRefWatcher {
    */
   private async autoApprovePendingReviews(
     workspacePath: string,
-    committedFiles: string[]
+    committedFiles: string[],
+    injectedHistoryManager?: Pick<
+      typeof import('../HistoryManager').historyManager,
+      'getPendingTags' | 'updateTagStatus'
+    >,
   ): Promise<void> {
     try {
-      const { historyManager } = await import('../HistoryManager');
+      const historyManager =
+        injectedHistoryManager ?? (await import('../HistoryManager')).historyManager;
+
+      // Pending reviews are workspace-scoped, but this watcher is keyed by repo.
+      // `updateTagStatus`'s last argument becomes the key of the debounced
+      // `history:pending-count-changed` broadcast, and the renderer matches
+      // sessions on exact workspace equality -- so passing the repo root here
+      // would silently drop the badge refresh for any repo that is not itself
+      // the workspace root.
+      const owningWorkspace =
+        this.watchers.get(workspacePath)?.owningWorkspace ?? workspacePath;
 
       // logger.main.info('[GitRefWatcher] Auto-approving pending reviews for committed files:', {
       //   workspace: path.basename(workspacePath),
@@ -560,7 +586,7 @@ export class GitRefWatcher {
           // });
 
           for (const tag of pendingTags) {
-            await historyManager.updateTagStatus(filePath, tag.id, 'reviewed', workspacePath);
+            await historyManager.updateTagStatus(filePath, tag.id, 'reviewed', owningWorkspace);
             approvedCount++;
           }
         }
