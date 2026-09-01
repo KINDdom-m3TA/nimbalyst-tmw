@@ -397,9 +397,20 @@ export function GitLogPanel({ host }: PanelHostProps) {
     setActionErrorCommand(undefined);
   }, []);
 
+  // The repo the panel is currently showing, readable from an async callback.
+  // Every load below captures the repo it asked about and drops its answer if
+  // the user has switched since -- a slow `git:log` in a big repo would
+  // otherwise repaint the panel with the wrong repo's commits.
+  const repoPathRef = useRef(repoPath);
+  useEffect(() => {
+    repoPathRef.current = repoPath;
+  }, [repoPath]);
+
   const loadBranches = useCallback(async () => {
+    const requestedRepo = repoPath;
     try {
-      const result = await ipc.invoke('git:branches', repoPath) as GitBranchResult;
+      const result = await ipc.invoke('git:branches', requestedRepo) as GitBranchResult;
+      if (repoPathRef.current !== requestedRepo) return;
       setBranches(result.branches);
       if (result.current) {
         setSelectedBranch(current => current || result.current);
@@ -425,8 +436,10 @@ export function GitLogPanel({ host }: PanelHostProps) {
 
   const loadStatus = useCallback(async () => {
     const requested = ++statusGenerationRef.current;
+    const requestedRepo = repoPath;
     try {
-      const result = await ipc.invoke('git:status', repoPath) as GitStatusResult;
+      const result = await ipc.invoke('git:status', requestedRepo) as GitStatusResult;
+      if (repoPathRef.current !== requestedRepo) return;
       if (requested < appliedStatusGenerationRef.current) return;
       appliedStatusGenerationRef.current = requested;
       applyStatus(result);
@@ -436,18 +449,21 @@ export function GitLogPanel({ host }: PanelHostProps) {
   }, [applyStatus, repoPath]);
 
   const loadCommits = useCallback(async () => {
+    const requestedRepo = repoPath;
     setLoading(true);
     try {
-      const result = await ipc.invoke('git:log', repoPath, 100, {
+      const result = await ipc.invoke('git:log', requestedRepo, 100, {
         branch: selectedBranch || undefined,
         aheadBehind: true,
       }) as GitCommit[];
 
+      if (repoPathRef.current !== requestedRepo) return;
       setUnfilteredCommits(result);
     } catch (err) {
       console.error('[GitLogPanel] Failed to load commits:', err);
     } finally {
-      setLoading(false);
+      // A stale response must not clear the spinner the current request set.
+      if (repoPathRef.current === requestedRepo) setLoading(false);
     }
   }, [repoPath, selectedBranch]);
 

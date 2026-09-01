@@ -36,6 +36,35 @@ function resolveFileSystemServiceForCall(ctx?: ToolContext, argPath?: unknown) {
 }
 
 /**
+ * The service that should run this call, and the path expressed the way that
+ * service accepts it.
+ *
+ * Every `FileSystemService` sandboxes to its own root and REJECTS absolute
+ * paths -- so resolving the right service for `/attached/repo/src/a.ts` and
+ * then handing it that same absolute string fails validation and the tool call
+ * dies. Relativize against the service's own root once the service is known.
+ * Paths outside that root are passed through unchanged so the sandbox, not this
+ * helper, is what refuses them.
+ */
+function resolveCallTarget(ctx: ToolContext | undefined, argPath: unknown) {
+  const service = resolveFileSystemServiceForCall(ctx, argPath);
+  if (!service || typeof argPath !== 'string' || !argPath) {
+    return { service, path: typeof argPath === 'string' ? argPath : undefined };
+  }
+
+  const root = service.getWorkspacePath()?.replace(/[\\/]+$/, '');
+  if (!root) return { service, path: argPath };
+
+  const normalizedArg = argPath.replace(/\\/g, '/');
+  const normalizedRoot = root.replace(/\\/g, '/');
+  if (normalizedArg === normalizedRoot) return { service, path: undefined };
+  if (normalizedArg.startsWith(`${normalizedRoot}/`)) {
+    return { service, path: normalizedArg.slice(normalizedRoot.length + 1) };
+  }
+  return { service, path: argPath };
+}
+
+/**
  * Create file search tool
  */
 export const searchFilesTool: ToolDefinition = {
@@ -68,7 +97,7 @@ export const searchFilesTool: ToolDefinition = {
     required: ['query']
   },
   handler: async (args: any, ctx?: ToolContext) => {
-    const fileSystemService = resolveFileSystemServiceForCall(ctx, args.path);
+    const { service: fileSystemService, path: scopedPath } = resolveCallTarget(ctx, args.path);
     if (!fileSystemService) {
       return {
         success: false,
@@ -77,7 +106,7 @@ export const searchFilesTool: ToolDefinition = {
     }
 
     return fileSystemService.searchFiles(args.query, {
-      path: args.path,
+      path: scopedPath,
       filePattern: args.filePattern,
       caseSensitive: args.caseSensitive,
       maxResults: args.maxResults
@@ -119,7 +148,7 @@ export const listFilesTool: ToolDefinition = {
     required: []
   },
   handler: async (args: any, ctx?: ToolContext) => {
-    const fileSystemService = resolveFileSystemServiceForCall(ctx, args.path);
+    const { service: fileSystemService, path: scopedPath } = resolveCallTarget(ctx, args.path);
     if (!fileSystemService) {
       return {
         success: false,
@@ -128,7 +157,7 @@ export const listFilesTool: ToolDefinition = {
     }
 
     return fileSystemService.listFiles({
-      path: args.path,
+      path: scopedPath,
       pattern: args.pattern,
       recursive: args.recursive,
       includeHidden: args.includeHidden,
@@ -160,7 +189,7 @@ export const readFileTool: ToolDefinition = {
     required: ['path']
   },
   handler: async (args: any, ctx?: ToolContext) => {
-    const fileSystemService = resolveFileSystemServiceForCall(ctx, args.path);
+    const { service: fileSystemService, path: scopedPath } = resolveCallTarget(ctx, args.path);
     if (!fileSystemService) {
       return {
         success: false,
@@ -168,7 +197,7 @@ export const readFileTool: ToolDefinition = {
       };
     }
 
-    return fileSystemService.readFile(args.path, {
+    return fileSystemService.readFile(scopedPath ?? args.path, {
       encoding: args.encoding
     });
   },

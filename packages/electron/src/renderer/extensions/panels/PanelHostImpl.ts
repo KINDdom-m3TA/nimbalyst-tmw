@@ -9,6 +9,7 @@ import type { PanelHost, PanelAIContext, ExtensionStorage, ExtensionFileStorage,
 import { store } from '@nimbalyst/runtime/store';
 import { ExtensionFileStorageImpl } from './ExtensionFileStorageImpl';
 import { workspaceRootPathsAtom } from '../../store/atoms/fileTree';
+import { isPathInWorkspace } from '../../../shared/pathUtils';
 
 // ============================================================================
 // Types
@@ -193,11 +194,17 @@ class PanelHostImpl implements PanelHost {
   }
 
   onWorkspaceEvent(event: string, callback: (data: unknown) => void): () => void {
-    const workspacePath = this.workspacePath;
     const unsub = window.electronAPI.on(event, (data: unknown) => {
-      // Filter to events for this workspace
+      // Filter to events for this workspace. Watchers are registered per repo,
+      // so a repo inside an attached folder names itself rather than the
+      // primary root -- match against every root or those events are dropped
+      // and the panel never refreshes for the attached repo.
       const d = data as Record<string, unknown> | undefined;
-      if (d?.workspacePath && d.workspacePath !== workspacePath) return;
+      const eventPath = d?.workspacePath;
+      if (typeof eventPath === 'string' && eventPath) {
+        const roots = this.getWorkspaceFolders();
+        if (!roots.some((root) => isPathInWorkspace(eventPath, root))) return;
+      }
       callback(data);
     });
     this.eventCleanups.push(unsub);

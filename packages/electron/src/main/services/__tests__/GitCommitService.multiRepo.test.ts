@@ -22,7 +22,7 @@ vi.mock('../../utils/store', () => ({
   getWorkspaceRoots: (workspacePath: string) => rootsByWorkspace.get(workspacePath) ?? [workspacePath],
 }));
 
-const { executeGitCommitAcrossRepos } = await import('../GitCommitService');
+const { executeGitCommitAcrossRepos, createGitCommitProposalResponse } = await import('../GitCommitService');
 const { clearWorkspaceRepoCache } = await import('../workspaceRepos');
 const { __resetGitRootCache } = await import('../GitStatusService');
 
@@ -114,6 +114,32 @@ describe('executeGitCommitAcrossRepos', () => {
 
     expect(result.success).toBe(true);
     expect(result.uncommittableFiles).toEqual([path.join(plainFolder, 'notes.md')]);
+    // The proposal response is built from this: a file that landed nowhere must
+    // not be reported back to the user as committed.
+    expect(result.committedFiles).toEqual([path.join(appRepo, 'a.txt')]);
+
+    const response = createGitCommitProposalResponse(
+      result,
+      [path.join(appRepo, 'a.txt'), path.join(plainFolder, 'notes.md')],
+      'feat: partly loose',
+    );
+    expect(response.action).toBe('committed');
+    expect(response.filesCommitted).toEqual([path.join(appRepo, 'a.txt')]);
+    expect(response.uncommittableFiles).toEqual([path.join(plainFolder, 'notes.md')]);
+  });
+
+  it('reports committed files in the caller own path strings', async () => {
+    // The panel selects by whatever strings it holds and clears exactly those.
+    // Resolution makes paths absolute internally, so the answer has to come
+    // back in the caller's terms or nothing matches and the whole selection is
+    // cleared after a partial commit.
+    rootsByWorkspace.set(appRepo, [appRepo]);
+    await fs.writeFile(path.join(appRepo, 'a.txt'), 'one\n', 'utf8');
+
+    const result = await executeGitCommitAcrossRepos(appRepo, 'feat: relative', ['a.txt']);
+
+    expect(result.success).toBe(true);
+    expect(result.committedFiles).toEqual(['a.txt']);
   });
 
   it('fails clearly when no selected file is in a repository', async () => {

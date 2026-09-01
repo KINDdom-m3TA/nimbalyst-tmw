@@ -29,6 +29,7 @@ import {
 } from '../../store/atoms/workstreamState';
 import { worktreeChangedFilesAtom } from '../../store/atoms/sessionFiles';
 import { activeFileRepoPathAtom } from '../../store/atoms/workspaceRepos';
+import { workspaceRootPathsAtom } from '../../store/atoms/fileTree';
 import { RebaseConflictDialog } from './RebaseConflictDialog';
 import { MergeConflictDialog } from './MergeConflictDialog';
 import { MergeConfirmDialog } from './MergeConfirmDialog';
@@ -92,8 +93,6 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
     const isCommitting = useAtomValue(isCommittingAtom);
     const setIsCommitting = useSetAtom(isCommittingAtom);
 
-    const gitWorkspacePath = worktreePath || workspacePath;
-
     /**
      * Repository the branch/ahead-behind readout and the recent-commit list
      * describe. A worktree session is its own checkout; otherwise it follows the
@@ -106,6 +105,21 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
     const activeFileRepoPath = useAtomValue(activeFileRepoPathAtom);
     const statusRepoPath = worktreePath || activeFileRepoPath || workspacePath;
 
+    /**
+     * Roots a file may live under and still be committable from this panel. A
+     * worktree session is its own checkout; otherwise every attached folder
+     * counts, because the commit channel splits staged files across repos.
+     */
+    const workspaceRootPaths = useAtomValue(workspaceRootPathsAtom);
+    const committableRoots = useMemo(
+      () => (worktreePath
+        ? [worktreePath]
+        : workspaceRootPaths.length > 0
+          ? workspaceRootPaths
+          : [workspacePath]),
+      [worktreePath, workspaceRootPaths, workspacePath]
+    );
+
     const isWorkspaceCommittablePath = useCallback((filePath: string) => {
       if (!filePath) {
         return false;
@@ -116,8 +130,8 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
         return true;
       }
 
-      return isPathInWorkspace(filePath, gitWorkspacePath);
-    }, [gitWorkspacePath]);
+      return committableRoots.some((root) => isPathInWorkspace(filePath, root));
+    }, [committableRoots]);
 
     // Local state for commit workflow mode (manual vs smart)
     const [commitMode, setCommitMode] = useState<'manual' | 'smart'>('smart');
@@ -284,13 +298,21 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
       setSelectedAgentModel(defaultModel);
     }, [defaultModel]);
 
-    // Clear git state when there are no more uncommitted changes
-    // This is the authoritative cleanup - if nothing to commit, reset the UI
+    // Clear git state when there are no more uncommitted changes.
+    // `gitStatus` describes `statusRepoPath` alone, so in a multi-repo workspace
+    // a clean repo says nothing about files staged from a sibling repo -- only
+    // clear once nothing outside this repo is still staged.
+    const hasStagedOutsideStatusRepo = useMemo(
+      () => stagedFilesArr.some(
+        (filePath) => filePath.startsWith('/') && !isPathInWorkspace(filePath, statusRepoPath)
+      ),
+      [stagedFilesArr, statusRepoPath]
+    );
     useEffect(() => {
-      if (gitStatus && !gitStatus.hasUncommitted) {
+      if (gitStatus && !gitStatus.hasUncommitted && !hasStagedOutsideStatusRepo) {
         clearGitState(workstreamId);
       }
-    }, [gitStatus, clearGitState, workstreamId]);
+    }, [gitStatus, hasStagedOutsideStatusRepo, clearGitState, workstreamId]);
 
     // Fetch git status
     const fetchGitStatus = useCallback(async () => {
@@ -374,11 +396,32 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
             workspacePath,
             commitMessage,
             filesToCommit
-          )) as { success: boolean; commitHash?: string; error?: string };
+          )) as {
+            success: boolean;
+            commitHash?: string;
+            error?: string;
+            committedFiles?: string[];
+          };
 
-          if (result.success) {
+          // A selection spanning two repos becomes two commits, and the second
+          // can fail after the first lands. Keep whatever did not commit
+          // selected so the retry is precise instead of starting from nothing.
+          const committed = new Set(result.committedFiles ?? (result.success ? filesToCommit : []));
+          const remaining = filesToCommit.filter((filePath) => !committed.has(filePath));
+
+          if (remaining.length === 0) {
             // Clear all git state (commit message, staged files)
             clearGitState(workstreamId);
+          } else {
+            if (committed.size > 0) {
+              setStagedFilesAction({ workstreamId, files: remaining });
+            }
+            if (!result.success) {
+              console.error('[GitOperationsPanel] Commit failed:', result.error);
+            }
+          }
+
+          if (committed.size > 0) {
             // Refresh git status and commits
             const [newStatus, newCommits] = await Promise.all([
               window.electronAPI.invoke('git:status', statusRepoPath),
@@ -386,16 +429,12 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
             ]);
             setGitStatus(newStatus as any);
             setGitCommits(newCommits as any);
-          } else {
-            console.error('[GitOperationsPanel] Commit failed:', result.error);
-            // Clear git state even on failure so user can retry
-            clearGitState(workstreamId);
           }
         }
       } catch (error) {
+        // Leave the message and selection alone: nothing is known to have
+        // committed, and clearing them makes the retry harder, not easier.
         console.error('[GitOperationsPanel] Commit failed:', error);
-        // Clear git state even on failure so user can retry
-        clearGitState(workstreamId);
       } finally {
         setIsCommitting(false);
       }
@@ -406,6 +445,8 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
       workstreamId,
       setIsCommitting,
       clearGitState,
+      setStagedFilesAction,
+      statusRepoPath,
       setGitStatus,
       setGitCommits,
     ]);

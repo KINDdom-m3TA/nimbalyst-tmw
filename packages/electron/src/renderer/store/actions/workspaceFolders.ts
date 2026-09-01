@@ -16,19 +16,15 @@ export interface AttachFolderOutcome {
   error?: string;
 }
 
-/** Last path segment, for naming the project in the picker's message. */
-function folderName(path: string): string {
-  return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path;
-}
-
 /**
  * Prompt for a folder and attach it to `workspacePath`.
  *
- * There is no separate trust prompt: an attached folder is part of the
+ * There is no separate TRUST prompt: an attached folder is part of the
  * workspace, and agent permissions are resolved from the session's workspace --
  * the primary root -- so it inherits that project's trust level rather than
- * getting one of its own. The picker says so, because granting an agent access
- * to another folder on disk should not be a silent consequence.
+ * getting one of its own. `workspace:attach-folder` confirms that consequence
+ * before it attaches, on every platform and for every entry point, so the
+ * picker does not repeat it here.
  *
  * Returns `{ success: false }` with no error when the user cancels the picker,
  * so callers can distinguish "changed their mind" from "attach failed".
@@ -39,9 +35,6 @@ export async function attachWorkspaceFolderWithPicker(
   const picked = await window.electronAPI?.invoke?.('dialog:openDirectory', {
     title: 'Attach Folder to Workspace',
     buttonLabel: 'Attach',
-    message:
-      `The folder you attach gets the same agent trust level as "${folderName(workspacePath)}", `
-      + 'and agents in this project will be able to read and write it.',
   });
 
   const folderPath = picked?.canceled ? undefined : picked?.filePaths?.[0];
@@ -63,6 +56,11 @@ export async function attachWorkspaceFolder(
       folderPath,
     });
     if (!result?.success) {
+      // Declining the consent dialog is a choice, not a failure -- report it
+      // like a cancelled picker so callers do not surface an error toast.
+      if (result?.reason === 'declined') {
+        return { success: false, folderPath };
+      }
       return { success: false, folderPath, error: result?.error ?? 'Failed to attach folder' };
     }
     return { success: true, folderPath };

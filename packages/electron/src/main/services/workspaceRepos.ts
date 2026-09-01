@@ -21,6 +21,7 @@ import { existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { getWorkspaceRoots } from '../utils/store';
 import { findGitRootForFile } from './GitStatusService';
+import { isPathInWorkspace } from '../../shared/pathUtils';
 import { logger } from '../utils/logger';
 
 /**
@@ -103,6 +104,31 @@ export function listWorkspaceRepos(workspacePath: string): string[] {
 }
 
 /**
+ * Every path a workspace-wide git scan has to visit: each root, plus each repo
+ * discovered under it.
+ *
+ * A root that is itself a repo contributes only itself. A CONTAINER root -- one
+ * that holds `checkouts/a` and `checkouts/b` -- is not a repo, so asking git
+ * about the root returns nothing; its discovered repos have to be visited
+ * individually or attached folders get no status at all. The roots stay in the
+ * list so a repo created after the discovery cache warmed (`git init` mid
+ * session) still answers.
+ */
+export function listRepoScanPaths(workspacePath: string): string[] {
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  for (const rootPath of getWorkspaceRoots(workspacePath)) {
+    for (const candidate of [rootPath, ...listReposForRoot(rootPath)]) {
+      if (!seen.has(candidate)) {
+        seen.add(candidate);
+        paths.push(candidate);
+      }
+    }
+  }
+  return paths;
+}
+
+/**
  * The repo that owns `filePath`, or null when the file is in no repo (or in no
  * root of this workspace).
  *
@@ -115,7 +141,7 @@ export function resolveRepoForFile(workspacePath: string, filePath: string): str
   // Deepest containing root first: a root nested inside another root bounds the
   // walk more tightly, which is what its own `.git` deserves.
   const owningRoots = roots
-    .filter((root) => filePath === root || filePath.startsWith(root.endsWith('/') ? root : root + '/'))
+    .filter((root) => isPathInWorkspace(filePath, root))
     .sort((a, b) => b.length - a.length);
 
   for (const root of owningRoots) {
@@ -155,7 +181,7 @@ export function groupFilesByRoot(
     // Deepest attached root wins; the primary root is the fallback, so it is
     // excluded from the match rather than competing on length.
     const owningRoot = roots
-      .filter((root) => root !== workspacePath && filePath.startsWith(root.replace(/\/$/, '') + '/'))
+      .filter((root) => root !== workspacePath && isPathInWorkspace(filePath, root))
       .sort((a, b) => b.length - a.length)[0] ?? workspacePath;
 
     const existing = groups.get(owningRoot);

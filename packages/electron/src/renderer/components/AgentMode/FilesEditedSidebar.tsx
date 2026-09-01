@@ -128,6 +128,8 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
         : [workspacePath]),
     [worktreePath, workspaceRootPaths, workspacePath]
   );
+  /** False while `committableRoots` is still the primary-root-only fallback. */
+  const rootsLoaded = Boolean(worktreePath) || workspaceRootPaths.length > 0;
 
   const isWorkspaceCommittableFile = useCallback(
     (filePath: string) => committableRoots.some(root => isPathInWorkspace(filePath, root)),
@@ -171,8 +173,8 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
   // Checkboxes are always shown in the new unified design
   const stagedFilesArr = useAtomValue(workstreamStagedFilesAtom(workstreamId));
   const stagedFiles = useMemo(
-    () => new Set(stagedFilesArr.filter((filePath) => isPathInWorkspace(filePath, effectiveWorkspacePath))),
-    [stagedFilesArr, effectiveWorkspacePath]
+    () => new Set(stagedFilesArr.filter(isWorkspaceCommittableFile)),
+    [stagedFilesArr, isWorkspaceCommittableFile]
   );
   const setStagedFilesAction = useSetAtom(setWorkstreamStagedFilesAtom);
 
@@ -180,12 +182,18 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
     if (worktreeId) {
       return;
     }
+    // `committableRoots` falls back to the primary root alone until the root
+    // list arrives. Pruning against that fallback would permanently drop a
+    // staged file in an attached folder, so wait for the real roots.
+    if (!rootsLoaded) {
+      return;
+    }
 
-    const sanitized = stagedFilesArr.filter((filePath) => isPathInWorkspace(filePath, effectiveWorkspacePath));
+    const sanitized = stagedFilesArr.filter(isWorkspaceCommittableFile);
     if (sanitized.length !== stagedFilesArr.length) {
       setStagedFilesAction({ workstreamId, files: sanitized });
     }
-  }, [effectiveWorkspacePath, stagedFilesArr, setStagedFilesAction, workstreamId, worktreeId]);
+  }, [isWorkspaceCommittableFile, rootsLoaded, stagedFilesArr, setStagedFilesAction, workstreamId, worktreeId]);
 
   // File scope mode for filtering what files to show (workspace-level setting)
   const fileScopeMode = useAtomValue(agentFileScopeModeAtom);

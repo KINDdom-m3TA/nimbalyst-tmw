@@ -44,6 +44,13 @@ export interface GitCommitExecutionResult {
    * when it was not.
    */
   uncommittableFiles?: string[];
+  /**
+   * The caller's own path strings for the files that actually landed in a
+   * commit. Present whenever the commit was resolved across repos, so a caller
+   * can leave everything else selected instead of clearing the whole selection
+   * after a partial failure. Absent when the repo was given explicitly.
+   */
+  committedFiles?: string[];
 }
 
 export interface GitCommitProposalResponse {
@@ -53,6 +60,17 @@ export interface GitCommitProposalResponse {
   error?: string;
   filesCommitted?: string[];
   commitMessage?: string;
+  /**
+   * Files that belong to no repository. Never committed, and excluded from
+   * `filesCommitted` so a partial result is not reported as a complete one.
+   */
+  uncommittableFiles?: string[];
+  /**
+   * Per-repo outcome when the proposal spanned several repositories. Present on
+   * a partial failure so the caller can retry only the repos that did not
+   * commit rather than re-proposing the whole file list.
+   */
+  repoResults?: Array<{ repoPath: string; success: boolean; commitHash?: string; error?: string }>;
 }
 
 function isGitRepository(workspacePath: string): boolean {
@@ -633,18 +651,30 @@ export function createGitCommitProposalResponse(
   commitMessage: string
 ): GitCommitProposalResponse {
   if (result.success) {
-    return {
+    // A successful commit can still have left files behind: anything in no
+    // repository was never staged anywhere. Reporting the caller's full input
+    // as `filesCommitted` would tell the user those files are committed.
+    const skipped = new Set(result.uncommittableFiles ?? []);
+    const response: GitCommitProposalResponse = {
       action: 'committed',
       commitHash: result.commitHash,
       commitDate: result.commitDate,
-      filesCommitted: files,
+      filesCommitted: skipped.size > 0 ? files.filter((file) => !skipped.has(file)) : files,
       commitMessage,
     };
+    if (skipped.size > 0) {
+      response.uncommittableFiles = [...skipped];
+    }
+    return response;
   }
 
   return {
     action: 'error',
     error: result.error || 'No changes were committed',
+    // Whatever DID commit before the failure, so the caller can retry only the
+    // rest instead of re-proposing files that are already in history.
+    ...(result.repoResults ? { repoResults: result.repoResults.map(({ repoPath, success, commitHash, error }) => ({ repoPath, success, commitHash, error })) } : {}),
+    ...(result.uncommittableFiles ? { uncommittableFiles: result.uncommittableFiles } : {}),
   };
 }
 
@@ -681,6 +711,13 @@ export async function executeGitCommitAcrossRepos(
   const absoluteFiles = filesToStage.map((filePath) =>
     isAbsolute(filePath) ? filePath : resolve(workspacePath, filePath),
   );
+  // Callers select by their own path strings and expect to hear back in the
+  // same terms, so map resolved paths back before reporting what committed.
+  const originalByAbsolute = new Map<string, string>();
+  absoluteFiles.forEach((absolute, index) => {
+    if (!originalByAbsolute.has(absolute)) originalByAbsolute.set(absolute, filesToStage[index]);
+  });
+  const toOriginal = (paths: string[]) => paths.map((p) => originalByAbsolute.get(p) ?? p);
 
   const groups = groupFilesByRepo(workspacePath, absoluteFiles);
   const uncommittableFiles = groups.get(null) ?? [];
@@ -694,13 +731,19 @@ export async function executeGitCommitAcrossRepos(
       error: uncommittableFiles.length > 0
         ? 'None of the selected files are in a git repository'
         : 'No files to commit',
-      uncommittableFiles: uncommittableFiles.length > 0 ? uncommittableFiles : undefined,
+      uncommittableFiles: uncommittableFiles.length > 0 ? toOriginal(uncommittableFiles) : undefined,
+      committedFiles: [],
     };
   }
 
   if (repoPaths.length === 1) {
-    const result = await executeGitCommit(repoPaths[0], message, groups.get(repoPaths[0])!, options);
-    return uncommittableFiles.length > 0 ? { ...result, uncommittableFiles } : result;
+    const repoFiles = groups.get(repoPaths[0])!;
+    const result = await executeGitCommit(repoPaths[0], message, repoFiles, options);
+    return {
+      ...result,
+      committedFiles: result.success ? toOriginal(repoFiles) : [],
+      ...(uncommittableFiles.length > 0 ? { uncommittableFiles: toOriginal(uncommittableFiles) } : {}),
+    };
   }
 
   const repoResults: Array<{ repoPath: string } & GitCommitExecutionResult> = [];
@@ -724,15 +767,19 @@ export async function executeGitCommitAcrossRepos(
   }
 
   const failed = repoResults.filter((result) => !result.success);
+  const committedFiles = toOriginal(
+    repoResults.filter((result) => result.success).flatMap((result) => groups.get(result.repoPath)!),
+  );
   return {
     success: failed.length === 0,
     commitHash: repoResults[0].commitHash,
     commitDate: repoResults[0].commitDate,
+    committedFiles,
     error: failed.length > 0
       ? `Committed ${repoResults.length - failed.length} of ${repoResults.length} repositories. `
         + failed.map((result) => `${result.repoPath}: ${result.error ?? 'unknown error'}`).join('; ')
       : undefined,
     repoResults,
-    uncommittableFiles: uncommittableFiles.length > 0 ? uncommittableFiles : undefined,
+    uncommittableFiles: uncommittableFiles.length > 0 ? toOriginal(uncommittableFiles) : undefined,
   };
 }

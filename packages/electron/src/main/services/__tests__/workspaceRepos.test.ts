@@ -19,6 +19,7 @@ import {
   clearWorkspaceRepoCache,
   groupFilesByRepo,
   groupFilesByRoot,
+  listRepoScanPaths,
   listWorkspaceRepos,
   resolveDefaultRepo,
   resolveRepoForFile,
@@ -150,5 +151,31 @@ describe('workspace repos', () => {
     const groups = groupFilesByRoot(appRepo, [path.join(appRepo, 'a.ts'), '/outside/b.ts']);
 
     expect([...groups.keys()]).toEqual([appRepo]);
+  });
+
+  it('includes repos below a container root in the workspace-wide scan set', () => {
+    // Workspace-wide status iterates this. Iterating ROOTS instead leaves an
+    // attached container -- which is not itself a repo -- contributing nothing,
+    // so its checkouts get no status badges even though the picker lists them.
+    rootsByWorkspace.set(appRepo, [appRepo, infraContainer]);
+
+    expect(listRepoScanPaths(appRepo)).toEqual([appRepo, infraContainer, infraRepoA]);
+  });
+
+  it('attributes a Windows-form path to its attached root', () => {
+    // Roots are stored with the platform's own separators, and containment used
+    // to be a literal `/` prefix test -- which never matches on Windows, so
+    // every attached-folder file resolved to no repo and became uncommittable.
+    const winPrimary = 'C:\\work\\app';
+    const winAttached = 'C:\\work\\infra';
+    rootsByWorkspace.set(winPrimary, [winPrimary, winAttached]);
+
+    const groups = groupFilesByRoot(winPrimary, [
+      'C:\\work\\infra\\main.tf',
+      'C:\\work\\app\\src\\index.ts',
+    ]);
+
+    expect(groups.get(winAttached)).toEqual(['C:\\work\\infra\\main.tf']);
+    expect(groups.get(winPrimary)).toEqual(['C:\\work\\app\\src\\index.ts']);
   });
 });

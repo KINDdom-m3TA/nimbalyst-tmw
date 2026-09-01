@@ -30,6 +30,7 @@ import { getGitSubprocessEnv, simpleGitWithHookEnv } from '../services/gitEnv';
 import { SessionCommitService } from '../services/SessionCommitService';
 import { safeHandle } from '../utils/ipcRegistry';
 import { findGitRootForFile } from '../services/GitStatusService';
+import { resolveRepoForFile } from '../services/workspaceRepos';
 import { isFileInWorkspaceOrWorktree } from '../utils/workspaceDetection';
 import {
   getGitOperationLogService,
@@ -1014,13 +1015,19 @@ export function registerGitHandlers(): void {
     }> => {
       if (!workspacePath) throw new Error('workspacePath is required');
       if (!args?.path) throw new Error('path is required');
-      if (!isGitRepository(workspacePath)) {
-        return { unifiedDiff: '', isBinary: false };
-      }
 
       const filePath = args.path;
       const group = args.group;
-      const { gitWorkspacePath, gitFilePath } = resolveGitDiffTarget(workspacePath, filePath);
+      // The caller only knows the workspace's primary root. An absolute path in
+      // an attached folder belongs to a different repo entirely, and resolving
+      // it against the primary root yields a `../..` pathspec that diffs
+      // nothing. Relative paths keep resolving against the primary root, which
+      // is where they have always been interpreted.
+      const ownerRepo = isAbsolute(filePath) ? resolveRepoForFile(workspacePath, filePath) : null;
+      const { gitWorkspacePath, gitFilePath } = resolveGitDiffTarget(ownerRepo ?? workspacePath, filePath);
+      if (!isGitRepository(gitWorkspacePath)) {
+        return { unifiedDiff: '', isBinary: false };
+      }
       const git: SimpleGit = simpleGit(gitWorkspacePath);
       const repoHasCommits = await hasCommits(git);
 
@@ -1149,7 +1156,16 @@ export function registerGitHandlers(): void {
       // file. Set when the caller already knows the repo (the widget's repo
       // header, an extension passing an explicit target).
       repoPath?: string
-    ): Promise<{ success: boolean; commitHash?: string; commitDate?: string; error?: string }> => {
+    ): Promise<{
+      success: boolean;
+      commitHash?: string;
+      commitDate?: string;
+      error?: string;
+      /** Per-repo outcome when the selection spanned more than one repository. */
+      repoResults?: Array<{ repoPath: string; success: boolean; commitHash?: string; error?: string }>;
+      /** Selected files that belong to no repository and were not committed. */
+      uncommittableFiles?: string[];
+    }> => {
       const result = await withGitOperationLog(
         operationLog,
         workspacePath,
@@ -1167,12 +1183,22 @@ export function registerGitHandlers(): void {
         result => result.commitHash ? `[${result.commitHash}] commit created` : undefined,
       );
 
-      if (sessionId && result.success && result.commitHash) {
-        void SessionCommitService.getInstance().recordCommit({
-          commitSha: result.commitHash,
-          sessionId,
-          workspaceId: workspacePath,
-        });
+      if (sessionId) {
+        // Record every commit the operation produced. A selection spanning two
+        // repos makes two commits, and recording only `result.commitHash` --
+        // the first repo's -- leaves the second unattributed in the Git Log
+        // panel. Per-repo results also carry the successful ones on a partial
+        // failure, which is exactly when attribution matters most.
+        const commitHashes = result.repoResults
+          ? result.repoResults.filter((r) => r.success && r.commitHash).map((r) => r.commitHash!)
+          : result.success && result.commitHash ? [result.commitHash] : [];
+        for (const commitSha of commitHashes) {
+          void SessionCommitService.getInstance().recordCommit({
+            commitSha,
+            sessionId,
+            workspaceId: workspacePath,
+          });
+        }
       }
 
       return result;

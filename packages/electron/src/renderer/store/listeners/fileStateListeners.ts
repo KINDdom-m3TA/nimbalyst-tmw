@@ -24,7 +24,7 @@ import {
 } from '../atoms/sessionFiles';
 import { workstreamStagedFilesAtom, setWorkstreamStagedFilesAtom } from '../atoms/workstreamState';
 import { workspaceRootPathsAtom } from '../atoms/fileTree';
-import { getRelativeWorkspacePath } from '../../../shared/pathUtils';
+import { getRelativeWorkspacePath, isPathInWorkspace } from '../../../shared/pathUtils';
 import { createToolCallMatchesCoalescer } from './toolCallMatchesCoalescer';
 import { createPerKeyDebouncer } from './perKeyDebounce';
 import { loadSessionFilesResult } from '../../services/sessionFilesLoader';
@@ -75,7 +75,7 @@ function belongsToCurrentWorkspaceRoots(repoPath: string, workspacePath: string 
   const roots = store.get(workspaceRootPathsAtom);
   // Only meaningful once the workspace actually spans more than its own root.
   if (roots.length < 2 || roots[0] !== workspacePath) return false;
-  return roots.some((root) => repoPath === root || repoPath.startsWith(root + '/'));
+  return roots.some((root) => isPathInWorkspace(repoPath, root));
 }
 
 /**

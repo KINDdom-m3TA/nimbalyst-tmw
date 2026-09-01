@@ -256,8 +256,12 @@ export async function archiveWorktree(worktreeId: string, workspacePath: string)
         // Update status to show we're removing the worktree
         archiveProgressManager.updateTaskStatus(worktreeId, 'removing-worktree');
 
-        // Remove the git worktree from disk (throws if directory still exists after cleanup)
-        await gitWorktreeService.deleteWorktree(worktree.path, workspacePath);
+        // Remove the git worktree from disk (throws if directory still exists
+        // after cleanup). Unregister it from the repo it was branched from --
+        // `workspacePath` is only the workspace's primary root, and running
+        // `worktree remove` there would delete the directory while leaving the
+        // real repo's registration and branch behind.
+        await gitWorktreeService.deleteWorktree(worktree.path, worktree.sourceFolderPath || workspacePath);
 
         archiveLogger.info('Worktree cleanup completed, now marking as archived in database', { worktreeId });
 
@@ -622,8 +626,9 @@ export function registerWorktreeHandlers(): void {
       // Stop the git ref watcher for this worktree
       await gitRefWatcher.stop(worktree.path);
 
-      // Delete the git worktree
-      await gitWorktreeService.deleteWorktree(worktree.path, workspacePath);
+      // Delete the git worktree from the repo it was branched from, not the
+      // workspace's primary root -- see the note in `archiveWorktree`.
+      await gitWorktreeService.deleteWorktree(worktree.path, worktree.sourceFolderPath || workspacePath);
 
       // Delete the database record
       await worktreeStore.delete(worktreeId);
@@ -1163,7 +1168,8 @@ export function registerWorktreeHandlers(): void {
    * Merge worktree branch to main
    *
    * @param worktreePath - Path to the worktree
-   * @param mainRepoPath - Path to the main repository
+   * @param mainRepoPath - Path to the workspace's primary root; only a fallback
+   *   for worktrees with no stored source repository
    * @returns Merge result
    */
   ipcMain.handle('worktree:merge', async (_event, worktreePath: string, mainRepoPath: string) => {
@@ -1175,9 +1181,16 @@ export function registerWorktreeHandlers(): void {
         throw new Error('mainRepoPath is required');
       }
 
-      logger.info('Merging worktree to main', { worktreePath, mainRepoPath });
+      // Merge back into the repo the worktree was branched from. The renderer
+      // only knows the workspace's primary root, which in a multi-root
+      // workspace is a different repository -- or no repository at all.
+      const db = getDatabase();
+      const stored = db ? await createWorktreeStore(db).getByPath(worktreePath) : null;
+      const targetRepoPath = stored?.sourceFolderPath || mainRepoPath;
 
-      const result = await gitWorktreeService.mergeToMain(worktreePath, mainRepoPath);
+      logger.info('Merging worktree to main', { worktreePath, targetRepoPath });
+
+      const result = await gitWorktreeService.mergeToMain(worktreePath, targetRepoPath);
 
       // Track merge attempt
       const analyticsService = AnalyticsService.getInstance();

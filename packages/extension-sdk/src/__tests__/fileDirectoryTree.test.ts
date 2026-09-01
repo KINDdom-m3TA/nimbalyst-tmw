@@ -111,6 +111,15 @@ describe('buildFileDirectoryTree', () => {
       expect(getWorkspaceRelativeFilePath('/elsewhere/a.ts', ROOTS)).toBe('/elsewhere/a.ts');
     });
 
+    it('disambiguates attached roots that share a basename', () => {
+      // `/app/api` and `/infra/api` are an ordinary pair, and a bare basename
+      // would collapse both repos into one `api` group in the tree.
+      const roots = ['/repo', '/app/api', '/infra/api'];
+
+      expect(getWorkspaceRelativeFilePath('/app/api/src/a.ts', roots)).toBe('app/api/src/a.ts');
+      expect(getWorkspaceRelativeFilePath('/infra/api/src/a.ts', roots)).toBe('infra/api/src/a.ts');
+    });
+
     it('matches single-root behaviour when given one root', () => {
       expect(getWorkspaceRelativeFilePath('/repo/src/index.ts', ['/repo']))
         .toBe(getWorkspaceRelativeFilePath('/repo/src/index.ts', '/repo'));

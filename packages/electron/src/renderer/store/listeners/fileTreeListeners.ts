@@ -57,8 +57,16 @@ async function loadRootTree(rootPath: string): Promise<void> {
  * the answer, so this runs alongside the root list rather than on a timer --
  * main caches the filesystem scan behind it and clears that cache on both.
  */
-async function refreshWorkspaceRepos(workspacePath: string): Promise<void> {
-  store.set(workspaceRepoPathsAtom, await fetchWorkspaceRepos(workspacePath));
+async function refreshWorkspaceRepos(
+  workspacePath: string,
+  isStale: () => boolean,
+): Promise<void> {
+  const repos = await fetchWorkspaceRepos(workspacePath);
+  // The scan touches the filesystem, so a rail switch or a detach can land
+  // first. Publishing a stale answer would leave the repo picker offering repos
+  // the workspace no longer spans.
+  if (isStale()) return;
+  store.set(workspaceRepoPathsAtom, repos);
 }
 
 /**
@@ -103,7 +111,7 @@ export function initFileTreeListeners(workspacePath: string): () => void {
 
     publishForest(rootPaths);
     store.set(fileTreeLoadedAtom, true);
-    if (!disposed) await refreshWorkspaceRepos(workspacePath);
+    await refreshWorkspaceRepos(workspacePath, () => disposed);
   })();
 
   // Subscribe to file tree updates from the watcher. The payload names the
@@ -141,7 +149,7 @@ export function initFileTreeListeners(workspacePath: string): () => void {
         if (disposed) return;
 
         publishForest(rootPaths);
-        await refreshWorkspaceRepos(workspacePath);
+        await refreshWorkspaceRepos(workspacePath, () => disposed);
       }
     );
     cleanups.push(cleanup);
@@ -224,7 +232,7 @@ export async function refreshFileTree(path: string): Promise<void> {
   if (!path || !window.electronAPI?.getFolderContents) return;
 
   const rootPaths = store.get(workspaceRootPathsAtom);
-  const owningRoot = rootPaths.find((root) => path === root || path.startsWith(root + '/')) ?? path;
+  const owningRoot = resolveOwningRoot(path, rootPaths) ?? path;
 
   await loadRootTree(owningRoot);
   publishForest(rootPaths.length > 0 ? rootPaths : [owningRoot]);

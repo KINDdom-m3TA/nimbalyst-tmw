@@ -121,16 +121,27 @@ export function getFileSystemServiceFor(workspacePath: string): FileSystemServic
  * Returns null for a relative path or one outside every registered root.
  */
 export function getFileSystemServiceForPath(filePath: string): FileSystemService | null {
-  if (!filePath || !filePath.startsWith('/')) {
+  // POSIX absolute, or a Windows drive/UNC path. Matching on a leading `/`
+  // alone would send every Windows absolute path down the relative branch.
+  if (!filePath || !(filePath.startsWith('/') || /^([A-Za-z]:[\\/]|\\\\)/.test(filePath))) {
     return null;
   }
 
+  // Compare with separators normalized: roots are stored as the platform wrote
+  // them, and a mixed `C:/a` vs `C:\a` would otherwise never match.
+  const normalize = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '');
+  const normalizedFile = normalize(filePath);
+
   let bestRoot: string | null = null;
+  let bestLength = -1;
   for (const root of fileSystemServicesByPath.keys()) {
-    if (filePath === root || filePath.startsWith(root.endsWith('/') ? root : root + '/')) {
-      if (!bestRoot || root.length > bestRoot.length) {
-        bestRoot = root;
-      }
+    const normalizedRoot = normalize(root);
+    if (normalizedFile !== normalizedRoot && !normalizedFile.startsWith(normalizedRoot + '/')) {
+      continue;
+    }
+    if (normalizedRoot.length > bestLength) {
+      bestRoot = root;
+      bestLength = normalizedRoot.length;
     }
   }
 

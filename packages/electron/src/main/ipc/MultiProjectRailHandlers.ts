@@ -26,7 +26,7 @@
  * - `workspace:get-folders` -- the workspace's roots, primary first.
  */
 
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, dialog } from 'electron';
 import { basename } from 'path';
 import { existsSync, statSync } from 'fs';
 import { safeHandle } from '../utils/ipcRegistry';
@@ -324,6 +324,25 @@ export function registerMultiProjectRailHandlers(): void {
 
             const window = BrowserWindow.fromWebContents(event.sender);
             if (!window) return { success: false, error: 'No window for event sender' };
+
+            // Attaching hands this project's agents read/write access to another
+            // folder on disk, so it is confirmed here rather than in the picker:
+            // the picker's `message` option only renders on macOS, and the
+            // drag-drop / command routes never open a picker at all.
+            const consent = await dialog.showMessageBox(window, {
+                type: 'question',
+                buttons: ['Attach Folder', 'Cancel'],
+                defaultId: 0,
+                cancelId: 1,
+                title: 'Attach Folder to Workspace',
+                message: `Attach "${basename(folderPath)}" to "${basename(workspacePath)}"?`,
+                detail:
+                    'The attached folder becomes part of this project and inherits its agent '
+                    + 'trust level. Agents in this project will be able to read and write it.',
+            });
+            if (consent.response !== 0) {
+                return { success: false, reason: 'declined', error: undefined };
+            }
 
             const result = attachFolderToWorkspace(workspacePath, folderPath);
             if (!result.ok) {
