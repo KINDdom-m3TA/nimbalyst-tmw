@@ -253,16 +253,72 @@ describe('ClaudeCodeProvider.sendMessage chunk sequence', () => {
 
     const chunks = await runTurn(provider, 'hi');
 
-    // Two `complete` chunks is the current behavior, not an endorsement of it:
-    // the error branch yields `complete` without setting `completeEmitted`, so
-    // the epilogue's `if (!completeEmitted)` fallback yields a second one. It is
-    // pinned here so the decomposition is checked against what ships today.
+    // Exactly one `complete`. The chunk loop used to yield its own and leave
+    // `completeEmitted` false, so the epilogue's fallback yielded a second.
     expect(normalize(chunks)).toEqual([
       { type: 'error', error: 'upstream exploded' },
       { type: 'complete', isComplete: true },
-      { type: 'complete', isComplete: true },
     ]);
     expect(stubs.logError.mock.calls[0]?.[3]).toBe('result_chunk');
+  });
+
+  it('emits one complete when the SDK reports an authentication failure', async () => {
+    const { provider, stubs } = await makeProvider();
+    queryMock.mockImplementation(() =>
+      scriptQuery([
+        INIT_CHUNK,
+        { type: 'assistant', session_id: 'sdk-session-1', error: 'authentication_failed' },
+      ]),
+    );
+
+    const chunks = await runTurn(provider, 'hi');
+
+    expect(normalize(chunks)).toEqual([
+      { type: 'error', error: 'Authentication failed. Please log in to continue.', isAuthError: true },
+      { type: 'complete', isComplete: true },
+    ]);
+    expect(stubs.logError.mock.calls[0]?.[3]).toBe('assistant_chunk');
+  });
+
+  it('carries usage on the terminal complete when a turn errors after streaming', async () => {
+    // The epilogue owns terminal completion on the error path too, so the
+    // tokens already spent this turn still reach the consumer.
+    const { provider } = await makeProvider();
+    queryMock.mockImplementation(() =>
+      scriptQuery([
+        INIT_CHUNK,
+        {
+          type: 'assistant',
+          session_id: 'sdk-session-1',
+          message: {
+            id: 'msg_1',
+            content: [{ type: 'text', text: 'partial answer' }],
+            usage: { input_tokens: 30, output_tokens: 4, cache_read_input_tokens: 2 },
+          },
+        },
+        { type: 'result', subtype: 'error_during_execution', is_error: true, result: 'rate limit exceeded' },
+      ]),
+    );
+
+    const chunks = await runTurn(provider, 'hi');
+
+    expect(normalize(chunks)).toEqual([
+      { type: 'context_usage', contextFillTokens: 32 },
+      { type: 'text', content: 'partial answer' },
+      { type: 'error', error: 'rate limit exceeded' },
+      {
+        type: 'complete',
+        isComplete: true,
+        usage: {
+          input_tokens: 30,
+          output_tokens: 4,
+          cache_read_input_tokens: 2,
+          cache_creation_input_tokens: 0,
+          total_tokens: 34,
+        },
+        contextFillTokens: 32,
+      },
+    ]);
   });
 
   it('yields error then complete when the SDK iterator throws mid-stream', async () => {

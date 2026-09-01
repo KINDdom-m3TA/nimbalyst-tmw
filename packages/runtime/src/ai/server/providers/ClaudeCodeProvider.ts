@@ -1219,7 +1219,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
                 if (errorChunk?.type === 'assistant' && errorChunk?.error === 'authentication_failed') {
                   this.logError(sessionId, 'claude-code', new Error(errorMessage), 'assistant_chunk', 'authentication_error', hideMessages);
                   yield { type: 'error', error: errorMessage, isAuthError: true };
-                  yield { type: 'complete', isComplete: true };
+                  // No `complete` here -- finishTurn owns terminal completion.
                   breakOuter = true;
                   break;
                 }
@@ -1254,9 +1254,8 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
                     ...(isServerError && { isServerError: true }),
                   };
 
-                  await this.flushPendingWrites();
-                  if (sessionId) await this.processTranscriptMessages(sessionId);
-                  yield { type: 'complete', isComplete: true };
+                  // No `complete` here -- finishTurn owns terminal completion,
+                  // and it flushes writes and processes the transcript first.
                   breakOuter = true;
                   break;
                 }
@@ -1293,7 +1292,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
                   // console.error('[CLAUDE-CODE] Authentication error detected in summary:', item.text);
                   this.logError(sessionId, 'claude-code', new Error(item.text), 'summary_chunk', 'authentication_error', hideMessages);
                   yield { type: 'error', error: item.text, isAuthError: true };
-                  yield { type: 'complete', isComplete: true };
+                  // No `complete` here -- finishTurn owns terminal completion.
                   breakOuter = true;
                 } else {
                   const displayMessage = item.text

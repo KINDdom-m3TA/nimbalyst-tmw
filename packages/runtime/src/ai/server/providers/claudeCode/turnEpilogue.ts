@@ -57,6 +57,13 @@ export interface FinishTurnParams {
  * Runs after the chunk loop exits normally: report a slash command that
  * produced nothing, then emit the terminal `complete` if the `result` chunk
  * did not already do it.
+ *
+ * This is the ONLY place a turn completes, other than the successful `result`
+ * chunk (which sets `completeEmitted`) and the error path below. The chunk
+ * loop's error branches used to yield their own `complete` without setting the
+ * flag, so an errored turn completed twice — and the second one, not the first,
+ * was the one that ran the turn-end snapshots and carried usage. They now just
+ * break and let this run.
  */
 export async function* finishTurn(
   host: TurnEpilogueHost,
