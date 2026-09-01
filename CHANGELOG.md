@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A shared tracker item could arrive with no issue key at all, leaving it unreachable by `Fixes NIM-123`, by deep link, and by key lookup; new items keep the key they are given and existing ones get theirs back.
 - The tracker's Display Settings — view, grouping, ordering and sort — are now remembered per tracker type, so grouping bugs by status no longer regroups every other tracker (#1412).
 - A compaction that failed left no way forward: the transcript showed a bare error and the Compact button stayed stuck on "Compacting..."; it now reports the failure with the error that caused it and lets you retry (#1414).
+- Clicking a desktop notification from a session running in a worktree reported that the session could not be found in its originating project; it now opens the session.
 
 ### Removed
 <!-- Removed features go here -->
