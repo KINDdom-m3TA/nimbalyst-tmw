@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Phone-started sessions now run on one desktop instead of starting duplicate agents across every connected install.
+- `nim tracker show` no longer presents linked work, triage metadata, or derived signals as custom fields.
 - Cmd+N in Shared Docs opened the local new-file dialog instead of creating a shared document, and did nothing in the tracker.
 - A command an agent ran in the background was killed about five minutes after its turn ended; one can now run for up to 30 minutes.
 - Changing the theme laid a large opaque rectangle across the top of the screen behind the menu bar island, and flattened the menu bar panel's translucency.

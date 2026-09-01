@@ -103,7 +103,7 @@ import { applyRemoteTrackerPersonalState } from '../../ipc/TrackerPersonalStateH
 import { normalizeCodexProviderConfig, omitModelsField, stripTransientProviderFields } from '@nimbalyst/runtime/ai/server/utils/modelConfigUtils';
 import { isFileInWorkspaceOrWorktree, resolveProjectPath } from '../../utils/workspaceDetection';
 import { inferWorktreePathFromFilePath, inferWorktreePathFromCommand } from './worktreeInference';
-import { SessionFilesRepository } from '@nimbalyst/runtime';
+import { AISessionsRepository, SessionFilesRepository } from '@nimbalyst/runtime';
 import { buildToolPermissionResponseRecord } from './claudeCliToolPermission';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -163,6 +163,43 @@ import {
 import { captureTutorialMilestone } from '../tutorial/tutorialAnalytics';
 
 const execFileAsync = promisify(execFile);
+
+type DeviceTargetedRequest = { targetDeviceId?: string };
+
+/** How long a finished mobile request ID stays guarded against redelivery. */
+const MOBILE_REQUEST_DEDUP_GRACE_MS = 60_000;
+
+function getLocalHostDeviceId(): string | undefined {
+  return getSyncProvider()?.getLocalDeviceInfo?.()?.deviceId;
+}
+
+function isTargetedAtAnotherDevice(request: DeviceTargetedRequest, localDeviceId: string | undefined): boolean {
+  return request.targetDeviceId !== undefined && request.targetDeviceId !== localDeviceId;
+}
+
+/**
+ * Record which desktop owns a session, after the session already exists.
+ *
+ * This is bookkeeping that runs past the point of no return -- for a worktree
+ * request the worktree and the session are both on disk by now. A transient
+ * repository failure here must not surface as "creation failed", or the phone
+ * retries with a new request ID and creates an orphaned duplicate. The truth is
+ * narrower and is what gets logged: the session exists, its host attribution
+ * did not stick, and the next sync of that row will carry it.
+ */
+async function stampSessionHost(sessionId: string, hostDeviceId: string | undefined): Promise<void> {
+  if (!hostDeviceId) return;
+  try {
+    await AISessionsRepository.updateMetadata(sessionId, {
+      metadata: { hostDeviceId },
+    });
+  } catch (error) {
+    logger.main.warn(
+      `[AIService] Session ${sessionId} was created but host attribution to ${hostDeviceId} failed:`,
+      error,
+    );
+  }
+}
 
 /**
  * Catalogs that survive the provider instance that discovered them.
@@ -248,7 +285,7 @@ export class AIService {
   // each claiming a different prompt and sending both to the AI concurrently.
   private sessionsProcessingQueue = new Set<string>();
 
-  // Track mobile session creation requests to prevent duplicate processing
+  // Track mobile-initiated requests to prevent duplicate processing
   // (can happen if the same request is delivered multiple times)
   private processingMobileSessionRequests = new Set<string>();
 
@@ -1197,6 +1234,21 @@ export class AIService {
     await this.tryInitializeMobileSyncHandler();
   }
 
+  /**
+   * Release a mobile request ID once its work has settled.
+   *
+   * The grace period only covers a redelivery arriving just after completion.
+   * The entry is deliberately NOT released while the work is still running: an
+   * eviction timer started at dispatch expires mid-flight on anything slower
+   * than a minute, and the redelivery it then admits runs a second copy of an
+   * operation already halfway through creating a worktree or a session.
+   */
+  private releaseMobileRequestAfterGrace(requestId: string): void {
+    setTimeout(() => {
+      this.processingMobileSessionRequests.delete(requestId);
+    }, MOBILE_REQUEST_DEDUP_GRACE_MS);
+  }
+
   private async tryInitializeMobileSyncHandler() {
     try {
       const syncProvider = getSyncProvider();
@@ -1332,6 +1384,11 @@ export class AIService {
       // Listen for session creation requests from mobile
       if (syncProvider.onCreateSessionRequest) {
         syncProvider.onCreateSessionRequest(async (request) => {
+          const hostDeviceId = getLocalHostDeviceId();
+          if (isTargetedAtAnotherDevice(request, hostDeviceId)) {
+            logger.main.info('[AIService] Ignoring session request targeted at another device:', request.requestId);
+            return;
+          }
           logger.main.info('[AIService] Received create session request from mobile:', {
             requestId: request.requestId,
             projectId: request.projectId,
@@ -1344,10 +1401,6 @@ export class AIService {
             return;
           }
           this.processingMobileSessionRequests.add(request.requestId);
-          // Clean up after 60 seconds to prevent memory leak
-          setTimeout(() => {
-            this.processingMobileSessionRequests.delete(request.requestId);
-          }, 60000);
 
           try {
             // Find a window for this project/workspace
@@ -1449,6 +1502,7 @@ export class AIService {
               undefined,               // worktreeProjectPath
               resolvedAgentRole        // agentRole - from mobile request or 'standard'
             );
+            await stampSessionHost(session.id, hostDeviceId);
 
             // If a parentSessionId was provided, set it on the session
             if (request.parentSessionId && session) {
@@ -1476,6 +1530,7 @@ export class AIService {
                 mode: session.mode,
                 sessionType: session.sessionType,
                 parentSessionId: request.parentSessionId ?? session.parentSessionId ?? undefined,
+                ...(hostDeviceId ? { hostDeviceId } : {}),
                 agentRole: session.agentRole,
                 createdBySessionId: session.createdBySessionId ?? undefined,
                 workspaceId: session.workspacePath,
@@ -1552,6 +1607,8 @@ export class AIService {
                 error: error instanceof Error ? error.message : 'Unknown error'
               });
             }
+          } finally {
+            this.releaseMobileRequestAfterGrace(request.requestId);
           }
         });
 
@@ -1570,9 +1627,6 @@ export class AIService {
             return;
           }
           this.processingMobileSessionRequests.add(request.requestId);
-          setTimeout(() => {
-            this.processingMobileSessionRequests.delete(request.requestId);
-          }, 60000);
 
           try {
             // Static import (top of file): a dynamic import() here re-runs the
@@ -1598,6 +1652,8 @@ export class AIService {
               success: false,
               error: error instanceof Error ? error.message : String(error),
             });
+          } finally {
+            this.releaseMobileRequestAfterGrace(request.requestId);
           }
         });
       }
@@ -1606,7 +1662,22 @@ export class AIService {
       // Mirrors the desktop worktree:create IPC handler + AgentMode session creation exactly
       if (syncProvider.onCreateWorktreeRequest) {
         syncProvider.onCreateWorktreeRequest(async (request) => {
+          const hostDeviceId = getLocalHostDeviceId();
+          if (isTargetedAtAnotherDevice(request, hostDeviceId)) {
+            logger.main.info('[AIService] Ignoring worktree request targeted at another device:', request.requestId);
+            return;
+          }
           logger.main.info('[AIService] Received worktree creation request from mobile:', request.requestId, 'projectId:', request.projectId);
+
+          // Same guard as session creation. A redelivered worktree request that
+          // starts a second flow races the first over the filesystem and the
+          // worktree table, and both flows create a branch.
+          if (this.processingMobileSessionRequests.has(request.requestId)) {
+            logger.main.info('[AIService] Ignoring duplicate worktree creation request:', request.requestId);
+            return;
+          }
+          this.processingMobileSessionRequests.add(request.requestId);
+
           try {
             // Step 1: Create git worktree with name deduplication (same as worktree:create handler)
             const { GitWorktreeService } = await import('../GitWorktreeService');
@@ -1659,6 +1730,7 @@ export class AIService {
               workspaceId: request.projectId,
               worktreeId: worktree.id,
             });
+            await stampSessionHost(sessionId, hostDeviceId);
             logger.main.info('[AIService] Worktree session created:', sessionId, 'worktreeId:', worktree.id);
 
             // Step 3: Notify renderer to refresh and set workstream state
@@ -1685,6 +1757,7 @@ export class AIService {
                 mode: 'agent',
                 sessionType: 'session',
                 worktreeId: worktree.id,
+                ...(hostDeviceId ? { hostDeviceId } : {}),
                 workspaceId: request.projectId,
                 workspacePath: request.projectId,
                 messageCount: 0,
@@ -1708,6 +1781,8 @@ export class AIService {
                 error: error instanceof Error ? error.message : 'Unknown error',
               });
             }
+          } finally {
+            this.releaseMobileRequestAfterGrace(request.requestId);
           }
         });
         // logger.main.info('[AIService] Worktree creation request handler initialized');
@@ -2101,6 +2176,7 @@ export class AIService {
         worktreePath,
         worktreeProjectPath
       );
+      await stampSessionHost(session.id, getLocalHostDeviceId());
 
       // Track session creation in feature usage system
       FeatureUsageService.getInstance().recordUsage(FEATURES.SESSION_CREATED);
@@ -4187,6 +4263,7 @@ export class AIService {
         model,
         'session',
       );
+      await stampSessionHost(session.id, getLocalHostDeviceId());
 
       // Set session title
       if (sessionName) {
