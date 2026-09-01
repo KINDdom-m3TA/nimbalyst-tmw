@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- Quick open's Files tab can narrow to just your local files or just your team's shared documents, and remembers the choice.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
