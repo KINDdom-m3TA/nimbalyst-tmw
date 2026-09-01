@@ -6,7 +6,9 @@
  */
 
 import type { PanelHost, PanelAIContext, ExtensionStorage, ExtensionFileStorage, ExtensionDataAccess, ExecOptions, ExecResult } from '@nimbalyst/runtime';
+import { store } from '@nimbalyst/runtime/store';
 import { ExtensionFileStorageImpl } from './ExtensionFileStorageImpl';
+import { workspaceRootPathsAtom } from '../../store/atoms/fileTree';
 
 // ============================================================================
 // Types
@@ -139,6 +141,24 @@ class PanelHostImpl implements PanelHost {
 
   get theme(): string {
     return this._theme;
+  }
+
+  /**
+   * Every root of the workspace, primary first. Read live from the atom the
+   * explorer already maintains rather than captured at construction, so a
+   * panel open across an attach or detach sees the current set.
+   *
+   * Falls back to the primary root alone before the explorer has published --
+   * a panel that mounts early gets the single-folder answer, never an empty
+   * list it would have to special-case.
+   */
+  getWorkspaceFolders(): string[] {
+    const roots = store.get(workspaceRootPathsAtom);
+    return roots.length > 0 && roots[0] === this.workspacePath ? roots : [this.workspacePath];
+  }
+
+  getPrimaryFolderPath(): string {
+    return this.workspacePath;
   }
 
   get isSettingsOpen(): boolean {

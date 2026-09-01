@@ -28,6 +28,7 @@ import {
   clearWorkstreamGitStateAtom,
 } from '../../store/atoms/workstreamState';
 import { worktreeChangedFilesAtom } from '../../store/atoms/sessionFiles';
+import { activeFileRepoPathAtom } from '../../store/atoms/workspaceRepos';
 import { RebaseConflictDialog } from './RebaseConflictDialog';
 import { MergeConflictDialog } from './MergeConflictDialog';
 import { MergeConfirmDialog } from './MergeConfirmDialog';
@@ -92,6 +93,19 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
     const setIsCommitting = useSetAtom(isCommittingAtom);
 
     const gitWorkspacePath = worktreePath || workspacePath;
+
+    /**
+     * Repository the branch/ahead-behind readout and the recent-commit list
+     * describe. A worktree session is its own checkout; otherwise it follows the
+     * active file, matching the title-bar indicator so the two never disagree.
+     *
+     * Committing deliberately still passes `workspacePath`: the commit channel
+     * groups the staged files by owning repo and splits across repos, which a
+     * single resolved repo here would prevent.
+     */
+    const activeFileRepoPath = useAtomValue(activeFileRepoPathAtom);
+    const statusRepoPath = worktreePath || activeFileRepoPath || workspacePath;
+
     const isWorkspaceCommittablePath = useCallback((filePath: string) => {
       if (!filePath) {
         return false;
@@ -280,28 +294,28 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
 
     // Fetch git status
     const fetchGitStatus = useCallback(async () => {
-      if (!workspacePath) return;
+      if (!statusRepoPath) return;
       try {
         if (window.electronAPI) {
-          const status = await window.electronAPI.invoke('git:status', workspacePath);
+          const status = await window.electronAPI.invoke('git:status', statusRepoPath);
           setGitStatus(status as any);
         }
       } catch (error) {
         console.error('[GitOperationsPanel] Failed to fetch git status:', error);
       }
-    }, [workspacePath, setGitStatus]);
+    }, [statusRepoPath, setGitStatus]);
 
     // Initial fetch and listen for git:status-changed events
     useEffect(() => {
-      if (!workspacePath) return;
+      if (!statusRepoPath) return;
 
       fetchGitStatus();
 
       // Listen for git status changes (from GitRefWatcher)
       // No polling needed - GitRefWatcher provides immediate updates
       const unsubscribe = window.electronAPI?.git?.onStatusChanged?.(
-        (data: { workspacePath: string }) => {
-          if (data.workspacePath === workspacePath) {
+        (data: { workspacePath: string; repoPath?: string }) => {
+          if ((data.repoPath ?? data.workspacePath) === statusRepoPath) {
             fetchGitStatus();
           }
         }
@@ -310,31 +324,31 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
       return () => {
         unsubscribe?.();
       };
-    }, [workspacePath, fetchGitStatus]);
+    }, [statusRepoPath, fetchGitStatus]);
 
     // Fetch recent commits
     const fetchCommits = useCallback(async () => {
-      if (!workspacePath) return;
+      if (!statusRepoPath) return;
       try {
         if (window.electronAPI) {
-          const result = await window.electronAPI.invoke('git:log', workspacePath, 10);
+          const result = await window.electronAPI.invoke('git:log', statusRepoPath, 10);
           setGitCommits(result as any);
         }
       } catch (error) {
         console.error('[GitOperationsPanel] Failed to fetch commits:', error);
       }
-    }, [workspacePath, setGitCommits]);
+    }, [statusRepoPath, setGitCommits]);
 
     // Initial fetch and listen for commit detection events
     useEffect(() => {
-      if (!workspacePath) return;
+      if (!statusRepoPath) return;
 
       fetchCommits();
 
       // Listen for new commits (from GitRefWatcher)
       const unsubscribe = window.electronAPI?.git?.onCommitDetected?.(
         (data: { workspacePath: string }) => {
-          if (data.workspacePath === workspacePath) {
+          if (data.workspacePath === statusRepoPath) {
             fetchCommits();
           }
         }
@@ -343,7 +357,7 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
       return () => {
         unsubscribe?.();
       };
-    }, [workspacePath, fetchCommits]);
+    }, [statusRepoPath, fetchCommits]);
 
     // Handle manual commit
     const handleManualCommit = useCallback(async () => {
@@ -367,8 +381,8 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
             clearGitState(workstreamId);
             // Refresh git status and commits
             const [newStatus, newCommits] = await Promise.all([
-              window.electronAPI.invoke('git:status', workspacePath),
-              window.electronAPI.invoke('git:log', workspacePath, 10),
+              window.electronAPI.invoke('git:status', statusRepoPath),
+              window.electronAPI.invoke('git:log', statusRepoPath, 10),
             ]);
             setGitStatus(newStatus as any);
             setGitCommits(newCommits as any);

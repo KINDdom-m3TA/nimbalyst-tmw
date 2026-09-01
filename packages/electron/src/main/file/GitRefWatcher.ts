@@ -424,6 +424,10 @@ export class GitRefWatcher {
 
       this.emitToAllWindows('git:status-changed', {
         workspacePath,
+        // The watcher is registered per repo, so this IS the repo root. Named
+        // explicitly because a multi-root renderer routes on it: the repo may
+        // sit inside an attached folder, not the workspace path.
+        repoPath: workspacePath,
       });
     } catch (error) {
       logger.main.error('[GitRefWatcher] Error handling ref change:', error);
@@ -479,7 +483,7 @@ export class GitRefWatcher {
 
       clearGitStatusCache(workspacePath);
       clearGitFactsCache(workspacePath);
-      this.emitToAllWindows('git:status-changed', { workspacePath });
+      this.emitToAllWindows('git:status-changed', { workspacePath, repoPath: workspacePath });
     } catch (error) {
       logger.main.error('[GitRefWatcher] Error handling HEAD change:', error);
     }
@@ -515,6 +519,10 @@ export class GitRefWatcher {
     // Emit event to update UI
     this.emitToAllWindows('git:status-changed', {
       workspacePath,
+      // The watcher is registered per repo, so this IS the repo root. Named
+      // explicitly because a multi-root renderer routes on it: the repo may
+      // sit inside an attached folder, not the workspace path.
+      repoPath: workspacePath,
     });
   }
 

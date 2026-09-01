@@ -48,11 +48,17 @@ export function registerPermissionHandlers(): void {
   const permissionService = getPermissionService();
 
   // Open directory dialog for selecting additional directories
-  safeHandle('dialog:openDirectory', async (event, options?: { title?: string; buttonLabel?: string }) => {
+  safeHandle('dialog:openDirectory', async (
+    event,
+    options?: { title?: string; buttonLabel?: string; message?: string },
+  ) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     const dialogOptions: Electron.OpenDialogOptions = {
       title: options?.title || 'Select Directory',
       buttonLabel: options?.buttonLabel || 'Select',
+      // Shown above the browser on macOS. Callers use it to state a consequence
+      // of the choice the user is about to make.
+      ...(options?.message ? { message: options.message } : {}),
       properties: ['openDirectory', 'createDirectory'],
       defaultPath: getDialogDefaultPath({ window }),
     };

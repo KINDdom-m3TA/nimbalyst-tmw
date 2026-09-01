@@ -108,6 +108,35 @@ export function getFileSystemServiceFor(workspacePath: string): FileSystemServic
   return fileSystemServicesByPath.get(workspacePath) ?? null;
 }
 
+/**
+ * Resolve the service whose root owns an absolute file path.
+ *
+ * A multi-root workspace registers a service per root -- the primary root and
+ * every attached folder -- so an absolute path into an attached folder must
+ * resolve to that folder's service, not to the primary root's (which does not
+ * contain the file) and not to the global (which points at whatever workspace
+ * is visible). Deepest matching root wins, so a root nested inside another is
+ * attributed to the nearer one.
+ *
+ * Returns null for a relative path or one outside every registered root.
+ */
+export function getFileSystemServiceForPath(filePath: string): FileSystemService | null {
+  if (!filePath || !filePath.startsWith('/')) {
+    return null;
+  }
+
+  let bestRoot: string | null = null;
+  for (const root of fileSystemServicesByPath.keys()) {
+    if (filePath === root || filePath.startsWith(root.endsWith('/') ? root : root + '/')) {
+      if (!bestRoot || root.length > bestRoot.length) {
+        bestRoot = root;
+      }
+    }
+  }
+
+  return bestRoot ? (fileSystemServicesByPath.get(bestRoot) ?? null) : null;
+}
+
 export function clearFileSystemServiceFor(workspacePath: string): void {
   fileSystemServicesByPath.delete(workspacePath);
 }

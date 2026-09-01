@@ -12,6 +12,7 @@ import {
   type HunkSelection,
 } from '@nimbalyst/runtime/ui/git/unifiedDiffModel';
 import { gitOperationLock } from './GitOperationLock';
+import { groupFilesByRepo } from './workspaceRepos';
 import { GIT_INHERITED_ENV_UNSAFE } from './gitInheritedEnvUnsafe';
 import { sanitizeGitRepositoryEnv } from './gitRepositoryEnv';
 
@@ -29,6 +30,20 @@ export interface GitCommitExecutionResult {
    * callers should not report a spotless working tree.
    */
   indexRefreshFailed?: boolean;
+  /**
+   * Per-repo detail when the file list spanned more than one repository and the
+   * commit was split. Absent for the ordinary single-repo commit. The top-level
+   * fields summarize: `success` is true only if every repo committed, and
+   * `commitHash` is the first repo's, so existing single-repo UI still has
+   * something to show.
+   */
+  repoResults?: Array<{ repoPath: string } & GitCommitExecutionResult>;
+  /**
+   * Files that belong to no repository. They were not committed anywhere;
+   * surfaced rather than dropped so the user is not told a file was committed
+   * when it was not.
+   */
+  uncommittableFiles?: string[];
 }
 
 export interface GitCommitProposalResponse {
@@ -630,5 +645,94 @@ export function createGitCommitProposalResponse(
   return {
     action: 'error',
     error: result.error || 'No changes were committed',
+  };
+}
+
+/**
+ * Commit a file list that may span several repositories.
+ *
+ * A multi-root workspace can hand the user a proposal touching two checkouts;
+ * git has no notion of a commit across repos, so this splits by owning
+ * repository and commits each in turn with the same message. Sequential rather
+ * than parallel: each `executeGitCommit` takes that repo's operation lock and
+ * runs its hooks, and interleaving two hook runs is how you get confusing,
+ * half-attributable output.
+ *
+ * The single-repo case -- everything real users hit today -- delegates straight
+ * to `executeGitCommit` against the resolved repo root and returns its result
+ * untouched, so nothing about an ordinary commit changes shape.
+ */
+export async function executeGitCommitAcrossRepos(
+  workspacePath: string,
+  message: string,
+  filesToStage: string[],
+  options?: Parameters<typeof executeGitCommit>[3] & {
+    /** Commit only this repo, skipping resolution. Set by an explicit repoPath. */
+    repoPath?: string;
+  }
+): Promise<GitCommitExecutionResult> {
+  if (options?.repoPath) {
+    return executeGitCommit(options.repoPath, message, filesToStage, options);
+  }
+
+  // Relative paths are workspace-relative by contract, and repo resolution
+  // compares against absolute root paths -- so resolve before grouping.
+  // `executeGitCommit` takes absolute paths and makes them repo-relative itself.
+  const absoluteFiles = filesToStage.map((filePath) =>
+    isAbsolute(filePath) ? filePath : resolve(workspacePath, filePath),
+  );
+
+  const groups = groupFilesByRepo(workspacePath, absoluteFiles);
+  const uncommittableFiles = groups.get(null) ?? [];
+  groups.delete(null);
+
+  const repoPaths = [...groups.keys()].filter((repo): repo is string => repo !== null);
+
+  if (repoPaths.length === 0) {
+    return {
+      success: false,
+      error: uncommittableFiles.length > 0
+        ? 'None of the selected files are in a git repository'
+        : 'No files to commit',
+      uncommittableFiles: uncommittableFiles.length > 0 ? uncommittableFiles : undefined,
+    };
+  }
+
+  if (repoPaths.length === 1) {
+    const result = await executeGitCommit(repoPaths[0], message, groups.get(repoPaths[0])!, options);
+    return uncommittableFiles.length > 0 ? { ...result, uncommittableFiles } : result;
+  }
+
+  const repoResults: Array<{ repoPath: string } & GitCommitExecutionResult> = [];
+  for (const repoPath of repoPaths) {
+    const files = groups.get(repoPath)!;
+    // Hunk selections are per file, so each repo only gets the ones it owns.
+    // Resolved the same way as the file list, since a selection may name the
+    // file relative to the workspace while `files` is absolute.
+    const repoFiles = new Set(files);
+    const hunkSelections = options?.hunkSelections?.filter((selection) =>
+      repoFiles.has(
+        isAbsolute(selection.path) ? selection.path : resolve(workspacePath, selection.path),
+      ),
+    );
+    const result = await executeGitCommit(repoPath, message, files, {
+      ...options,
+      hunkSelections,
+      logContext: `${options?.logContext ?? '[git:commit]'} ${repoPath}`,
+    });
+    repoResults.push({ repoPath, ...result });
+  }
+
+  const failed = repoResults.filter((result) => !result.success);
+  return {
+    success: failed.length === 0,
+    commitHash: repoResults[0].commitHash,
+    commitDate: repoResults[0].commitDate,
+    error: failed.length > 0
+      ? `Committed ${repoResults.length - failed.length} of ${repoResults.length} repositories. `
+        + failed.map((result) => `${result.repoPath}: ${result.error ?? 'unknown error'}`).join('; ')
+      : undefined,
+    repoResults,
+    uncommittableFiles: uncommittableFiles.length > 0 ? uncommittableFiles : undefined,
   };
 }

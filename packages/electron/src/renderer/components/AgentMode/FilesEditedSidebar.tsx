@@ -49,6 +49,7 @@ import {
   type FileEditWithSession,
 } from '../../store/atoms/sessionFiles';
 import { registerSessionWorkspace, registerWorktreePath, loadInitialSessionFileState } from '../../store/listeners/fileStateListeners';
+import { workspaceRootPathsAtom } from '../../store/atoms/fileTree';
 import { isPathInWorkspace } from '../../../shared/pathUtils';
 import { FilesScopeDropdown } from './FilesScopeDropdown';
 import { GitOperationsPanel } from './GitOperationsPanel';
@@ -113,9 +114,24 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
   const [filterToCurrentSession, setFilterToCurrentSession] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
 
+  /**
+   * Roots the sidebar treats as "in this workspace". A worktree session sees
+   * only its own checkout; otherwise every attached folder counts, so a file in
+   * one is listed and committable rather than silently filtered out.
+   */
+  const workspaceRootPaths = useAtomValue(workspaceRootPathsAtom);
+  const committableRoots = useMemo(
+    () => (worktreePath
+      ? [worktreePath]
+      : workspaceRootPaths.length > 0
+        ? workspaceRootPaths
+        : [workspacePath]),
+    [worktreePath, workspaceRootPaths, workspacePath]
+  );
+
   const isWorkspaceCommittableFile = useCallback(
-    (filePath: string) => isPathInWorkspace(filePath, effectiveWorkspacePath),
-    [effectiveWorkspacePath]
+    (filePath: string) => committableRoots.some(root => isPathInWorkspace(filePath, root)),
+    [committableRoots]
   );
 
   const workspaceScopedFileEdits = useMemo(
@@ -598,6 +614,7 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
             fileEdits={fileEdits}
             onFileClick={onFileClick}
             workspacePath={worktreePath || workspacePath}
+            workspaceRoots={committableRoots}
             pendingReviewFiles={pendingReviewFiles}
             groupByDirectory={groupByDirectory}
             onGroupByDirectoryChange={setGroupByDirectory}

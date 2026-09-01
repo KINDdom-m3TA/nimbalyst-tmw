@@ -350,6 +350,36 @@ describe('File Tools', () => {
       expect(result.results[0].file).toBe('active.ts');
     });
 
+    it('routes an absolute path to the root that owns it, over the context workspace', async () => {
+      // Multi-root: every session in a workspace carries the PRIMARY root as
+      // its ctx.workspacePath, so an absolute path into an attached folder
+      // would otherwise be handed to a service that does not contain the file.
+      setFileSystemServiceFor('/ws/attached', inactiveWorkspaceService);
+
+      const result = await readFileTool.handler!(
+        { path: '/ws/attached/notes.md' },
+        { workspacePath: '/ws/active' },
+      );
+
+      expect(inactiveWorkspaceService.readFile).toHaveBeenCalledOnce();
+      expect(activeWorkspaceService.readFile).not.toHaveBeenCalled();
+      expect(result.content).toBe('inactive content');
+
+      clearFileSystemServiceFor('/ws/attached');
+    });
+
+    it('keeps a relative path on the context workspace', async () => {
+      // A bare relative path must still resolve against the primary root --
+      // it is the session cwd, and nothing about it names another root.
+      const result = await readFileTool.handler!(
+        { path: 'src/index.ts' },
+        { workspacePath: '/ws/inactive' },
+      );
+
+      expect(inactiveWorkspaceService.readFile).toHaveBeenCalledOnce();
+      expect(result.content).toBe('inactive content');
+    });
+
     it('falls back to the global when the per-path entry is missing', async () => {
       const result = await searchFilesTool.handler!({ query: 'pattern' }, { workspacePath: '/ws/unknown' });
 

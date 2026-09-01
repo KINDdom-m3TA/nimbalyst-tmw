@@ -20,6 +20,7 @@ import { AnalyticsService } from '../services/analytics/AnalyticsService';
 import { getTerminalSessionManager } from '../services/TerminalSessionManager';
 import { getTerminalsByWorktreeId, deleteTerminalInstance } from '../utils/terminalStore';
 import { gitRefWatcher } from '../file/GitRefWatcher';
+import { listReposForRoot, resolveDefaultRepo } from '../services/workspaceRepos';
 import type { WorktreeCreateResult } from '../../shared/ipc/types';
 import { gitOperationLock } from '../services/GitOperationLock';
 import fs from 'node:fs';
@@ -342,12 +343,24 @@ export function registerWorktreeHandlers(): void {
   ipcMain.handle('worktree:create', async (
     _event,
     workspacePath: string,
-    options?: { name?: string; baseBranch?: string }
+    options?: { name?: string; baseBranch?: string; sourceFolderPath?: string }
   ): Promise<WorktreeCreateResult> => {
     const startTime = Date.now();
     const MAX_RETRIES = 3;
     const name = options?.name;
     const baseBranch = options?.baseBranch;
+    /**
+     * Repository the worktree is branched from. A workspace can span several
+     * roots, so the caller names which one; unnamed falls back to the primary
+     * root's repo, which is the only repo a single-folder workspace has.
+     *
+     * The worktree's IDENTITY stays `workspacePath` (sessions, kanban and
+     * trackers key off it) -- only the git operations move to this repo.
+     */
+    const sourceRepo =
+      (options?.sourceFolderPath ? listReposForRoot(options.sourceFolderPath)[0] ?? null : null)
+      ?? resolveDefaultRepo(workspacePath)
+      ?? workspacePath;
 
     // Retry loop for handling race conditions where concurrent requests pick the same name
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -360,7 +373,7 @@ export function registerWorktreeHandlers(): void {
           throw new Error('workspacePath is required');
         }
 
-        logger.info('Creating worktree', { workspacePath, name, baseBranch, attempt });
+        logger.info('Creating worktree', { workspacePath, sourceRepo, name, baseBranch, attempt });
 
         // Get database early for de-duplication
         const db = getDatabase();
@@ -378,8 +391,8 @@ export function registerWorktreeHandlers(): void {
 
           const [dbNames, filesystemNames, branchNames] = await Promise.all([
             worktreeStore.getAllNames(),
-            Promise.resolve(gitWorktreeService.getExistingWorktreeDirectories(workspacePath)),
-            gitWorktreeService.getAllBranchNames(workspacePath),
+            Promise.resolve(gitWorktreeService.getExistingWorktreeDirectories(sourceRepo)),
+            gitWorktreeService.getAllBranchNames(sourceRepo),
           ]);
 
           timings.deduplication = Date.now() - dedupeStartTime;
@@ -404,7 +417,15 @@ export function registerWorktreeHandlers(): void {
 
         // Create the git worktree
         const gitCreateStartTime = Date.now();
-        const worktree = await gitWorktreeService.createWorktree(workspacePath, { name: finalName, baseBranch });
+        const created = await gitWorktreeService.createWorktree(sourceRepo, { name: finalName, baseBranch });
+        // The service reports the repo it branched from as `projectPath`;
+        // re-anchor to the workspace so identity stays on the primary root and
+        // record the source repo separately.
+        const worktree = {
+          ...created,
+          projectPath: workspacePath,
+          sourceFolderPath: sourceRepo,
+        };
         timings.gitWorktreeCreate = Date.now() - gitCreateStartTime;
 
         // Track the created worktree for potential cleanup
@@ -461,7 +482,7 @@ export function registerWorktreeHandlers(): void {
             worktreePath: createdWorktree.path,
           });
           try {
-            await gitWorktreeService.deleteWorktree(createdWorktree.path, workspacePath);
+            await gitWorktreeService.deleteWorktree(createdWorktree.path, sourceRepo);
             logger.info('Successfully cleaned up orphaned worktree', { worktreePath: createdWorktree.path });
           } catch (cleanupError) {
             logger.error('Failed to clean up orphaned worktree - manual cleanup required', {
