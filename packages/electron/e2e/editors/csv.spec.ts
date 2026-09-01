@@ -440,6 +440,29 @@ test('double-click to edit should work', async () => {
   await closeTabByFileName(page, 'keyboard-test.csv');
 });
 
+// The other half of the quick-open guard below: declining keystrokes by origin
+// must not decline the grid's own. Typing a printable key over a focused cell
+// is how RevoGrid opens the editor without a double-click.
+test('typing over a focused cell opens the cell editor', async () => {
+  await fs.writeFile(path.join(workspaceDir, 'keyboard-test.csv'), 'A,B,C\n1,2,3\n4,5,6\n7,8,9\n', 'utf8');
+
+  await openFileFromTree(page, 'keyboard-test.csv');
+  await page.waitForSelector(REVOGRID_SELECTOR, { timeout: TEST_TIMEOUTS.EDITOR_LOAD });
+  await page.waitForTimeout(500);
+
+  await page.locator('revogr-data [role="gridcell"]').nth(6).click();
+  await page.waitForTimeout(300);
+
+  await page.keyboard.type('Z');
+
+  const editInput = page.locator('revo-grid input');
+  await editInput.waitFor({ state: 'visible', timeout: 2000 });
+  expect(await editInput.inputValue()).toBe('Z');
+
+  await page.keyboard.press('Escape'); // Cancel edit
+  await closeTabByFileName(page, 'keyboard-test.csv');
+});
+
 // ============================================================================
 // QUICK OPEN FOCUS TESTS
 // ============================================================================
