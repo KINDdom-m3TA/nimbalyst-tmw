@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Agent edits to a file already open in diff mode could be reverted by an autosave or freeze at an old version; repeated writes now stay ordered, accept/reject and manual save can no longer overwrite newer content, and large documents keep their approval bar.
 - A canvas board holding a sticky or an image card you had not filled in yet could not be saved, read by an agent, or opened as source.
 - Phone-started sessions now run on one desktop instead of starting duplicate agents across every connected install.
 - `nim tracker show` no longer presents linked work, triage metadata, or derived signals as custom fields.
