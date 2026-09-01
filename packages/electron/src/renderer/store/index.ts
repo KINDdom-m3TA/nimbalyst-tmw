@@ -97,6 +97,7 @@ export {
   anySessionProcessingAtom,
   anyPendingInteractivePromptAtom,
   markSessionReadAtom,
+  markSessionsReadAtom,
   setActiveSessionAtom,
   // Session list loading
   sessionListLoadingAtom,
