@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 <!-- Changes to existing functionality go here -->
 - The title bar now carries two create buttons: one on the left that makes a new file, shared doc or tracker item in the list you are looking at, with a menu of every type it can create, and one on the right that starts a new session.
+- Accepting a team invitation now opens your team in the browser and lands you on its documents, instead of asking you to download the desktop app first; the app is offered alongside it for the work only it can do.
+- Inviting someone now asks what they get — their role, any extra projects, and folders to share with the team — so a new teammate arrives to real work instead of an empty organization.
 
 ### Fixed
 <!-- Bug fixes go here -->
