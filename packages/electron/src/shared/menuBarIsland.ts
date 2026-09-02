@@ -104,6 +104,8 @@ export interface MenuBarIslandState {
     | {
         mode: 'named';
         sessionId: string;
+        /** Carried because the title is clickable: opening a session needs both. */
+        workspacePath: string;
         title: string;
         state: 'approval' | 'decision' | 'failed' | 'running' | 'completed' | 'stalled';
         age: { label: string; hot: boolean };
