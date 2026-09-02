@@ -1,7 +1,7 @@
 /**
  * Tip: Nimbalyst Coach
  *
- * Surfaces the /nimbalyst-coach workflow to users with real session history
+ * Surfaces the /planning:nimbalyst-coach workflow to users with real session history
  * whose workspace still shows a major surrounding feature untouched.
  *
  * The gap this closes is invisible from the inside: you cannot know which
@@ -40,8 +40,11 @@ export const nimbalystCoachTip: TipDefinition = {
     body: 'Your agent can read this project and your recent sessions and tell you what would make them go better -- **extensions** that match your files, features you have not touched, and **instructions** worth adding so every future session starts smarter.',
     action: {
       label: 'Show me',
-      // Drops /nimbalyst-coach into the composer (claude-code sessions only).
-      insertPrompt: '/nimbalyst-coach ',
+      // Drops the command into the composer (claude-code sessions only).
+      // Extension commands are namespaced by their plugin, so the name the
+      // user actually types is `/planning:nimbalyst-coach` -- the bare form
+      // does not resolve.
+      insertPrompt: '/planning:nimbalyst-coach ',
       variant: 'primary',
     },
   },

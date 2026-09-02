@@ -267,8 +267,10 @@ describe('contextual tip definitions', () => {
     ).toBe(false);
   });
 
-  it('inserts the /nimbalyst-coach command from the coach tip action', () => {
-    expect(nimbalystCoachTip.content.action?.insertPrompt).toBe('/nimbalyst-coach ');
+  it('inserts the coach command under its plugin namespace', () => {
+    // Extension commands only resolve as `/<plugin>:<command>`; the bare name
+    // silently does nothing when the user submits it.
+    expect(nimbalystCoachTip.content.action?.insertPrompt).toBe('/planning:nimbalyst-coach ');
   });
 
   it('targets the welcome tips to the files-empty surface', () => {

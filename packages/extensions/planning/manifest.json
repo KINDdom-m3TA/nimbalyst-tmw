@@ -6,7 +6,7 @@
   "author": "Nimbalyst",
   "apiVersion": "1.0.0",
   "marketplace": {
-    "changelog": "1.0.2: New /nimbalyst-coach command reviews your project and recent sessions and suggests extensions, features, and agent-instruction changes.",
+    "changelog": "1.0.2: New /planning:nimbalyst-coach command reviews your project and recent sessions and suggests extensions, features, and agent-instruction changes.",
     "categories": ["ai-tools"],
     "tags": ["planning", "tracker", "implementation", "frontmatter", "workflow"],
     "icon": "checklist",

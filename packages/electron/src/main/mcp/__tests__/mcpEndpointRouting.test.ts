@@ -95,7 +95,7 @@ describe('mcpEndpointRouting', () => {
     // out of every first-party endpoint and simply never reaches the model.
     // Nothing fails: typecheck passes, unit tests pass, the dispatch case is
     // right there in the switch -- the tool is just absent from tools/list.
-    // Both host tools added for /nimbalyst-coach shipped this way until a live
+    // Both host tools added for /planning:nimbalyst-coach shipped this way until a live
     // tools/list against the running app showed them missing.
     it('gives every declared host tool schema a topology mapping', () => {
       const unmapped = [...SESSION_CONTEXT_TOOL_SCHEMAS, ...settingsToolSchemas]

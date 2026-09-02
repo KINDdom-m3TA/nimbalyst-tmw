@@ -2783,7 +2783,7 @@ export default function App() {
           const anchor = target as HTMLAnchorElement;
           const href = anchor.getAttribute('href');
 
-          // `nimbalyst://install/<extensionId>` -- the affordance /nimbalyst-coach
+          // `nimbalyst://install/<extensionId>` -- the affordance /planning:nimbalyst-coach
           // uses to recommend an extension. The OS-level deep-link handler
           // already routes this scheme when it arrives from outside the app;
           // a click on the same link *inside* the renderer had no branch here

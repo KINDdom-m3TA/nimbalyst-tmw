@@ -1,7 +1,7 @@
 /**
  * sessionCoachingSignals -- pure extraction behind `get_session_coaching_signals`.
  *
- * The coach command (`/nimbalyst-coach`, planning extension) needs per-session
+ * The coach command (`/planning:nimbalyst-coach`, planning extension) needs per-session
  * evidence that `get_session_summary` cannot give it: which tools the agent
  * actually reached for, and which tracker items the session is linked to.
  * Without those, findings like "you asked the agent to read the logs" or

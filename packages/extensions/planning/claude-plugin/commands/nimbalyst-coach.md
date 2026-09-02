@@ -2,7 +2,7 @@
 description: Audit this project and your recent sessions, then recommend extensions, features, and agent-instruction changes that would make Nimbalyst work better for you
 ---
 
-# /nimbalyst-coach Command
+# /planning:nimbalyst-coach Command
 
 Read this project and the user's recent AI sessions, compare both against the catalog below, and report where they are working *around* Nimbalyst instead of *with* it. **Read-only until the report is finished**, then offer the instruction edits for approval.
 

@@ -4,7 +4,7 @@
  *
  * Settings' `settings_get_overview` deliberately does not carry this: it is a
  * settings snapshot, and the extension set is neither a setting nor small. The
- * coach command (`/nimbalyst-coach`) needs it to answer "you have 43 .ipynb
+ * coach command (`/planning:nimbalyst-coach`) needs it to answer "you have 43 .ipynb
  * files and no notebook editor installed", which requires knowing the installed
  * set, the enabled set, and the available set as three distinct things.
  *

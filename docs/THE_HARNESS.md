@@ -446,11 +446,11 @@ This is how 2026-05-20's tracker-body workstream produced the `end-to-end-verifi
 
 Run `/analyze-sessions` after any frustrating session or after a major workstream concludes. The signal decays quickly; capture it while the user can still recall what went wrong.
 
-### `/analyze-sessions` vs `/nimbalyst-coach`
+### `/analyze-sessions` vs `/planning:nimbalyst-coach`
 
 Two commands, two audiences — do not merge them.
 
-| | `/analyze-sessions` | `/nimbalyst-coach` |
+| | `/analyze-sessions` | `/planning:nimbalyst-coach` |
 | --- | --- | --- |
 | Lives in | `.claude/commands/` (this repo only) | `planning` extension (ships to every user) |
 | Audience | Nimbalyst developers auditing this repo's harness | Any Nimbalyst user in any project |
@@ -458,7 +458,7 @@ Two commands, two audiences — do not merge them.
 | Also covers | — | Extension recommendations from the file census, unused product features, harness structure |
 | Assumes | This repo's rule layout and private memory | Nothing; works on a bare project with no `CLAUDE.md` |
 
-`/nimbalyst-coach` is the productized descendant of `/analyze-sessions`'s "underused tools" section. The repo-local command stays as-is — harness forensics for Nimbalyst development is a different job from onboarding a user to the product.
+`/planning:nimbalyst-coach` is the productized descendant of `/analyze-sessions`'s "underused tools" section. The repo-local command stays as-is — harness forensics for Nimbalyst development is a different job from onboarding a user to the product.
 
 ---
 

@@ -2,7 +2,7 @@
  * `nimbalyst://install/<extensionId>` parsing for in-app clicks.
  *
  * The OS-level protocol handler already routes this scheme when the link
- * arrives from outside the app. This is the in-renderer half: /nimbalyst-coach
+ * arrives from outside the app. This is the in-renderer half: /planning:nimbalyst-coach
  * renders install links in the transcript, and a click on one has to resolve to
  * an extension id before it can open the marketplace.
  *

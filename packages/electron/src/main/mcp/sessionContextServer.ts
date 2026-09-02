@@ -735,7 +735,7 @@ export const SESSION_CONTEXT_TOOL_SCHEMAS = [
   {
     name: "get_session_coaching_signals",
     description:
-      "Get bounded, structured evidence about one AI session as JSON: turn count, the user's own prompts, normalized tool usage, files edited, linked tracker item IDs, phase, tags, and workstream. Built for auditing how a workspace uses Nimbalyst (see the /nimbalyst-coach workflow) -- prefer get_session_summary when you just want to know what a session was about. Output is capped so it is safe to call across many sessions; the `truncated` flag says when a cap was hit. Only sessions in the current workspace can be inspected.",
+      "Get bounded, structured evidence about one AI session as JSON: turn count, the user's own prompts, normalized tool usage, files edited, linked tracker item IDs, phase, tags, and workstream. Built for auditing how a workspace uses Nimbalyst (see the /planning:nimbalyst-coach workflow) -- prefer get_session_summary when you just want to know what a session was about. Output is capped so it is safe to call across many sessions; the `truncated` flag says when a cap was hit. Only sessions in the current workspace can be inspected.",
     inputSchema: {
       type: "object",
       properties: {
