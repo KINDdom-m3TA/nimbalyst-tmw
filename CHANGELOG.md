@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Cmd+Shift+K shortcut for the kanban view did nothing.
 - Waking from sleep could start a second full database backup while one was still running, so both failed; the backup copies setting now also applies to databases still on PGLite.
 - Two dollar amounts on different lines of the same paragraph in a chat message rendered as math.
+- A tracker item closed by a commit recorded the close in its activity with no author and a timestamp the timeline could not order, and repeated closes merged into one entry when the item synced.
 
 ### Removed
 <!-- Removed features go here -->
