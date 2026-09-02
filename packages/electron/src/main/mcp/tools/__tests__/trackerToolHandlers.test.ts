@@ -1234,6 +1234,67 @@ describe('handleTrackerGet', () => {
     expect(payload.structured.item.issueKeyStatus).toBe('unassigned');
     expect(payload.summary).toContain('This item has no key until it is published.');
   });
+
+  // #1224: an agent that archives an item read it back as active. The archived
+  // column is INTEGER on SQLite and BOOLEAN on PGLite, so both row shapes have
+  // to report the same boolean.
+  it.each([
+    ['SQLite integer', 1],
+    ['PGLite boolean', true],
+  ])('reports an archived item as archived (%s)', async (_label, archived) => {
+    mockDocumentServices.set('/tmp/workspace-a', mockDocService);
+    mockDocService.getTrackerItemById.mockResolvedValueOnce(rowToTrackerItem(makeRow({
+      archived,
+      archived_at: '2026-09-01T00:00:00.000Z',
+    })));
+
+    const result = await handleTrackerGet({ id: 'bug_internal' }, '/tmp/workspace-a');
+
+    expect(result.isError).toBe(false);
+    const payload = JSON.parse(result.content[0].text!);
+    expect(payload.structured.item.archived).toBe(true);
+    expect(payload.structured.item.archivedAt).toBe('2026-09-01T00:00:00.000Z');
+  });
+
+  // #1224: comments are written to `data.comments` by tracker_add_comment and
+  // land in customFields, where the internal-key filter dropped them -- so an
+  // agent could never read back a comment it had just posted.
+  it('reads back a comment posted through tracker_add_comment', async () => {
+    mockDocumentServices.set('/tmp/workspace-a', mockDocService);
+    mockDocService.getTrackerItemById.mockResolvedValueOnce(rowToTrackerItem(makeRow({
+      data: JSON.stringify({
+        title: 'Scoped bug',
+        status: 'to-do',
+        comments: [{
+          id: 'comment_1',
+          authorIdentity: { displayName: 'Test User' },
+          body: 'Repro confirmed on main',
+          createdAt: 1756684800000,
+          updatedAt: null,
+          deleted: false,
+        }],
+      }),
+    })));
+
+    const result = await handleTrackerGet({ id: 'bug_internal' }, '/tmp/workspace-a');
+
+    expect(result.isError).toBe(false);
+    const payload = JSON.parse(result.content[0].text!);
+    expect(payload.structured.item.comments).toHaveLength(1);
+    expect(payload.structured.item.comments[0].body).toBe('Repro confirmed on main');
+  });
+
+  it('omits archived metadata and comments when the item has none', async () => {
+    mockDocumentServices.set('/tmp/workspace-a', mockDocService);
+    mockDocService.getTrackerItemById.mockResolvedValueOnce(rowToTrackerItem(makeRow({ archived: 0 })));
+
+    const result = await handleTrackerGet({ id: 'bug_internal' }, '/tmp/workspace-a');
+
+    const payload = JSON.parse(result.content[0].text!);
+    expect(payload.structured.item.archived).toBe(false);
+    expect(payload.structured.item.archivedAt).toBeUndefined();
+    expect(payload.structured.item.comments).toBeUndefined();
+  });
 });
 
 describe('tracker schema tools', () => {

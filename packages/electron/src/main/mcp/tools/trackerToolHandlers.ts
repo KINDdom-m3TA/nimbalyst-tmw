@@ -1662,6 +1662,13 @@ export async function handleTrackerGet(
         tags: item.tags || [],
         owner: item.owner || undefined,
         dueDate: item.dueDate || undefined,
+        // #1224: without these the tool contradicts its own mutations -- an
+        // agent that archived an item read it back as active, and comments
+        // arrive in customFields, which the filter below strips.
+        // `fromDbBoolean`: the flag is INTEGER on SQLite, boolean on PGLite.
+        archived: fromDbBoolean(item.archived),
+        archivedAt: item.archivedAt || undefined,
+        comments: item.customFields?.comments || undefined,
         // Surface schema-defined custom fields (e.g. github-pr's prNumber) that
         // are otherwise dropped by the known-field whitelist above. Uses the
         // same internal-key filtering as the summary so the bag is clean.
