@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Document sync could delete markdown files from your workspace, including files tracked in git.
+- Sync connection errors wrote your authentication token to the application log in plain text.
 - Committing changes that spanned repositories reported files as committed that were never committed, and showed only the first repository's commit hash.
 - Approving a commit from your phone failed outright when the changes spanned repositories, including the files that could have been committed.
 - A session running in a worktree silently left out changes in the project's attached folders when committing.
