@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Bug fixes go here -->
 - Cmd+B bolds text again when you are typing in an editor, instead of toggling the sidebar.
 - Typing in a markdown file no longer stutters each time it autosaves in a workspace with a large tracker.
+- A session that had previously reached the complete phase stayed out of the menu bar's Running list for the whole of its next turn.
 
 ### Removed
 <!-- Removed features go here -->
