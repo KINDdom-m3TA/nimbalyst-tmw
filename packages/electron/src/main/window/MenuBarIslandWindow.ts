@@ -41,8 +41,11 @@ import { markWindowTransparent } from './transparentWindows';
 
 /** Cursor poll. Fast enough that hover feels instant, cheap enough to leave on. */
 const POLL_MS = 90;
+/** Keep Vite's full-page development overlay off the island's oversized canvas. */
+const HIDE_VITE_ERROR_OVERLAY_CSS = 'vite-error-overlay { display: none !important; }';
 
 let islandWindow: BrowserWindow | null = null;
+let islandRendererReady = false;
 let pollTimer: NodeJS.Timeout | null = null;
 let islandRect: IslandRect = { left: 0, top: 0, width: 0, height: 0 };
 let hover: HoverState = { hovered: false, outsideSince: 0 };
@@ -135,6 +138,7 @@ function applyPlacement(display: Electron.Display): void {
 
 function createIslandWindow(): BrowserWindow {
   const { anchor: _anchor, ...bounds } = targetPlacement();
+  islandRendererReady = false;
 
   const window = new BrowserWindow({
     ...bounds,
@@ -198,17 +202,31 @@ function createIslandWindow(): BrowserWindow {
   loadIslandRenderer(window);
 
   window.webContents.once('did-finish-load', () => {
-    if (window.isDestroyed()) return;
+    void finishIslandLoad(window);
+  });
+
+  async function finishIslandLoad(loadedWindow: BrowserWindow): Promise<void> {
+    if (process.env.NODE_ENV === 'development') {
+      try {
+        await loadedWindow.webContents.insertCSS(HIDE_VITE_ERROR_OVERLAY_CSS);
+      } catch (error) {
+        logger.main.error('[MenuBarIsland] Refusing to show without the Vite overlay guard:', error);
+        return;
+      }
+    }
+
+    if (loadedWindow.isDestroyed() || islandWindow !== loadedWindow) return;
+    islandRendererReady = true;
     // NSStatusWindowLevel. Enough to clear the menu bar and to stay visible over
     // another app's full-screen space; screen-saver level is not needed.
-    window.setAlwaysOnTop(true, 'status');
+    loadedWindow.setAlwaysOnTop(true, 'status');
     // Re-assert the bounds now that the level is above the menu bar.
     const { anchor: _anchor, ...bounds } = targetPlacement();
-    window.setBounds(bounds);
-    window.showInactive();
+    loadedWindow.setBounds(bounds);
+    loadedWindow.showInactive();
     // The renderer pulls the glyph and its first frame itself once mounted --
     // see `requestInit`. Pushing here would land before React subscribes.
-  });
+  }
 
   // The tray panel found that creating a window with this shape can demote the
   // app's activation policy, which strips the Dock icon and the Cmd+Tab entry
@@ -358,7 +376,7 @@ export function showMenuBarIsland(state: Omit<MenuBarIslandState, 'expanded' | '
     startPolling();
     return;
   }
-  if (!islandWindow.isVisible()) islandWindow.showInactive();
+  if (islandRendererReady && !islandWindow.isVisible()) islandWindow.showInactive();
   startPolling();
   pushState();
 }
@@ -370,6 +388,7 @@ export function closeMenuBarIsland(): void {
   pinned = false;
   dragging = null;
   ignoringMouse = true;
+  islandRendererReady = false;
   islandRect = { left: 0, top: 0, width: 0, height: 0 };
   latestState = null;
   if (islandWindow && !islandWindow.isDestroyed()) islandWindow.destroy();

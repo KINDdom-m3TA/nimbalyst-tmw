@@ -39,12 +39,13 @@ const {
   ];
   /** Mutable so a test can walk the cursor across the display boundary. */
   const cursorRef = { current: { x: 5, y: 800 } };
-  const listeners = new Map<string, Function>();
+  const listeners = new Map<string, CallableFunction>();
+  const webContentsListeners = new Map<string, CallableFunction>();
   const instance = {
     listeners,
     visible: false,
-    on: vi.fn((event: string, handler: Function) => { listeners.set(event, handler); }),
-    once: vi.fn((event: string, handler: Function) => { listeners.set(event, handler); }),
+    on: vi.fn((event: string, handler: CallableFunction) => { listeners.set(event, handler); }),
+    once: vi.fn((event: string, handler: CallableFunction) => { listeners.set(event, handler); }),
     isDestroyed: vi.fn(() => false),
     isVisible: vi.fn(() => instance.visible),
     showInactive: vi.fn(() => { instance.visible = true; }),
@@ -59,7 +60,12 @@ const {
     setFocusable: vi.fn(),
     loadURL: vi.fn(() => Promise.resolve()),
     loadFile: vi.fn(() => Promise.resolve()),
-    webContents: { send: vi.fn(), once: vi.fn() },
+    webContents: {
+      listeners: webContentsListeners,
+      send: vi.fn(),
+      once: vi.fn((event: string, handler: CallableFunction) => { webContentsListeners.set(event, handler); }),
+      insertCSS: vi.fn(() => Promise.resolve('css-key')),
+    },
   };
   return {
     browserWindowCtor: Object.assign(
@@ -93,10 +99,10 @@ vi.mock('electron', () => ({
   BrowserWindow: browserWindowCtor,
   screen: screenMock,
 }));
-const { ipcHandlers } = vi.hoisted(() => ({ ipcHandlers: new Map<string, Function>() }));
+const { ipcHandlers } = vi.hoisted(() => ({ ipcHandlers: new Map<string, CallableFunction>() }));
 vi.mock('../../utils/ipcRegistry', () => ({
   safeHandle: vi.fn(),
-  safeOn: vi.fn((channel: string, handler: Function) => { ipcHandlers.set(channel, handler); }),
+  safeOn: vi.fn((channel: string, handler: CallableFunction) => { ipcHandlers.set(channel, handler); }),
 }));
 vi.mock('../../utils/appPaths', () => ({ getPreloadPath: () => '/preload.js' }));
 vi.mock('../../utils/store', () => ({
@@ -157,8 +163,8 @@ function handlers(overrides: Record<string, unknown> = {}) {
 
 /** The window is created hidden and shown by the `did-finish-load` handler. */
 function finishLoad() {
-  const handler = win.listeners.get('did-finish-load');
-  if (handler) handler();
+  const handler = win.webContents.listeners.get('did-finish-load');
+  if (handler) return handler();
   else win.showInactive();
 }
 
@@ -173,10 +179,12 @@ describe('MenuBarIslandWindow', () => {
     cursorRef.current = { x: 5, y: 800 };
     win.visible = false;
     win.listeners.clear();
+    win.webContents.listeners.clear();
   });
 
   afterEach(() => {
     closeMenuBarIsland();
+    vi.unstubAllEnvs();
     vi.useRealTimers();
   });
 
@@ -197,6 +205,25 @@ describe('MenuBarIslandWindow', () => {
     expect(win.hide).not.toHaveBeenCalled();
     expect(win.isVisible()).toBe(true);
     expect(browserWindowCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides Vite's error overlay before showing the development island", async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    let finishInsert: (key: string) => void = () => {};
+    win.webContents.insertCSS.mockReturnValueOnce(new Promise((resolve) => {
+      finishInsert = resolve;
+    }));
+
+    showMenuBarIsland(frame(1));
+    const load = finishLoad();
+    showMenuBarIsland(frame(2));
+
+    expect(win.webContents.insertCSS).toHaveBeenCalledWith(expect.stringContaining('vite-error-overlay'));
+    expect(win.showInactive).not.toHaveBeenCalled();
+
+    finishInsert('css-key');
+    await load;
+    expect(win.showInactive).toHaveBeenCalledTimes(1);
   });
 
   /*

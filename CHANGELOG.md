@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- A Vite build error in development no longer covers the top of the screen through the macOS menu bar island.
 - Document sync could delete markdown files from your workspace, including files tracked in git.
 - Sync connection errors wrote your authentication token to the application log in plain text.
 - Committing changes that spanned repositories reported files as committed that were never committed, and showed only the first repository's commit hash.
