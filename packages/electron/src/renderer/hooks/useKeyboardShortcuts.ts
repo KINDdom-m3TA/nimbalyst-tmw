@@ -305,8 +305,11 @@ export function useKeyboardShortcuts({
           store.set(toggleCliTerminalDrawerAtom, activeSessionId);
         }
       }
-      // Cmd+Shift+K for Kanban view (switch to agent mode + kanban, or toggle if already there)
-      if (workspaceMode && isAppModifier && e.shiftKey && e.key === 'k') {
+      // Cmd+Shift+K for Kanban view (switch to agent mode + kanban, or toggle if already there).
+      // With Shift held the browser reports the uppercase letter, so a lowercase
+      // `key` match never fires (#1415).
+      if (workspaceMode && isAppModifier && e.shiftKey
+          && (e.code === 'KeyK' || e.key.toLowerCase() === 'k')) {
         e.preventDefault();
         e.stopPropagation();
 
