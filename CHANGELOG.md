@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Answers typed into an agent's question were lost if you scrolled the conversation far enough to move the question out of view before submitting.
 - Worktrees of a project opened through a symlink did not inherit the project's agent permissions, so every tool call asked for approval again.
 - Tracker rows of a custom type showed a blank Type column instead of the icon the type declares.
+- Opening a project from the Project Manager did nothing when the window that project was opened in had since switched to a different project.
 - The New Worktree keyboard shortcut did nothing on macOS.
 - A tracker item whose title contains a comma showed as two separate values in a relationship column.
 
