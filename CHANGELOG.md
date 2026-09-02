@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+
+### Changed
+<!-- Changes to existing functionality go here -->
+
+### Fixed
+<!-- Bug fixes go here -->
+
+### Removed
+<!-- Removed features go here -->
+
+## [0.76.1] - 2026-09-01
+
+
+### Added
+<!-- New features go here -->
 - Claude Fable 5.1 is now available in the model picker, with Fable 5 kept as a selectable previous-generation option.
 - A project can span several folders: attach one from the File menu or quick open and it appears in the explorer, in search, and to your agents, with git status, branches and commits tracked per repository.
 - Quick open's Files tab can narrow to just your local files or just your team's shared documents, and remembers the choice.
@@ -40,6 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clicking a desktop notification from a session running in a worktree reported that the session could not be found in its originating project; it now opens the session.
 - Typing in quick open over an open spreadsheet lost everything after the first letter to the selected cell.
 - A session working through a long build or test run dropped out of the menu bar's Running list after fifteen minutes and was labelled as not responding until its turn ended.
+- Worktree actions were greyed out inside a git repository until another part of the app happened to check first.
+- A Claude Code turn that ended in an error completed twice, so its token usage and turn-end snapshot were dropped.
 
 ### Removed
 <!-- Removed features go here -->
