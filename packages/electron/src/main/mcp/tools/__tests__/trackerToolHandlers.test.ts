@@ -187,6 +187,7 @@ import {
   handleTrackerList,
   handleTrackerListTypes,
   handleTrackerReady,
+  handleWorkRadar,
   handleTrackerUnlinkSession,
   handleTrackerUpdate,
   readLinkedTrackerItemIds,
@@ -202,6 +203,126 @@ import {
   TRACKER_LOCAL_ISSUE_KEY_MESSAGE,
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerLifecycle';
 import { READINESS_FILTER_FIELD } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerStatusCategory';
+
+describe('work radar activity', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDocumentServices.clear();
+    mockGlobalRegistry.get.mockReturnValue(undefined);
+  });
+
+  it('returns compact issue-scoped actor threads and shared-item signals', async () => {
+    const now = Date.now();
+    const item = {
+      id: 'bug-radar',
+      issueKey: 'NIM-900',
+      type: 'bug',
+      typeTags: ['bug'],
+      title: 'Concurrent fix',
+      status: 'in-review',
+      workspace: '/tmp/ws',
+      module: '',
+      lastIndexed: new Date(now),
+      updated: new Date(now).toISOString(),
+      customFields: {
+        activity: [
+          {
+            id: 'mine',
+            authorIdentity: { email: null, displayName: 'Test User', gitName: null, gitEmail: null },
+            action: 'created',
+            timestamp: now - 3 * 60 * 60 * 1000,
+          },
+          {
+            id: 'theirs',
+            authorIdentity: { email: 'dana@example.com', displayName: 'Dana', gitName: null, gitEmail: null },
+            action: 'status_changed',
+            field: 'status',
+            oldValue: 'in-progress',
+            newValue: 'in-review',
+            timestamp: now - 60 * 60 * 1000,
+          },
+        ],
+      },
+    };
+    mockDocService.listTrackerItems.mockResolvedValue([item]);
+    mockDocumentServices.set('/tmp/ws', mockDocService);
+
+    const result = await handleWorkRadar({ issueKey: 'NIM-900', windowHours: 8 }, '/tmp/ws');
+    const payload = JSON.parse(result.content[0]!.text!);
+
+    expect(payload.structured.threads).toHaveLength(2);
+    expect(payload.structured.sameItem).toEqual([
+      expect.objectContaining({ issueKey: 'NIM-900', actors: ['Test User', 'Dana'], kind: 'review' }),
+    ]);
+    expect(payload.structured.waitingOnYou).toEqual([
+      expect.objectContaining({ itemId: 'bug-radar', actor: expect.objectContaining({ displayName: 'Dana' }) }),
+    ]);
+  });
+
+  it('bounds a team-wide radar payload while reporting the full thread count', async () => {
+    const now = Date.now();
+    mockDocService.listTrackerItems.mockResolvedValue(Array.from({ length: 60 }, (_, index) => ({
+      id: `bug-radar-${index}`,
+      issueKey: `NIM-${900 + index}`,
+      type: 'bug',
+      typeTags: ['bug'],
+      title: `Concurrent fix ${index}`,
+      status: 'in-progress',
+      workspace: '/tmp/ws',
+      module: '',
+      lastIndexed: new Date(now),
+      updated: new Date(now - index * 11 * 60 * 1000).toISOString(),
+      customFields: {
+        activity: [{
+          id: `event-${index}`,
+          authorIdentity: { email: 'dana@example.com', displayName: 'Dana', gitName: null, gitEmail: null },
+          action: 'updated',
+          field: 'title',
+          timestamp: now - index * 11 * 60 * 1000,
+        }],
+      },
+    })));
+    mockDocumentServices.set('/tmp/ws', mockDocService);
+
+    const result = await handleWorkRadar({ windowHours: 24 }, '/tmp/ws');
+    const payload = JSON.parse(result.content[0]!.text!);
+
+    expect(payload.structured.totalThreads).toBe(60);
+    expect(payload.structured.threads).toHaveLength(50);
+    expect(payload.structured.truncated).toBe(true);
+  });
+
+  it('adds a recent teammate advisory when reading an item', async () => {
+    const now = Date.now();
+    const item = {
+      id: 'bug-radar',
+      issueKey: 'NIM-900',
+      type: 'bug',
+      typeTags: ['bug'],
+      title: 'Concurrent fix',
+      status: 'in-review',
+      workspace: '/tmp/ws',
+      module: '',
+      lastIndexed: new Date(now),
+      updated: new Date(now).toISOString(),
+      customFields: {
+        activity: [{
+          id: 'theirs',
+          authorIdentity: { email: 'dana@example.com', displayName: 'Dana', gitName: null, gitEmail: null },
+          action: 'commented',
+          timestamp: now - 40 * 60 * 1000,
+        }],
+      },
+    };
+    mockDocService.getTrackerItemById.mockResolvedValue(item);
+    mockDocumentServices.set('/tmp/ws', mockDocService);
+
+    const result = await handleTrackerGet({ id: 'NIM-900' }, '/tmp/ws');
+    const payload = JSON.parse(result.content[0]!.text!);
+
+    expect(payload.summary).toContain('**Radar**: Dana commented');
+  });
+});
 
 describe('handleTrackerList structured records', () => {
   beforeEach(() => {
