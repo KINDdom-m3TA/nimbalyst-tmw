@@ -23,7 +23,10 @@ import {
   toEvenDimensions,
 } from './animationExportOptions';
 import { buildEncoderScript } from './animationVideoEncoderScript';
-import { getAnimationVideoPreloadPath } from '../utils/appPaths';
+import {
+  getAnimationVideoPagePath,
+  getAnimationVideoPreloadPath,
+} from '../utils/appPaths';
 import { logger } from '../utils/logger';
 
 export interface AnimationVideoRequest {
@@ -151,7 +154,7 @@ export async function recordAnimationVideo(
   });
 
   try {
-    await encoderWindow.loadURL('about:blank');
+    await encoderWindow.loadFile(getAnimationVideoPagePath());
 
     // Dimensions are only known once a frame has been reduced, so the encoder
     // is configured from the first one rather than up front.
@@ -172,15 +175,23 @@ export async function recordAnimationVideo(
         if (!configured) {
           configured = true;
           output = toEvenDimensions(frame.width, frame.height);
-          void encoderWindow.webContents.executeJavaScript(
-            buildEncoderScript({
-              width: output.width,
-              height: output.height,
-              bitrate: chooseBitrate(output.width, output.height, fps),
-              framerate: fps,
-              codec: H264_CODEC,
-            })
-          );
+          void encoderWindow.webContents
+            .executeJavaScript(
+              buildEncoderScript({
+                width: output.width,
+                height: output.height,
+                bitrate: chooseBitrate(output.width, output.height, fps),
+                framerate: fps,
+                codec: H264_CODEC,
+              })
+            )
+            .catch((error: unknown) => {
+              settle?.(
+                error instanceof Error
+                  ? error
+                  : new Error(`Could not start the video encoder: ${error}`)
+              );
+            });
         }
 
         encoderWindow.webContents.send('animation-video:frame', {
@@ -198,7 +209,14 @@ export async function recordAnimationVideo(
     );
 
     encoderWindow.webContents.send('animation-video:end');
-    await encoded;
+    const timeout = setTimeout(() => {
+      settle?.(new Error('The video encoder did not finish within 30 seconds.'));
+    }, 30_000);
+    try {
+      await encoded;
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (chunks.length === 0) {
       throw new Error('The encoder produced no video data.');
