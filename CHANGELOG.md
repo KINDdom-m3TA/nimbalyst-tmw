@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A project can span several folders: attach one from the File menu or quick open and it appears in the explorer, in search, and to your agents, with git status, branches and commits tracked per repository.
 - Quick open's Files tab can narrow to just your local files or just your team's shared documents, and remembers the choice.
 - A workstream's context menu can mark every session in it as read at once.
+- `/nimbalyst-coach` reviews your project and recent sessions and suggests extensions that match your files, features you have not tried, and instructions worth adding, changing nothing until you approve it.
 
 ### Changed
 <!-- Changes to existing functionality go here -->

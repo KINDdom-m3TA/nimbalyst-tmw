@@ -29,6 +29,7 @@ import { useOnboarding } from './hooks/useOnboarding';
 import { handleWorkspaceFileSelect as handleWorkspaceFileSelectUtil } from './utils/workspaceFileOperations';
 import { createInitialFileContent } from './utils/fileUtils';
 import { resolveHistoryDocumentPath } from './utils/historyDocumentResolver';
+import { parseExtensionInstallLink } from './utils/extensionInstallDeepLink';
 import { loadActiveExtensionPanel, persistActiveExtensionPanel } from './utils/activeExtensionPanelPersistence';
 import { aiToolService } from './services/AIToolService';
 import { editorRegistry } from '@nimbalyst/runtime/ai/EditorRegistry';
@@ -2782,6 +2783,20 @@ export default function App() {
           const anchor = target as HTMLAnchorElement;
           const href = anchor.getAttribute('href');
 
+          // `nimbalyst://install/<extensionId>` -- the affordance /nimbalyst-coach
+          // uses to recommend an extension. The OS-level deep-link handler
+          // already routes this scheme when it arrives from outside the app;
+          // a click on the same link *inside* the renderer had no branch here
+          // and silently did nothing. Opens Settings > Marketplace at that
+          // extension; it never installs on its own.
+          const installExtensionId = parseExtensionInstallLink(href);
+          if (installExtensionId) {
+            event.preventDefault();
+            event.stopPropagation();
+            openMarketplaceInstallRequest({ extensionId: installExtensionId });
+            return;
+          }
+
           if (href?.startsWith('nimbalyst://conversation/')) {
             event.preventDefault();
             event.stopPropagation();
@@ -2842,7 +2857,10 @@ export default function App() {
     return () => {
       document.removeEventListener('click', handleClick, true);
     };
-  }, []);
+    // openMarketplaceInstallRequest is declared here rather than relying on it
+    // being incidentally stable -- an empty dep array would freeze the first
+    // closure, which is the stale-listener trap in docs/IPC_LISTENERS.md.
+  }, [openMarketplaceInstallRequest]);
 
   // Wait for both initial state and extensions to be ready before rendering editors
   // This ensures extension nodes (like DataModelNode) are published into the runtime extension stores.

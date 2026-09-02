@@ -17,6 +17,7 @@ import { excalidrawDiscoverTip } from '../definitions/excalidraw-discover';
 import { keyboardShortcutsTip } from '../definitions/keyboard-shortcuts';
 import { mockupDiscoverTip } from '../definitions/mockup-discover';
 import { spreadsheetDiscoverTip } from '../definitions/spreadsheet-discover';
+import { nimbalystCoachTip } from '../definitions/nimbalyst-coach';
 import { sessionCleanupTip } from '../definitions/session-cleanup';
 import { sessionLaunchShortcutTip } from '../definitions/session-launch-shortcut';
 import { filesAgentContextTip } from '../definitions/files-agent-context';
@@ -230,6 +231,44 @@ describe('contextual tip definitions', () => {
 
   it('inserts the /session-cleanup command from the session cleanup tip action', () => {
     expect(sessionCleanupTip.content.action?.insertPrompt).toBe('/session-cleanup ');
+  });
+
+  it('offers the coach only to established users still missing a major feature', () => {
+    const agent = (featureUsage: Record<string, number>) =>
+      createContext({ currentMode: 'agent', featureUsage: createFeatureUsage(featureUsage) });
+
+    // Too little history for the coach to have evidence to work from.
+    expect(
+      nimbalystCoachTip.trigger.condition(
+        agent({ [FEATURE_USAGE_KEYS.SESSION_CREATED]: 10 }),
+      ),
+    ).toBe(false);
+
+    // Real history, and trackers never touched.
+    expect(
+      nimbalystCoachTip.trigger.condition(
+        agent({
+          [FEATURE_USAGE_KEYS.SESSION_CREATED]: 25,
+          [FEATURE_USAGE_KEYS.WORKTREE_CREATED]: 3,
+        }),
+      ),
+    ).toBe(true);
+
+    // Already using trackers and worktrees -- they know the product; don't
+    // spend their one tip slot telling them to go find out what they're missing.
+    expect(
+      nimbalystCoachTip.trigger.condition(
+        agent({
+          [FEATURE_USAGE_KEYS.SESSION_CREATED]: 40,
+          [FEATURE_USAGE_KEYS.TRACKER_USED]: 5,
+          [FEATURE_USAGE_KEYS.WORKTREE_CREATED]: 2,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('inserts the /nimbalyst-coach command from the coach tip action', () => {
+    expect(nimbalystCoachTip.content.action?.insertPrompt).toBe('/nimbalyst-coach ');
   });
 
   it('targets the welcome tips to the files-empty surface', () => {
