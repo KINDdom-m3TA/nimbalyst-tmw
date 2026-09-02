@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Git panel's Changes tab can show every repository in the project at once, each with its own file list and commit box.
 - Display Settings can show a tracker's Type column as the type's name instead of its icon.
 - The menu bar sessions panel can mark every unread session as read at once.
+- A `.deb` download for Debian and Ubuntu, which starts on Ubuntu 24.04 and later where the AppImage is blocked by AppArmor's user-namespace restriction.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
