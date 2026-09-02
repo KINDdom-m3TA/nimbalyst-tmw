@@ -338,8 +338,11 @@ export function useKeyboardShortcuts({
         }
       }
 
-      // Cmd+Alt+W (Mac) or Ctrl+Alt+W (Windows) to create new worktree session
-      if (workspaceMode && isAppModifier && e.altKey && e.key === 'w') {
+      // Cmd+Alt+W (Mac) or Ctrl+Alt+W (Windows) to create new worktree session.
+      // `code` as well as `key`: with Option held, macOS rewrites the character
+      // (Option+W is "∑"), so the letter alone is not enough to match on.
+      if (workspaceMode && isAppModifier && e.altKey
+          && (e.key.toLowerCase() === 'w' || e.code === 'KeyW')) {
         e.preventDefault();
         e.stopPropagation();
 

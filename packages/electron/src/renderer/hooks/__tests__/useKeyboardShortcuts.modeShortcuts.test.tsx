@@ -155,3 +155,14 @@ describe('Cmd+Alt+M', () => {
     expect(setActiveMode).not.toHaveBeenCalled();
   });
 });
+
+describe('Cmd+Alt+W', () => {
+  // Same Option-rewrite trap as Cmd+Alt+M: macOS reports Option+W as "∑", so
+  // requiring `key === 'w'` alongside `altKey` made the chord unreachable (#1415).
+  it('routes to agent mode for a new worktree session', () => {
+    render(<Harness activeMode="files" />);
+    pressAppModifier('∑', { altKey: true, code: 'KeyW' });
+
+    expect(setActiveMode).toHaveBeenCalledWith('agent');
+  });
+});
