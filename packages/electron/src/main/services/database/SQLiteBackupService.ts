@@ -111,6 +111,13 @@ export class SQLiteBackupService {
   private log: SQLiteBackupLogFn;
   private copiesKept: number;
   private verify: BackupVerifier;
+  /**
+   * #1369: the periodic timer and the resume-from-sleep staleness check can
+   * both fire on wake, and two concurrent online copies of a multi-GB store
+   * both failed verification. A second caller awaits the in-flight backup
+   * instead of starting another.
+   */
+  private inFlight: Promise<{ success: boolean; error?: string }> | null = null;
   private metadata: BackupMetadata = {
     currentBackup: null,
     previousBackup: null,
@@ -152,8 +159,23 @@ export class SQLiteBackupService {
    * Create a verified online backup of the live database.
    * Uses better-sqlite3's `db.backup()` which calls the SQLite Online Backup
    * API — safe under concurrent writes, no locking required.
+   * While one is running, further calls share its result rather than
+   * starting a second copy.
    */
-  async createBackup(): Promise<{ success: boolean; error?: string }> {
+  createBackup(): Promise<{ success: boolean; error?: string }> {
+    if (this.inFlight) {
+      this.log('info', '[SQLite Backup] Backup already in flight; joining it instead of starting another');
+      return this.inFlight;
+    }
+    // doCreateBackup catches everything it can, but the guard must clear on
+    // any exit, so the finally is here rather than trusting that.
+    this.inFlight = this.doCreateBackup().finally(() => {
+      this.inFlight = null;
+    });
+    return this.inFlight;
+  }
+
+  private async doCreateBackup(): Promise<{ success: boolean; error?: string }> {
     this.metadata.lastBackupAttempt = new Date().toISOString();
 
     // Declared outside the try so the catch can clean up the temp .sqlite and

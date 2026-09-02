@@ -254,7 +254,11 @@ export async function initializeDatabase(): Promise<SessionStore> {
             'a new empty database is about to be created. If this install had sessions, they are not in PGLite.',
         );
       }
-      backupService = new DatabaseBackupService(dbPath, legacyPgliteDatabase);
+      backupService = new DatabaseBackupService(dbPath, legacyPgliteDatabase, {
+        // Read at rotation time so a settings change applies on the next
+        // backup, the same way the SQLite worker gets the value pushed to it.
+        getCopiesKept: () => getDatabaseMaintenanceSettings().backupCopiesKept,
+      });
       await timeStartupPhase('BackupService.initialize', () => backupService!.initialize());
       legacyPgliteDatabase.setBackupService(backupService);
       database.useDatabase(legacyPgliteDatabase, 'pglite');

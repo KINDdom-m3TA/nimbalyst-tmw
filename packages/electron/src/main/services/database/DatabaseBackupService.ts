@@ -30,16 +30,63 @@ interface BackupMetadata {
   lastSuccessfulBackup: string | null;
 }
 
+const BACKUP_DIRNAMES = {
+  current: 'pglite-db.backup-current',
+  previous: 'pglite-db.backup-previous',
+  oldest: 'pglite-db.backup-oldest',
+} as const;
+
+/** Newest to oldest. `rotateBackups` truncates this to the retention setting. */
+const BACKUP_SLOT_ORDER = ['current', 'previous', 'oldest'] as const;
+
+type BackupSlot = (typeof BACKUP_SLOT_ORDER)[number];
+
+const SLOT_METADATA_KEYS = {
+  current: 'currentBackup',
+  previous: 'previousBackup',
+  oldest: 'oldestBackup',
+} as const satisfies Record<BackupSlot, keyof BackupMetadata>;
+
+/** Same default and ceiling as the SQLite service; each copy is a full store. */
+export const DEFAULT_BACKUP_COPIES_KEPT = 2;
+export const MAX_BACKUP_COPIES_KEPT = BACKUP_SLOT_ORDER.length;
+
+/** A bad setting must never mean "keep zero backups". */
+function clampCopiesKept(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_BACKUP_COPIES_KEPT;
+  return Math.max(1, Math.min(MAX_BACKUP_COPIES_KEPT, Math.floor(value)));
+}
+
+export interface DatabaseBackupServiceOptions {
+  /**
+   * Resolves the backupCopiesKept setting at rotation time, so a change in
+   * settings takes hold on the next backup without a restart. The SQLite
+   * service gets the same value pushed through its worker proxy; this
+   * service runs on main and can just read the store.
+   */
+  getCopiesKept?: () => number;
+}
+
 export class DatabaseBackupService {
   private backupDir: string;
   private metadataPath: string;
   private dbPath: string;
   private metadata: BackupMetadata;
   private dbWorker: PGLiteDatabaseWorker;
+  private getCopiesKept: () => number;
+  /**
+   * #1369: five call sites can start a backup (periodic timer, startup and
+   * resume staleness checks, before-quit, project migration). On wake from
+   * sleep the periodic copy that slept mid-flight and the resume copy ran at
+   * once on the same multi-GB store and both failed verification. A second
+   * caller now awaits the in-flight backup instead of starting another.
+   */
+  private inFlight: Promise<{ success: boolean; error?: string }> | null = null;
 
-  constructor(dbPath: string, dbWorker: PGLiteDatabaseWorker) {
+  constructor(dbPath: string, dbWorker: PGLiteDatabaseWorker, options: DatabaseBackupServiceOptions = {}) {
     this.dbPath = dbPath;
     this.dbWorker = dbWorker;
+    this.getCopiesKept = options.getCopiesKept ?? (() => DEFAULT_BACKUP_COPIES_KEPT);
     const userDataPath = app.getPath('userData');
     this.backupDir = path.join(userDataPath, 'db-backups');
     this.metadataPath = path.join(this.backupDir, 'backup-metadata.json');
@@ -218,9 +265,24 @@ export class DatabaseBackupService {
   }
 
   /**
-   * Create a new backup with verification and rolling backup management
+   * Create a new backup with verification and rolling backup management.
+   * While one is running, further calls share its result rather than
+   * starting a second copy of the store.
    */
-  async createBackup(): Promise<{ success: boolean; error?: string }> {
+  createBackup(): Promise<{ success: boolean; error?: string }> {
+    if (this.inFlight) {
+      logger.main.info('[Backup Service] Backup already in flight; joining it instead of starting another');
+      return this.inFlight;
+    }
+    // doCreateBackup catches everything it can, but the guard must clear on
+    // any exit, so the finally is here rather than trusting that.
+    this.inFlight = this.doCreateBackup().finally(() => {
+      this.inFlight = null;
+    });
+    return this.inFlight;
+  }
+
+  private async doCreateBackup(): Promise<{ success: boolean; error?: string }> {
     this.metadata.lastBackupAttempt = new Date().toISOString();
 
     // Declared outside the try so the catch can clean up a partial temp dir.
@@ -306,7 +368,10 @@ export class DatabaseBackupService {
   }
 
   /**
-   * Rotate backups: oldest -> delete, previous -> oldest, current -> previous, new -> current
+   * Roll the backup chain, keeping `backupCopiesKept` generations (1-3).
+   * At the default of 2: previous is deleted, current -> previous, new -> current.
+   * Every kept copy is a FULL copy of the store, so the setting is a direct
+   * multiplier on disk. Mirrors SQLiteBackupService.rotateBackups.
    *
    * CRITICAL: Size-aware rotation to prevent data loss
    * If new backup is significantly smaller than current, we reject it to avoid
@@ -317,10 +382,6 @@ export class DatabaseBackupService {
     timestamp: string,
     size: number
   ): Promise<boolean> {
-    const currentPath = path.join(this.backupDir, 'pglite-db.backup-current');
-    const previousPath = path.join(this.backupDir, 'pglite-db.backup-previous');
-    const oldestPath = path.join(this.backupDir, 'pglite-db.backup-oldest');
-
     // Size-aware rotation check: Don't replace large backups with small ones
     const currentSize = this.metadata.currentBackup?.size ?? 0;
     if (currentSize > 0) {
@@ -341,24 +402,45 @@ export class DatabaseBackupService {
       }
     }
 
-    // Delete oldest backup if it exists
-    if (fsSync.existsSync(oldestPath)) {
-      logger.main.info('[Backup Service] Deleting oldest backup');
-      await fs.rm(oldestPath, { recursive: true, force: true });
+    const copiesKept = clampCopiesKept(this.getCopiesKept());
+
+    // Slots from newest to oldest, truncated to the retention setting. Slots
+    // past the limit are removed so lowering the setting actually reclaims
+    // the space rather than orphaning directories in the backup folder.
+    const slots = BACKUP_SLOT_ORDER.slice(0, copiesKept);
+    const dropped = BACKUP_SLOT_ORDER.slice(copiesKept);
+    for (const slot of dropped) {
+      const p = path.join(this.backupDir, BACKUP_DIRNAMES[slot]);
+      if (fsSync.existsSync(p)) {
+        logger.main.info(`[Backup Service] Removing ${slot} backup (retention set to ${copiesKept})`);
+        await fs.rm(p, { recursive: true, force: true });
+      }
+      this.metadata[SLOT_METADATA_KEYS[slot]] = null;
     }
 
-    // Move previous to oldest if it exists
-    if (fsSync.existsSync(previousPath)) {
-      logger.main.info('[Backup Service] Moving previous backup to oldest');
-      await fs.rename(previousPath, oldestPath);
-      this.metadata.oldestBackup = this.metadata.previousBackup;
+    // Shift each kept slot down one, oldest first so nothing is overwritten.
+    for (let i = slots.length - 1; i > 0; i--) {
+      const target = slots[i];
+      const sourceSlot = slots[i - 1];
+      const targetPath = path.join(this.backupDir, BACKUP_DIRNAMES[target]);
+      const sourcePath = path.join(this.backupDir, BACKUP_DIRNAMES[sourceSlot]);
+      if (fsSync.existsSync(targetPath)) {
+        logger.main.info(`[Backup Service] Deleting ${target} backup`);
+        await fs.rm(targetPath, { recursive: true, force: true });
+      }
+      if (fsSync.existsSync(sourcePath)) {
+        logger.main.info(`[Backup Service] Moving ${sourceSlot} backup to ${target}`);
+        await fs.rename(sourcePath, targetPath);
+        this.metadata[SLOT_METADATA_KEYS[target]] = this.metadata[SLOT_METADATA_KEYS[sourceSlot]];
+      }
     }
 
-    // Move current to previous if it exists
-    if (fsSync.existsSync(currentPath)) {
-      logger.main.info('[Backup Service] Moving current backup to previous');
-      await fs.rename(currentPath, previousPath);
-      this.metadata.previousBackup = this.metadata.currentBackup;
+    // At copiesKept === 1 there is no older generation to fall back on, so
+    // the new backup is still copied to a temp dir and promoted by rename,
+    // never written over the live slot.
+    const currentPath = path.join(this.backupDir, BACKUP_DIRNAMES.current);
+    if (copiesKept === 1 && fsSync.existsSync(currentPath)) {
+      await fs.rm(currentPath, { recursive: true, force: true });
     }
 
     // Move new backup to current
