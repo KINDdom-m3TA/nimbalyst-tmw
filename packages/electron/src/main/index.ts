@@ -2022,6 +2022,9 @@ app.whenReady().then(async () => {
         onNewSession: () => TrayManager.getInstance().handleNewSession(),
         onOpenApp: () => TrayManager.getInstance().handleOpenApp(),
         onSettingChange: (change) => TrayManager.getInstance().applyIslandSetting(change),
+        onClearAllUnread: () => {
+            void TrayManager.getInstance().clearAllUnreadSessions();
+        },
     });
     setupSessionFileHandlers();
     setupCanvasRevisionProvenanceHandlers();

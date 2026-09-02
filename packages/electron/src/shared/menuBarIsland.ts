@@ -195,6 +195,13 @@ export const MENU_BAR_ISLAND_CHANNELS = {
   /** island → main: the footer's two app actions, same as the tray panel's. */
   newSession: 'menu-bar-island:new-session',
   openApp: 'menu-bar-island:open-app',
+  /**
+   * island → main: mark every unread session read.
+   *
+   * Same action as the tray panel's channel of the same name, on its own channel
+   * because each window only accepts IPC from its own renderer.
+   */
+  clearAllUnread: 'menu-bar-island:clear-all-unread',
 } as const;
 
 /** Island rect in window coordinates, as the renderer measured it. */

@@ -62,6 +62,7 @@ let onSelectSession: ((sessionId: string, workspacePath: string) => void) | null
 let onNewSession: (() => void) | null = null;
 let onOpenApp: (() => void) | null = null;
 let onSettingChange: ((change: MenuBarIslandSettingChange) => void) | null = null;
+let onClearAllUnread: (() => void) | null = null;
 /**
  * Told whenever the panel opens or closes, so the owner can fetch the per-row
  * snippets only while they are on screen. Nothing else needs them.
@@ -409,12 +410,14 @@ export function setupMenuBarIslandHandlers(dependencies: {
   onNewSession: () => void;
   onOpenApp: () => void;
   onSettingChange: (change: MenuBarIslandSettingChange) => void;
+  onClearAllUnread: () => void;
 }): void {
   onSelectSession = dependencies.onSelectSession;
   onExpandedChange = dependencies.onExpandedChange;
   onNewSession = dependencies.onNewSession;
   onOpenApp = dependencies.onOpenApp;
   onSettingChange = dependencies.onSettingChange;
+  onClearAllUnread = dependencies.onClearAllUnread;
 
   safeHandle(MENU_BAR_ISLAND_CHANNELS.requestInit, async (event) => {
     if (!isIslandSenderInvoke(event)) return null;
@@ -523,6 +526,17 @@ export function setupMenuBarIslandHandlers(dependencies: {
     if (!isIslandSender(event)) return;
     setPinned(false);
     onOpenApp?.();
+  });
+
+  /*
+   * Unlike the footer's actions this one does not close the panel: the user is
+   * still looking at the fleet, and the point of the button is to watch the
+   * unread section go. The panel shrinks as it does, so the renderer republishes
+   * its rect and the cursor poll re-tests hover against the new size.
+   */
+  safeOn(MENU_BAR_ISLAND_CHANNELS.clearAllUnread, (event) => {
+    if (!isIslandSender(event)) return;
+    onClearAllUnread?.();
   });
 }
 

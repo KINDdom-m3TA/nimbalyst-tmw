@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- New features go here -->
 - The Git panel's Changes tab can show every repository in the project at once, each with its own file list and commit box.
 - Display Settings can show a tracker's Type column as the type's name instead of its icon.
+- The menu bar sessions panel can mark every unread session as read at once.
 
 ### Changed
 <!-- Changes to existing functionality go here -->

@@ -150,6 +150,7 @@ function handlers(overrides: Record<string, unknown> = {}) {
     onNewSession: vi.fn(),
     onOpenApp: vi.fn(),
     onSettingChange: vi.fn(),
+    onClearAllUnread: vi.fn(),
     ...overrides,
   } as Parameters<typeof setupMenuBarIslandHandlers>[0];
 }
@@ -230,10 +231,33 @@ describe('MenuBarIslandWindow', () => {
     ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.setSetting)!(impostor, { key: 'osNotifications', value: false });
     ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.newSession)!(impostor);
     ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.openApp)!(impostor);
+    ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.clearAllUnread)!(impostor);
 
     expect(deps.onSettingChange).not.toHaveBeenCalled();
     expect(deps.onNewSession).not.toHaveBeenCalled();
     expect(deps.onOpenApp).not.toHaveBeenCalled();
+    expect(deps.onClearAllUnread).not.toHaveBeenCalled();
+  });
+
+  /*
+   * The footer's actions send the user somewhere else and so release the pin.
+   * Marking the fleet read does not: the user stays on the panel to watch the
+   * unread section go, and collapsing it out from under them loses that.
+   */
+  it('marks the fleet read without releasing the pin', () => {
+    const deps = handlers();
+    setupMenuBarIslandHandlers(deps);
+    const event = { sender: win.webContents };
+
+    showMenuBarIsland(frame(1));
+    finishLoad();
+    ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.setPinned)!(event, { pinned: true });
+    expect(win.setFocusable).toHaveBeenLastCalledWith(true);
+
+    ipcHandlers.get(MENU_BAR_ISLAND_CHANNELS.clearAllUnread)!(event);
+
+    expect(deps.onClearAllUnread).toHaveBeenCalledTimes(1);
+    expect(win.setFocusable).toHaveBeenLastCalledWith(true);
   });
 
   // The gesture that this whole drag path exists for: the island has to end up

@@ -12,7 +12,11 @@ import {
   menuBarIslandStateAtom,
 } from '../../store/listeners/menuBarIslandListeners';
 import { SessionAttentionRow } from '../AgenticCoding/SessionAttentionRow';
-import { TraySessionSectionHeader, TrayStatusIndicator } from '../TrayPanel/traySessionSections';
+import {
+  TrayMarkAllReadButton,
+  TraySessionSectionHeader,
+  TrayStatusIndicator,
+} from '../TrayPanel/traySessionSections';
 import { getRelativeTimeString } from '../../utils/dateFormatting';
 import { MenuBarIslandSettingsPanel } from './MenuBarIslandSettings';
 
@@ -399,7 +403,17 @@ export function MenuBarIslandApp() {
                   {sections.length === 0 && <IdlePanel idle={idle} onSelect={handleSelect} />}
                   {sections.map(({ state: sectionState, sessions }) => (
                     <section key={sectionState} className={`menu-bar-island-group menu-bar-island-group--${sectionState}`}>
-                      <TraySessionSectionHeader state={sectionState} count={sessions.length} />
+                      <TraySessionSectionHeader
+                        state={sectionState}
+                        count={sessions.length}
+                        actionSlot={sectionState === 'unread' ? (
+                          <TrayMarkAllReadButton
+                            className="menu-bar-island-mark-all-read"
+                            onClick={() => window.electronAPI.send(MENU_BAR_ISLAND_CHANNELS.clearAllUnread)}
+                            testId="menu-bar-island-mark-all-read"
+                          />
+                        ) : undefined}
+                      />
                       {sessions.map((session) => (
                         <SessionAttentionRow
                           key={session.sessionId}
