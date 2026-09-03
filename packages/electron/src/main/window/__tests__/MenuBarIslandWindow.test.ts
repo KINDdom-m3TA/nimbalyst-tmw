@@ -194,9 +194,10 @@ describe('MenuBarIslandWindow', () => {
    * when the fleet goes quiet -- which it used to do -- leaves an idle Mac with
    * no menu bar presence at all and no way out of the style.
    */
-  it('stays on screen when the fleet goes quiet', () => {
+  it('stays on screen when the fleet goes quiet', async () => {
     showMenuBarIsland(frame(1));
     finishLoad();
+    await Promise.resolve();
     expect(win.isVisible()).toBe(true);
 
     showMenuBarIsland(frame(0));
