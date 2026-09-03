@@ -81,6 +81,15 @@ describe('frameDurationsUs', () => {
     );
     expect(total).toBe(800_000);
   });
+
+  it('rebases a delayed first capture to zero without shortening the video', () => {
+    // capturePage takes time, so the first frame normally arrives tens of
+    // milliseconds after the animation clock starts. MP4 tracks require that
+    // first frame at zero and should still span the requested duration.
+    const durations = frameDurationsUs([67, 100, 600, 700], 800);
+    expect(durations.reduce((a, b) => a + b, 0)).toBe(800_000);
+    expect(durations.at(-1)).toBe(167_000);
+  });
 });
 
 describe('chooseBitrate', () => {

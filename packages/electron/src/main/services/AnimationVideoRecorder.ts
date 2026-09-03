@@ -96,9 +96,12 @@ export function frameDurationsUs(
   captureTimes: number[],
   durationMs: number
 ): number[] {
-  return captureTimes.map((at, index) => {
+  const originMs = captureTimes[0] ?? 0;
+  const timeline = captureTimes.map((at) => Math.max(0, at - originMs));
+
+  return timeline.map((at, index) => {
     const nextAt =
-      index + 1 < captureTimes.length ? captureTimes[index + 1] : durationMs;
+      index + 1 < timeline.length ? timeline[index + 1] : durationMs;
     return Math.max(1000, Math.round((nextAt - at) * 1000));
   });
 }
@@ -160,6 +163,7 @@ export async function recordAnimationVideo(
     // is configured from the first one rather than up front.
     let configured = false;
     let output = { width: 0, height: 0 };
+    let captureOriginMs: number | null = null;
 
     const capture = await captureAnimationFrames(
       {
@@ -172,6 +176,7 @@ export async function recordAnimationVideo(
         maxFrames: ANIMATION_EXPORT_LIMITS.maxFrames,
       },
       (frame, atMs) => {
+        captureOriginMs ??= atMs;
         if (!configured) {
           configured = true;
           output = toEvenDimensions(frame.width, frame.height);
@@ -200,7 +205,10 @@ export async function recordAnimationVideo(
           codedHeight: frame.height,
           visibleWidth: output.width,
           visibleHeight: output.height,
-          timestampUs: atMs * 1000,
+          // capturePage cannot produce a frame at the exact instant playback
+          // starts. MP4 tracks require their first timestamp to be zero, so
+          // rebase the capture clock to the first image we actually have.
+          timestampUs: (atMs - captureOriginMs) * 1000,
           // Replaced below; the real hold is only known once the next frame
           // has been taken, and the encoder does not use this for rate control.
           durationUs: Math.round(1_000_000 / fps),
