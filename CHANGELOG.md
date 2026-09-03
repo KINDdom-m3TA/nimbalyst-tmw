@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Typing in a markdown file no longer stutters each time it autosaves in a workspace with a large tracker.
 - A session that had previously reached the complete phase stayed out of the menu bar's Running list for the whole of its next turn.
 - Opening a session on iOS could show another session's transcript under the correct title.
+- Applying a heading with Ctrl+Alt+1 through 3 in the editor no longer also jumps to the matching tab on Linux and Windows (#353).
 - Clicking a markdown link to a file in the same folder did nothing unless the document sat at the top level of the project.
 - Answers typed into an agent's question were lost if you scrolled the conversation far enough to move the question out of view before submitting.
 - Worktrees of a project opened through a symlink did not inherit the project's agent permissions, so every tool call asked for approval again.
