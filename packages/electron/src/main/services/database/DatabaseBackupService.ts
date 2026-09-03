@@ -8,7 +8,32 @@ import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
 import { logger } from '../../utils/logger';
+import { getPackageRoot } from '../../utils/appPaths';
 import type { PGLiteDatabaseWorker } from '../../database/PGLiteDatabaseWorker';
+import {
+  classifyBackupEntry,
+  ROLLING_BACKUP_DIRNAMES,
+  TEMP_BACKUP_DIR_PREFIX,
+} from '../../database/sqlite/recoveryArtifacts';
+import { createPgliteRecoveryAdapter } from '../../database/recovery/backendAdapters';
+import { createPgliteRecoveryVerifier } from '../../database/recovery/pgliteVerification';
+import { createRecoveryJournalPort } from '../../database/recovery/recoveryJournal';
+import {
+  mayTryAnotherCandidate,
+  runRecoveryTransaction,
+} from '../../database/recovery/recoveryTransaction';
+import { pathSizeBytes } from '../../database/recovery/recoveryFs';
+import { directorySizeBytes } from '../../database/sqlite/dirSize';
+import { resolveDatabaseUserDataPath } from '../../database/userDataPath';
+import {
+  sizeBucketFor,
+  type RecoveryStep,
+  type RecoveryVerification,
+} from '../../database/recovery/types';
+import {
+  describeOperationConflict,
+  withDatabaseOperationLock,
+} from '../../database/databaseOperationLock';
 
 interface BackupMetadata {
   currentBackup: {
@@ -30,11 +55,7 @@ interface BackupMetadata {
   lastSuccessfulBackup: string | null;
 }
 
-const BACKUP_DIRNAMES = {
-  current: 'pglite-db.backup-current',
-  previous: 'pglite-db.backup-previous',
-  oldest: 'pglite-db.backup-oldest',
-} as const;
+const BACKUP_DIRNAMES = ROLLING_BACKUP_DIRNAMES;
 
 /** Newest to oldest. `rotateBackups` truncates this to the retention setting. */
 const BACKUP_SLOT_ORDER = ['current', 'previous', 'oldest'] as const;
@@ -65,6 +86,47 @@ export interface DatabaseBackupServiceOptions {
    * service runs on main and can just read the store.
    */
   getCopiesKept?: () => number;
+  /**
+   * Verifies a PGLite store at an arbitrary path, off this thread and without
+   * the live worker.
+   *
+   * Restore closes the live database before it touches anything, so
+   * `dbWorker.verifyBackup()` — which routes through that worker — cannot be
+   * used past that point. Production passes `createPgliteRecoveryVerifier`,
+   * which spawns a throwaway worker from the same bundle. Injected rather
+   * than constructed here so the destructive path is exercisable in a test
+   * without a real PGLite behind it, per
+   * `.claude/rules/destructive-data-paths.md`.
+   *
+   * Defaults to a verifier over the packaged PGLite worker bundle, so the
+   * production construction site does not have to know this exists. It used to
+   * be required-by-omission: the only production caller never passed it, so
+   * every `restoreFromBackup()` returned "No database verifier configured" and
+   * the entire rolling-backup restore path was dead in shipped builds.
+   */
+  verifyDatabaseAt?: (dbPath: string) => Promise<RecoveryVerification>;
+  /**
+   * Fault-injection seam, forwarded to `runRecoveryTransaction.beforeStep`.
+   *
+   * The transaction exposes one for the same reason: the failure that matters
+   * here is a swap that dies between its two renames, and that is not a state
+   * a test can reach by feeding the service different files. It exists so the
+   * *sweep* -- which copy is tried next, and whether one is tried at all -- can
+   * be driven over real directories rather than asserted against a mock.
+   */
+  beforeRecoveryStep?: (step: RecoveryStep) => void | Promise<void>;
+}
+
+/**
+ * The PGLite worker bundle, resolved the same way `PGLiteDatabaseWorker` does.
+ * Duplicated rather than imported from `recovery/productionRecovery.ts`
+ * because `PGLiteDatabaseWorker` imports this module, and that import would
+ * close the cycle.
+ */
+function defaultPgliteWorkerPath(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'worker.bundle.js')
+    : path.join(getPackageRoot(), 'out', 'worker.bundle.js');
 }
 
 export class DatabaseBackupService {
@@ -74,6 +136,9 @@ export class DatabaseBackupService {
   private metadata: BackupMetadata;
   private dbWorker: PGLiteDatabaseWorker;
   private getCopiesKept: () => number;
+  private verifyDatabaseAt: (dbPath: string) => Promise<RecoveryVerification>;
+  private userDataPath: string;
+  private beforeRecoveryStep?: (step: RecoveryStep) => void | Promise<void>;
   /**
    * #1369: five call sites can start a backup (periodic timer, startup and
    * resume staleness checks, before-quit, project migration). On wake from
@@ -87,7 +152,19 @@ export class DatabaseBackupService {
     this.dbPath = dbPath;
     this.dbWorker = dbWorker;
     this.getCopiesKept = options.getCopiesKept ?? (() => DEFAULT_BACKUP_COPIES_KEPT);
-    const userDataPath = app.getPath('userData');
+    this.beforeRecoveryStep = options.beforeRecoveryStep;
+    // Built lazily: constructing the verifier resolves the packaged worker
+    // path, and a restore is rare enough that paying for it per call costs
+    // nothing while keeping construction free of `app.isPackaged`.
+    const userDataPath = resolveDatabaseUserDataPath();
+    this.verifyDatabaseAt = options.verifyDatabaseAt
+      ?? ((dbPath) =>
+        createPgliteRecoveryVerifier({
+          workerPath: defaultPgliteWorkerPath(),
+          userDataPath,
+          log: (level, msg, meta) => logger.main[level](msg, meta),
+        })(dbPath));
+    this.userDataPath = userDataPath;
     this.backupDir = path.join(userDataPath, 'db-backups');
     this.metadataPath = path.join(this.backupDir, 'backup-metadata.json');
     this.metadata = {
@@ -161,7 +238,7 @@ export class DatabaseBackupService {
   private async hasEnoughDiskSpace(): Promise<boolean> {
     try {
       // Get size of database directory
-      const dbSize = await this.getDirectorySize(this.dbPath);
+      const dbSize = await directorySizeBytes(this.dbPath);
 
       // Require at least 1GB + (2 * db size) free space
       const requiredSpace = 1024 * 1024 * 1024 + (dbSize * 2);
@@ -177,32 +254,6 @@ export class DatabaseBackupService {
       logger.main.warn('[Backup Service] Disk space check failed:', error);
       return false;
     }
-  }
-
-  /**
-   * Get total size of a directory in bytes
-   */
-  private async getDirectorySize(dirPath: string): Promise<number> {
-    let totalSize = 0;
-
-    try {
-      const entries = await fs.readdir(dirPath, { withFileTypes: true });
-
-      for (const entry of entries) {
-        const fullPath = path.join(dirPath, entry.name);
-
-        if (entry.isDirectory()) {
-          totalSize += await this.getDirectorySize(fullPath);
-        } else {
-          const stats = await fs.stat(fullPath);
-          totalSize += stats.size;
-        }
-      }
-    } catch (error) {
-      logger.main.warn('[Backup Service] Failed to get directory size:', error);
-    }
-
-    return totalSize;
   }
 
   /**
@@ -309,14 +360,14 @@ export class DatabaseBackupService {
 
       // Create temporary backup directory
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      tempBackupPath = path.join(this.backupDir, `temp-backup-${timestamp}`);
+      tempBackupPath = path.join(this.backupDir, `${TEMP_BACKUP_DIR_PREFIX}${timestamp}`);
 
       // Copy database to temporary location
       logger.main.info('[Backup Service] Copying database to:', tempBackupPath);
       await this.copyDirectory(this.dbPath, tempBackupPath);
 
       // Get backup size
-      const backupSize = await this.getDirectorySize(tempBackupPath);
+      const backupSize = await directorySizeBytes(tempBackupPath);
 
       // Verify the backup
       const verification = await this.verifyBackup(tempBackupPath);
@@ -457,98 +508,147 @@ export class DatabaseBackupService {
   }
 
   /**
-   * Restore from the most recent backup
+   * Restore from the backup with the most in it.
+   *
+   * Not "the newest". Slot order is recency, and recency is exactly the wrong
+   * tiebreaker for the failure this path exists to undo: the shape of #1347 is
+   * a database that lost its contents and then got backed up, so `current` is
+   * a small, structurally-valid, recent copy of nothing sitting in front of a
+   * `previous` holding months of history. The old code took the first
+   * non-empty slot, so that small `current` restored successfully and the
+   * richer copy was never considered.
+   *
+   * Size is the evidence available here without opening three multi-gigabyte
+   * stores — the same signal `findRestorableBackups` and the migration
+   * plausibility gate use. It is a proxy, and it does not have to be a perfect
+   * one: the recovery transaction fully verifies whichever copy is chosen and
+   * refuses an empty or damaged one, so a wrong first guess falls through to
+   * the next candidate rather than replacing anything.
    */
   async restoreFromBackup(): Promise<{ success: boolean; error?: string; source?: string }> {
-    const currentPath = path.join(this.backupDir, 'pglite-db.backup-current');
-    const previousPath = path.join(this.backupDir, 'pglite-db.backup-previous');
-    const oldestPath = path.join(this.backupDir, 'pglite-db.backup-oldest');
+    const present = BACKUP_SLOT_ORDER
+      .map((slot, index) => ({
+        slot,
+        index,
+        path: path.join(this.backupDir, BACKUP_DIRNAMES[slot]),
+      }))
+      .filter((entry) => fsSync.existsSync(entry.path));
 
-    // Try current backup first
-    if (fsSync.existsSync(currentPath)) {
-      logger.main.info('[Backup Service] Attempting restore from current backup');
-      const result = await this.restoreFromPath(currentPath, 'current');
-      if (result.success) {
-        return result;
-      }
+    const ranked = (
+      await Promise.all(
+        present.map(async (entry) => ({ ...entry, bytes: await directorySizeBytes(entry.path) })),
+      )
+    )
+      // Largest first; slot order breaks ties, so equal-sized copies still
+      // prefer the newest.
+      .sort((a, b) => (b.bytes - a.bytes) || (a.index - b.index));
+
+    if (ranked.length === 0) {
+      return { success: false, error: 'No valid backups available' };
     }
 
-    // Fall back to previous backup
-    if (fsSync.existsSync(previousPath)) {
-      logger.main.info('[Backup Service] Attempting restore from previous backup');
-      const result = await this.restoreFromPath(previousPath, 'previous');
-      if (result.success) {
-        return result;
-      }
-    }
+    logger.main.info('[Backup Service] Restore candidates, richest first', {
+      candidates: ranked.map((e) => ({ slot: e.slot, bytes: e.bytes })),
+    });
 
-    // Fall back to oldest backup
-    if (fsSync.existsSync(oldestPath)) {
-      logger.main.info('[Backup Service] Attempting restore from oldest backup');
-      const result = await this.restoreFromPath(oldestPath, 'oldest');
-      if (result.success) {
-        return result;
+    // One lease for the whole sweep, not one per attempt: a migration starting
+    // between two attempts would close and rename the engine the next attempt
+    // is about to restore into.
+    const run = await withDatabaseOperationLock('backup-restore', async () => {
+      const failures: string[] = [];
+      for (const entry of ranked) {
+        logger.main.info(`[Backup Service] Attempting restore from ${entry.slot} backup`, {
+          bytes: entry.bytes,
+        });
+        const result = await this.restoreFromPath(entry.path, entry.slot);
+        if (result.success) return result;
+        if (result.error) failures.push(result.error);
+        // Falling through to the next copy is only safe while nothing has
+        // moved. Past the swap the install may be carrying an unresolved
+        // journal and a displaced database, and the next attempt's `begin()`
+        // would overwrite the only record of where that database went.
+        if (!result.canTryAnother) {
+          logger.main.error(
+            '[Backup Service] Stopping the restore sweep: this attempt left recovery state that '
+            + 'startup has to resolve first. Every copy is still on disk.',
+            { slot: entry.slot },
+          );
+          break;
+        }
       }
+      return {
+        success: false,
+        error: failures.length > 0 ? failures.join('; ') : 'No valid backups available',
+      };
+    });
+    if (!run.acquired) {
+      return { success: false, error: describeOperationConflict(run.heldBy, run.heldSince) };
     }
-
-    return { success: false, error: 'No valid backups available' };
+    return run.value;
   }
 
   /**
-   * Restore from a specific backup path
+   * Restore from a specific backup path.
+   *
+   * This used to close the database, `fs.rm` the live store, and only then
+   * copy the backup over the hole — so a crash mid-copy left nothing, and a
+   * structurally-valid but empty backup silently replaced a populated
+   * database (#1347). It now runs the shared recovery transaction, which
+   * stages and verifies the replacement before the live store moves anywhere,
+   * swaps by rename, and keeps the displaced database.
    */
   private async restoreFromPath(
     backupPath: string,
     source: string
-  ): Promise<{ success: boolean; error?: string; source?: string }> {
-    try {
-      // Verify backup before restoring
-      const verification = await this.verifyBackup(backupPath);
-      if (!verification.valid) {
-        return { success: false, error: `${source} backup verification failed` };
-      }
+  ): Promise<{ success: boolean; error?: string; source?: string; canTryAnother: boolean }> {
+    const adapter = createPgliteRecoveryAdapter({
+      livePath: this.dbPath,
+      engine: this.dbWorker,
+      verify: this.verifyDatabaseAt,
+    });
 
-      logger.main.info(`[Backup Service] Verified ${source} backup before restore`, {
-        hasData: verification.hasData,
-        sessionCount: verification.sessionCount,
-        historyCount: verification.historyCount
+    // The lock is held by `restoreFromBackup` for the whole sweep; this method
+    // is private and has no other caller, so it must not take it again.
+    const outcome = await runRecoveryTransaction({
+      candidateId: `rolling:${source}`,
+      candidatePath: backupPath,
+      adapter,
+      // No eligibility gate: the user named this backup, and there is no
+      // artifact assessment for a rolling backup. Every other guarantee --
+      // verified staging, the empty-candidate refusal, the atomic swap, the
+      // preserved displaced database, the journal -- still applies.
+      context: {
+        candidateSizeBucket: sizeBucketFor(await pathSizeBytes(backupPath)),
+        liveSizeBucket: sizeBucketFor(await pathSizeBytes(this.dbPath)),
+        reasonCode: null,
+      },
+      journal: createRecoveryJournalPort(this.userDataPath),
+      operationId: `backup-restore-${source}-${Date.now()}`,
+      log: (level, msg, meta) => logger.main[level](msg, meta),
+      beforeStep: this.beforeRecoveryStep,
+    });
+
+    if (outcome.ok) {
+      logger.main.info(`[Backup Service] Restored from ${source} backup`, {
+        displacedLivePath: outcome.artifacts.displacedLivePath,
+        preRestoreSnapshotPath: outcome.artifacts.preRestoreSnapshotPath,
       });
-
-      // Close the database before restoring
-      logger.main.info('[Backup Service] Closing database for restore');
-      try {
-        await this.dbWorker.close();
-      } catch (error) {
-        logger.main.warn('[Backup Service] Error closing database:', error);
-        // Continue anyway - might already be closed
-      }
-
-      // Remove existing database
-      if (fsSync.existsSync(this.dbPath)) {
-        logger.main.info('[Backup Service] Removing existing database');
-        await fs.rm(this.dbPath, { recursive: true, force: true });
-      }
-
-      // Copy backup to database location
-      logger.main.info('[Backup Service] Copying backup to database location');
-      await this.copyDirectory(backupPath, this.dbPath);
-
-      logger.main.info(`[Backup Service] Successfully restored from ${source} backup`);
-      return { success: true, source };
-
-    } catch (error: any) {
-      logger.main.error(`[Backup Service] Failed to restore from ${source} backup:`, error);
-      return { success: false, error: error.message || String(error) };
+      return { success: true, source, canTryAnother: false };
     }
+    return {
+      success: false,
+      error: `${source}: ${outcome.message}`,
+      canTryAnother: mayTryAnotherCandidate(outcome),
+    };
   }
 
   /**
    * Check if any backups are available
    */
   hasBackups(): boolean {
-    const currentPath = path.join(this.backupDir, 'pglite-db.backup-current');
-    const previousPath = path.join(this.backupDir, 'pglite-db.backup-previous');
-    const oldestPath = path.join(this.backupDir, 'pglite-db.backup-oldest');
+    const currentPath = path.join(this.backupDir, BACKUP_DIRNAMES.current);
+    const previousPath = path.join(this.backupDir, BACKUP_DIRNAMES.previous);
+    const oldestPath = path.join(this.backupDir, BACKUP_DIRNAMES.oldest);
 
     return fsSync.existsSync(currentPath) || fsSync.existsSync(previousPath) || fsSync.existsSync(oldestPath);
   }
@@ -561,13 +661,9 @@ export class DatabaseBackupService {
   }
 
   /**
-   * Clean up stranded temp backup dirs in backupDir, plus any historical
-   * timestamped `pglite-db.backup-*` dirs at the userData root (legacy
-   * naming from earlier versions; modern installs don't produce these).
-   *
-   * Temp dirs are unrecoverable garbage the moment createBackup() returns,
-   * so we delete them eagerly. The 30-day cutoff at the userData root is
-   * kept as a safety net for legacy stragglers.
+   * Clean up stranded temp backup dirs in backupDir. The legacy method name
+   * remains for startup and quit callers, but root-level corruption artifacts
+   * are held indefinitely for explicit recovery assessment and resolution.
    */
   async cleanupOldCorruptedBackups(): Promise<void> {
     // Stranded temp-backup-* dirs in the backup folder — created by
@@ -577,34 +673,13 @@ export class DatabaseBackupService {
       const entries = await fs.readdir(this.backupDir, { withFileTypes: true });
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
-        if (!entry.name.startsWith('temp-backup-')) continue;
+        if (classifyBackupEntry(this.backupDir, entry.name) !== 'temp-backup') continue;
         const fullPath = path.join(this.backupDir, entry.name);
         logger.main.info('[Backup Service] Removing stranded temp backup:', entry.name);
         await fs.rm(fullPath, { recursive: true, force: true });
       }
     } catch (error) {
       logger.main.warn('[Backup Service] Failed to clean stranded temp backups:', error);
-    }
-
-    // Legacy timestamped corrupted-backup dirs at the userData root.
-    try {
-      const userDataPath = app.getPath('userData');
-      const entries = await fs.readdir(userDataPath, { withFileTypes: true });
-      const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
-
-      for (const entry of entries) {
-        if (entry.isDirectory() && entry.name.startsWith('pglite-db.backup-')) {
-          const fullPath = path.join(userDataPath, entry.name);
-          const stats = await fs.stat(fullPath);
-
-          if (stats.mtimeMs < thirtyDaysAgo) {
-            logger.main.info('[Backup Service] Cleaning up old corrupted backup:', entry.name);
-            await fs.rm(fullPath, { recursive: true, force: true });
-          }
-        }
-      }
-    } catch (error) {
-      logger.main.error('[Backup Service] Failed to clean up old backups:', error);
     }
   }
 }

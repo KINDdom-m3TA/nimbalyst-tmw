@@ -281,6 +281,10 @@
         "to": "sqlite-verify-worker.bundle.js"
       },
       {
+        "from": "out/sqlite-recovery-verify-worker.bundle.js",
+        "to": "sqlite-recovery-verify-worker.bundle.js"
+      },
+      {
         "from": "out/history-diff-worker.bundle.js",
         "to": "history-diff-worker.bundle.js"
       },

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- Database Settings can recover preserved database copies and explain migration blocks, while recovery and rollback keep the original data intact across restarts.
 - Radar gives shared trackers a since-you-left digest of teammate activity, status moves, bulk sweeps, and stalled work in desktop and the web console.
 - The Git panel's Changes tab can show every repository in the project at once, each with its own file list and commit box.
 - Display Settings can show a tracker's Type column as the type's name instead of its icon.

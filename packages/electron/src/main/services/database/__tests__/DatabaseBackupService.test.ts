@@ -46,6 +46,20 @@ describe('DatabaseBackupService temp-dir cleanup', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
+  it('preserves aged root-level corruption artifacts and their contents', async () => {
+    const artifact = path.join(tmp, 'pglite-db.backup-2026-08-21T12-00-00-000Z');
+    const payload = path.join(artifact, 'base', '1');
+    fs.mkdirSync(path.dirname(payload), { recursive: true });
+    fs.writeFileSync(payload, 'recoverable-user-data');
+    const olderThanThirtyDays = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(artifact, olderThanThirtyDays, olderThanThirtyDays);
+
+    await svc.cleanupOldCorruptedBackups();
+
+    expect(fs.existsSync(artifact)).toBe(true);
+    expect(fs.readFileSync(payload, 'utf8')).toBe('recoverable-user-data');
+  });
+
   it('cleanupOldCorruptedBackups removes stranded temp-backup-* dirs in backupDir', async () => {
     // Simulate a leaked temp dir from a previous failed backup. The pre-fix
     // cleanup function scanned userDataPath with the wrong prefix, so these
