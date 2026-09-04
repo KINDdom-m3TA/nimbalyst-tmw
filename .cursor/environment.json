@@ -1,0 +1,18 @@
+{
+  "name": "Nimbalyst",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "terminals": [
+    {
+      "name": "electron-dev",
+      "command": "bash .cursor/dev-server.sh",
+      "description": "Nimbalyst Electron dev server (electron-vite dev). Renderer served on http://localhost:5273; app window runs on the headless X display :99."
+    }
+  ],
+  "ports": [
+    {
+      "name": "Vite dev server",
+      "port": 5273
+    }
+  ]
+}
